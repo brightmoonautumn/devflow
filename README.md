@@ -1,44 +1,46 @@
 # DevFlow Starter
 
-Local-first development control center. **Rust + Tokio + Axum + React + TypeScript + MCP** in one repository.
+**简体中文 | [English](README.en.md)**
 
-> This is a runnable **starter scaffold**, not a finished IDE. Currently functional: health API, shallow Maven/Node project discovery, read-only `workspace_list` MCP tool, and React shell. Runtime, Arthas, context basket, and QA are extension points for Codex.
+本地优先的开发工作台。采用 **Rust + Tokio + Axum + React + TypeScript + MCP** 技术栈，所有代码统一维护在一个仓库中。
 
-## Prerequisites
-- Rust stable toolchain (rustup; supports edition 2024)
-- Node.js 22+ and pnpm 11.25.0 (`corepack enable` or `npm i -g pnpm@11.25.0`)
-- JDK and Maven for future Spring Boot management; not required to run this starter
+> **当前处于可运行的脚手架阶段，并非完整 IDE。** 已实现的功能包括：健康检查 API、Maven/Node 项目浅层扫描、只读的 `workspace_list` MCP 工具以及 React 基础界面。运行时管理、Arthas、上下文篮子及 QA 测试等能力目前作为扩展点，供后续使用 Codex 逐步实现。
 
-## Quick start (two terminals)
+## 环境要求
 
-On Windows, you can start both services with one command after installing dependencies:
+- Rust 稳定版工具链（通过 rustup 安装，需支持 Rust 2024 edition）
+- Node.js 22+ 和 pnpm 11.25.0（可使用 `corepack enable` 或 `npm i -g pnpm@11.25.0`）
+- JDK 和 Maven：供后续管理 Spring Boot 项目使用，运行当前脚手架暂不需要
+
+## 快速开始
+
+在 Windows 上安装依赖后，可以通过一条命令同时启动前后端：
 
 ```powershell
 pnpm install --frozen-lockfile
 .\scripts\dev.ps1
-# Optional: .\scripts\dev.ps1 -Workspace 'D:\code'
+# 可选：.\scripts\dev.ps1 -Workspace 'D:\code'
 ```
 
-The script resolves the repository root automatically, waits for the API to become ready,
-and stops its backend process tree when the frontend exits. Backend logs are saved in
-`.devflow/`. Without `-Workspace` or `DEVFLOW_WORKSPACE`, the shell starts with an empty
-project list. `.env.example` is a reference; environment files are not loaded automatically.
+启动脚本会自动定位仓库根目录，等待后端 API 就绪，并在前端退出时结束后端进程树。后端日志保存在 `.devflow/` 目录下。
 
-Alternatively, use two terminals:
+如果没有指定 `-Workspace` 或 `DEVFLOW_WORKSPACE`，初始项目列表将为空。`.env.example` 仅供参考，程序不会自动加载环境文件。
+
+也可以使用两个终端分别启动：
 
 ```powershell
-# terminal 1: from repository root
-$env:DEVFLOW_WORKSPACE='D:\code'  # change to an existing directory containing your projects
+# 终端 1：在仓库根目录执行
+$env:DEVFLOW_WORKSPACE='D:\code'  # 修改为实际存放项目的目录
 cargo run -p devflow
 
-# terminal 2
+# 终端 2
 pnpm install
 pnpm web:dev
 ```
 
-Open **http://127.0.0.1:5173** in the Codex embedded browser or any browser.
+在 Codex 内置浏览器或其他浏览器中访问 **http://127.0.0.1:5173**。
 
-Production-style local run:
+### 本地构建运行
 
 ```powershell
 pnpm install
@@ -46,9 +48,9 @@ pnpm web:build
 cargo run -p devflow
 ```
 
-Open **http://127.0.0.1:31080** from the repository root (frontend bundled from `apps/web/dist` if present).
+在仓库根目录运行后，访问 **http://127.0.0.1:31080**。如果存在 `apps/web/dist`，后端会提供已构建的前端静态文件。
 
-### Verify
+### 验证
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:31080/api/health
@@ -57,24 +59,31 @@ cargo test --workspace
 pnpm web:check
 ```
 
-### Codex MCP (experimental starter)
+### Codex MCP 接入（实验性）
 
 ```bash
 codex mcp add devflow --url http://127.0.0.1:31080/mcp
 ```
 
-`/mcp` exposes a minimal stateless JSON-RPC subset (`initialize`, `ping`, `tools/list`, `tools/call`) with one **read-only** `workspace_list` tool. Some MCP clients may require fuller session/notification support; upgrade to the maintained Rust MCP SDK before production. Do not expose the port to the public network. The web dev proxy is intended for browser API requests; Codex talks to Axum directly.
+`/mcp` 当前提供最小化、无状态的 JSON-RPC 接口，支持 `initialize`、`ping`、`tools/list` 和 `tools/call`，并提供一个**只读**的 `workspace_list` 工具。
 
-## Supported workspaces
-`DEVFLOW_WORKSPACE` is the parent folder, e.g. `D:\code`, containing Maven `pom.xml` and/or Node `package.json` projects. Discovery currently checks the root and direct subfolders only. It does not yet parse multi-module Maven metadata or npm/pnpm workspace graphs. This is intentionally safe and predictable for v0.1.
+部分 MCP 客户端可能需要更完整的会话和通知机制。正式用于生产环境前，建议升级为持续维护的 Rust MCP SDK。**请勿将此端口直接暴露到公网。**
 
-## Repository organization
+Web 开发代理仅用于浏览器 API 请求，Codex 则直接与 Axum 服务通信。
 
-- `crates/devflow-core/src/<feature>`: business/domain operations
-- `crates/devflow/src/http`: HTTP adapters
-- `crates/devflow/src/mcp`: MCP adapter (experimental)
-- `apps/web/src/features/<feature>`: React feature implementations
-- `apps/web/src/components`: shared UI (add as actual need arises)
-- `docs/features`: design specifications
+## 支持的工作区
 
-See [AGENTS.md](AGENTS.md) and [docs/architecture.md](docs/architecture.md).
+`DEVFLOW_WORKSPACE` 指定项目所在的父目录，例如 `D:\code`。目录下可以包含基于 Maven `pom.xml` 和／或 Node.js `package.json` 的项目。
+
+目前仅扫描工作区根目录及其直属子目录，暂不解析 Maven 多模块元数据，也不解析 npm/pnpm workspace 依赖关系。该限制是 v0.1 阶段有意采用的设计，以保证扫描行为安全、可预测。
+
+## 仓库结构
+
+- `crates/devflow-core/src/<feature>`：业务逻辑与领域操作
+- `crates/devflow/src/http`：HTTP 接口适配层
+- `crates/devflow/src/mcp`：MCP 适配层（实验性）
+- `apps/web/src/features/<feature>`：React 前端功能模块
+- `apps/web/src/components`：共享 UI 组件（按实际需要逐步添加）
+- `docs/features`：功能设计规范
+
+更多信息请参阅 [AGENTS.md](AGENTS.md) 和 [架构文档](docs/architecture.md)。
