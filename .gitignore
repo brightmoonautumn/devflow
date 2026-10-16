@@ -1,0 +1,15 @@
+target/
+node_modules/
+**/node_modules/
+**/dist/
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.log
+.idea/
+.vscode/
+.DS_Store
+.devflow/
+*.tsbuildinfo
