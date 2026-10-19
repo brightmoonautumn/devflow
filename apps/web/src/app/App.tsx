@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
+import './theme-transition.css'
 import { ChevronDown, CircleHelp, FolderOpen, FolderTree, Moon, PanelBottom, Plus, Save, Search, Settings2, Sun, X } from 'lucide-react'
 import { ResizableBottomPanel } from './ResizableBottomPanel'
-import { executeJava, getJavaOutput, getRuntime, getWorkspace, type Project, type WorkspaceResponse } from '../lib/api'
+import { executeJava, getJavaOptions, getJavaOutput, getRuntime, getWorkspace, type Project, type WorkspaceResponse } from '../lib/api'
+import { javaStartOperation, readJavaLaunchConfig } from '../features/runtime/javaLaunchConfig'
 import { JavaLaunchDialog } from '../features/runtime/JavaLaunchDialog'
 import { JavaConsole } from '../features/runtime/JavaConsole'
 import { WorkspacePage } from '../features/workspace/WorkspacePage'
@@ -18,7 +21,7 @@ export function App() {
   const [loading, setLoading] = useState(true)
   const [panel, setPanel] = useState<Panel | null>(null)
   const [launchProject, setLaunchProject] = useState<Project | null>(null)
-  const pendingProjectAction = useRef(false)
+  const pendingProjectActions = useRef(new Set<string>())
   const [managingWorkspace, setManagingWorkspace] = useState<WorkspaceManagerMode | null>(null)
   const [workspaceMenu, setWorkspaceMenu] = useState(false)
   const [query, setQuery] = useState('')
@@ -33,10 +36,36 @@ export function App() {
     } catch { /* Storage may be unavailable in private browser contexts. */ }
     return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
   })
-  function toggleTheme() {
+  const themeTransitionPending = useRef(false)
+  async function toggleTheme() {
+    if (themeTransitionPending.current) return
     const next = theme === 'dark' ? 'light' : 'dark'
-    setTheme(next)
-    try { localStorage.setItem('devflow.workspace.theme', next) } catch { /* Keep the in-memory preference. */ }
+    const applyTheme = () => {
+      setTheme(next)
+      try { localStorage.setItem('devflow.workspace.theme', next) } catch { /* Keep the in-memory preference. */ }
+    }
+    const transitionDocument = document as Document & {
+      startViewTransition?: (update: () => void) => { finished: Promise<void> }
+    }
+    if (!transitionDocument.startViewTransition || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      applyTheme()
+      return
+    }
+    const root = document.documentElement
+    themeTransitionPending.current = true
+    root.style.setProperty('--theme-reveal-radius', `${Math.ceil(Math.hypot(window.innerWidth, window.innerHeight) / 2)}px`)
+    root.classList.add('theme-transition')
+    try {
+      const transition = transitionDocument.startViewTransition(() => flushSync(applyTheme))
+      await transition.finished
+    } catch {
+      // A skipped snapshot or unavailable animation must not prevent switching.
+      applyTheme()
+    } finally {
+      root.classList.remove('theme-transition')
+      root.style.removeProperty('--theme-reveal-radius')
+      themeTransitionPending.current = false
+    }
   }
 
   function applyWorkspace(value: WorkspaceResponse) {
@@ -97,10 +126,20 @@ export function App() {
     if (project.kind === 'node') { setPanel({ title, project: project.name, description: '当前仅接入 Java 运行功能，Node.js 进程暂时仅支持观测。' }); return }
     if (title === '启动配置') { setLaunchProject(project); return }
     setPanel({ title: title === 'JVM 诊断' ? 'JVM 诊断 / Arthas' : '运行输出', project: project.name, javaProject: project, description: '' })
-    if (title !== '停止项目' && title !== 'Arthas 挂载') return
-    if (pendingProjectAction.current || !data) return
-    pendingProjectAction.current = true
+    if (title !== '启动项目' && title !== '停止项目' && title !== 'Arthas 挂载') return
+    if (pendingProjectActions.current.has(project.path) || !data) return
+    pendingProjectActions.current.add(project.path)
     try {
+      if (title === '启动项目') {
+        const config = readJavaLaunchConfig(project)
+        const options = await getJavaOptions(project.path, AbortSignal.timeout(10000))
+        if (!options.mainClasses.includes(config.main)) {
+          if (options.mainClasses.length !== 1) throw new Error('请从更多操作中的“启动配置”选择启动主类后重试。')
+          config.main = options.mainClasses[0]
+        }
+        await executeJava(project.path, data.revision, javaStartOperation(config))
+        return
+      }
       const runtime = await getRuntime(AbortSignal.timeout(10000))
       const metrics = runtime.projects.find(value => value.projectPath === project.path)
       const javaPids = metrics?.javaPids ?? metrics?.pids ?? []
@@ -114,7 +153,7 @@ export function App() {
         setPanel(current => current?.javaProject?.path === project.path ? { ...current, description: javaPids.length ? '请在输出工具栏选择应用 PID，再执行操作。' : '未检测到运行进程，请先启动 Java 服务。' } : current)
       }
     } catch (err) { setPanel(current => current?.javaProject?.path === project.path ? { ...current, description: err instanceof Error ? err.message : String(err) } : current) }
-    finally { pendingProjectAction.current = false }
+    finally { pendingProjectActions.current.delete(project.path) }
   }
 
   return <div className="shell workspace-shell" data-theme={theme}>
@@ -139,7 +178,7 @@ export function App() {
     <div className="workbench">
       <nav className="activity-bar" aria-label="功能入口">
         <div className="activity-primary"><button className={`activity-button ${explorerOpen ? 'active' : ''}`} aria-label="资源管理器" title="资源管理器" aria-expanded={explorerOpen} aria-controls="workspace-explorer" onClick={() => setExplorerOpen(current => !current)}><FolderTree size={20} strokeWidth={1.65} /></button></div>
-        <div className="activity-secondary"><button className="activity-button" aria-label="使用说明" title="使用说明" onClick={() => setPanel({ title: '使用说明', description: '点击 Java 服务卡片查看运行输出，点击箭头展开目录和启动入口。启动时可配置 JVM 参数、程序参数和 Spring Profile；支持停止项目进程树及向运行中的 Java 应用附加 Arthas。底部面板可拖拽调整高度。Node.js 当前仅支持进程观测。' })}><CircleHelp size={19} /></button><button className="activity-button" aria-label="设置" title="设置" onClick={explainWorkspace}><Settings2 size={19} /></button></div>
+        <div className="activity-secondary"><button className="activity-button" aria-label="使用说明" title="使用说明" onClick={() => setPanel({ title: '使用说明', description: '点击 Java 服务卡片查看运行输出，点击箭头展开目录和启动入口。点击启动直接使用已保存或默认配置，更多操作中的“启动配置”可保存 JVM 参数、程序参数和 Spring Profile；支持停止项目进程树及向运行中的 Java 应用附加 Arthas。底部面板可拖拽调整高度。Node.js 当前仅支持进程观测。' })}><CircleHelp size={19} /></button><button className="activity-button" aria-label="设置" title="设置" onClick={explainWorkspace}><Settings2 size={19} /></button></div>
       </nav>
       {explorerOpen && <WorkspaceTree data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} />}
       <div className="editor-area">
@@ -151,6 +190,6 @@ export function App() {
     </div>
     <footer className="statusbar"><span className={`connection ${connected ? 'online' : ''}`}><i />{loading ? '正在连接' : connected ? '本地已连接' : '未连接'}</span><button className={panel ? 'selected' : ''} aria-expanded={panel !== null} onClick={() => setPanel(panel ? null : output)}><PanelBottom size={13} />运行输出</button>{error ? <div className="service-error" title={`无法连接本地服务：${error}`}><span role="status" aria-label={`无法连接本地服务：${error}`}>本地服务未连接</span><button disabled={loading} aria-label="重试连接本地服务" onClick={() => void load()}>{loading ? '连接中…' : '重试'}</button></div> : <span className="status-version">DevFlow · 0.1.0</span>}</footer>
     {managingWorkspace && <WorkspaceManager key={managingWorkspace} mode={managingWorkspace} data={data} onChange={applyWorkspace} onRefresh={() => void load()} onClose={() => { setManagingWorkspace(null); workspaceTrigger.current?.focus() }} />}
-    {launchProject && data && <JavaLaunchDialog key={launchProject.path} project={launchProject} revision={data.revision} onClose={() => setLaunchProject(null)} onStarted={() => { setLaunchProject(null); setPanel({ title: '运行输出', project: launchProject.name, javaProject: launchProject, description: '' }) }} />}
+    {launchProject && data && <JavaLaunchDialog key={launchProject.path} project={launchProject} onClose={() => setLaunchProject(null)} />}
   </div>
 }

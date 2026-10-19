@@ -1,5 +1,10 @@
 //! Read-only listener discovery. No port probing or user-provided commands.
-use std::collections::{BTreeSet, HashMap};
+use std::{
+    collections::{BTreeSet, HashMap},
+    io,
+};
+
+pub(super) type Listeners = HashMap<u32, BTreeSet<u16>>;
 
 pub(super) fn parse_windows_listeners(output: &str) -> HashMap<u32, BTreeSet<u16>> {
     let mut ports: HashMap<u32, BTreeSet<u16>> = HashMap::new();
@@ -21,7 +26,7 @@ pub(super) fn parse_windows_listeners(output: &str) -> HashMap<u32, BTreeSet<u16
 }
 
 #[cfg(windows)]
-pub(super) fn listeners() -> Option<HashMap<u32, BTreeSet<u16>>> {
+pub(super) fn listeners() -> io::Result<Listeners> {
     use std::{
         io::Read,
         os::windows::process::CommandExt,
@@ -30,46 +35,64 @@ pub(super) fn listeners() -> Option<HashMap<u32, BTreeSet<u16>>> {
         thread,
         time::{Duration, Instant},
     };
-    let program = PathBuf::from(std::env::var_os("SystemRoot")?).join("System32/netstat.exe");
+    let system_root = std::env::var_os("SystemRoot")
+        .ok_or_else(|| io::Error::other("未找到 Windows SystemRoot，无法定位 netstat"))?;
+    let program = PathBuf::from(system_root).join("System32/netstat.exe");
     let mut child = Command::new(program)
-        .arg("-ano")
+        .args(["-ano", "-p", "tcp"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .creation_flags(0x08000000)
         .spawn()
-        .ok()?;
-    let stdout = child.stdout.take()?;
+        .map_err(|err| io::Error::new(err.kind(), format!("无法启动 netstat：{err}")))?;
+    let stdout = child.stdout.take().expect("piped stdout");
     let read = thread::spawn(move || {
         let mut bytes = Vec::new();
         stdout
             .take(4 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .ok()?;
-        (bytes.len() <= 4 * 1024 * 1024).then_some(bytes)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 4 * 1024 * 1024 {
+            return Err(io::Error::other("netstat 输出超过 4 MiB 限制"));
+        }
+        Ok(bytes)
     });
     let deadline = Instant::now() + Duration::from_secs(2);
-    let success = loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status.success(),
+            Ok(Some(status)) => {
+                break if status.success() {
+                    Ok(())
+                } else {
+                    Err(io::Error::other(format!("netstat 执行失败：{status}")))
+                };
+            }
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
-            _ => {
+            result => {
                 let _ = child.kill();
                 let _ = child.wait();
-                break false;
+                break Err(match result {
+                    Err(err) => io::Error::new(err.kind(), format!("无法读取 netstat 状态：{err}")),
+                    _ => io::Error::new(io::ErrorKind::TimedOut, "netstat 采集超时（2 秒）"),
+                });
             }
         }
     };
-    let bytes = read.join().ok().flatten()?;
-    if !success {
-        return None;
-    }
-    Some(parse_windows_listeners(&String::from_utf8_lossy(&bytes)))
+    let bytes = read
+        .join()
+        .map_err(|_| io::Error::other("netstat 输出读取线程异常"))?;
+    status?;
+    let bytes = bytes
+        .map_err(|err| io::Error::new(err.kind(), format!("无法读取 netstat 输出：{err}")))?;
+    Ok(parse_windows_listeners(&String::from_utf8_lossy(&bytes)))
 }
 
 #[cfg(not(windows))]
-pub(super) fn listeners() -> Option<HashMap<u32, BTreeSet<u16>>> {
-    None
+pub(super) fn listeners() -> io::Result<Listeners> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "当前系统尚未支持 TCP 监听端口采集",
+    ))
 }
 
 #[cfg(test)]

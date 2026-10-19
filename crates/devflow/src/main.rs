@@ -78,7 +78,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/runtime/java/options", get(http::java_options))
         .route("/api/runtime/java/output", get(http::java_output))
         .route("/mcp", post(mcp::handle))
-        .layer(axum::middleware::from_fn_with_state(
+        // Authenticate API/MCP routes; the browser must load the static shell
+        // before it can obtain a session token. Add the static fallback below.
+        .route_layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             security::guard,
         ))

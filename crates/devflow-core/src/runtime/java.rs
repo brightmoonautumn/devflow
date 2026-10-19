@@ -475,6 +475,16 @@ fn execute(mut command: Command, run: &Arc<Mutex<Run>>, phase: &str) -> Result<O
     Ok(status.code())
 }
 impl JavaService {
+    pub(crate) fn managed_identity(&self, project: &DetectedProject) -> Option<(u32, u64)> {
+        let runs = self.runs.lock().unwrap();
+        let run = runs.get(&key(project))?.lock().unwrap();
+        if matches!(run.state.as_str(), "starting" | "running") {
+            run.pid
+        } else {
+            None
+        }
+    }
+
     pub fn output(
         &self,
         project: &DetectedProject,

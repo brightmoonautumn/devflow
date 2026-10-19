@@ -1,0 +1,28 @@
+/* Keep the previous theme still while the new theme spreads from the center. */
+html.theme-transition::view-transition-group(root) {
+  animation: none;
+}
+
+html.theme-transition::view-transition-old(root),
+html.theme-transition::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+html.theme-transition::view-transition-old(root) {
+  z-index: 1;
+}
+
+html.theme-transition::view-transition-new(root) {
+  z-index: 2;
+  animation: theme-reveal 560ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+@keyframes theme-reveal {
+  from { clip-path: circle(0 at 50% 50%); }
+  to { clip-path: circle(var(--theme-reveal-radius) at 50% 50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.theme-transition::view-transition-new(root) { animation: none; }
+}

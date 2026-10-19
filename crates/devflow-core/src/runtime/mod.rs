@@ -19,6 +19,7 @@ pub struct ProjectRuntime {
     pub pids: Vec<u32>,
     pub java_pids: Vec<u32>,
     pub listening_ports: Option<Vec<u16>>,
+    pub port_error: Option<String>,
     pub memory_bytes: Option<u64>,
     pub cpu_percent: Option<f32>,
     pub uptime_seconds: Option<u64>,
@@ -163,6 +164,15 @@ impl RuntimeService {
         &self,
         authorized: &[DetectedProject],
     ) -> io::Result<RuntimeSnapshot> {
+        self.snapshot_with_managed(authorized, &[])
+    }
+
+    /// Managed PIDs are supplied only by the core Java launcher, never by clients.
+    pub(crate) fn snapshot_with_managed(
+        &self,
+        authorized: &[DetectedProject],
+        managed: &[(String, u32, u64)],
+    ) -> io::Result<RuntimeSnapshot> {
         if authorized.is_empty() {
             return Ok(RuntimeSnapshot {
                 sampled_at: now_seconds(),
@@ -187,10 +197,13 @@ impl RuntimeService {
                     })
             })
             .collect();
-        let cache_key: Vec<String> = projects
+        let mut cache_key: Vec<String> = projects
             .iter()
             .map(|p| format!("{}|{}|{}|{:?}", p.path, p.java, p.node, p.main_classes))
             .collect();
+        cache_key.extend(
+            managed.iter().map(|(path, pid, started)| format!("managed:{path}:{pid}:{started}")),
+        );
         let mut sampler = self
             .projects
             .lock()
@@ -242,10 +255,18 @@ impl RuntimeService {
         let cores = std::thread::available_parallelism().map_or(1, |count| count.get());
         let mut snapshot = RuntimeSnapshot {
             sampled_at,
-            projects: aggregate(&projects, &observations, sampled_at, cores),
+            projects: aggregate_with_managed(&projects, &observations, sampled_at, cores, managed),
         };
-        if let Some(listeners) = ports::listeners() {
-            for project in &mut snapshot.projects {
+        apply_listeners(&mut snapshot.projects, ports::listeners());
+        sampler.cached = Some((Instant::now(), cache_key, snapshot.clone()));
+        Ok(snapshot)
+    }
+}
+
+fn apply_listeners(projects: &mut [ProjectRuntime], listeners: io::Result<ports::Listeners>) {
+    for project in projects {
+        match &listeners {
+            Ok(listeners) => {
                 let ports: std::collections::BTreeSet<_> = project
                     .pids
                     .iter()
@@ -254,10 +275,13 @@ impl RuntimeService {
                     .copied()
                     .collect();
                 project.listening_ports = Some(ports.into_iter().collect());
+                project.port_error = None;
+            }
+            Err(err) => {
+                project.listening_ports = None;
+                project.port_error = Some(err.to_string());
             }
         }
-        sampler.cached = Some((Instant::now(), cache_key, snapshot.clone()));
-        Ok(snapshot)
     }
 }
 
@@ -416,22 +440,44 @@ fn java_matches(process: &Observation, project: &RuntimeProject) -> bool {
         None => false,
     }
 }
+#[cfg(test)]
 fn aggregate(
     projects: &[RuntimeProject],
     processes: &[Observation],
     now: u64,
     cores: usize,
 ) -> Vec<ProjectRuntime> {
+    aggregate_with_managed(projects, processes, now, cores, &[])
+}
+
+fn aggregate_with_managed(
+    projects: &[RuntimeProject],
+    processes: &[Observation],
+    now: u64,
+    cores: usize,
+    managed: &[(String, u32, u64)],
+) -> Vec<ProjectRuntime> {
     let by_pid: HashMap<u32, &Observation> = processes.iter().map(|p| (p.pid, p)).collect();
     let mut owners: HashMap<u32, usize> = HashMap::new();
+    for (path, pid, started) in managed {
+        if by_pid.get(pid).is_some_and(|process| process.started == *started) {
+            if let Some(index) = projects.iter().position(|project| &project.path == path) {
+                owners.insert(*pid, index);
+            }
+        }
+    }
     for process in processes {
+        if owners.contains_key(&process.pid) {
+            continue;
+        }
         if !["java", "java.exe", "javaw", "javaw.exe", "node", "node.exe"]
             .contains(&process.name.to_ascii_lowercase().as_str())
         {
             continue;
         }
-        // The most specific project wins when roots are nested.
-        let owner = projects
+        // A main class can occur in multiple checkouts. Prefer launch-path
+        // evidence, and leave equally strong candidates unassigned.
+        let candidates: Vec<_> = projects
             .iter()
             .enumerate()
             .filter(|(_, project)| {
@@ -442,8 +488,37 @@ fn aggregate(
                 }
                 project.node && node_matches(process, project)
             })
-            .max_by_key(|(_, project)| project.root.len())
-            .map(|(index, _)| index);
+            .map(|(index, project)| {
+                let cwd_matches = process
+                    .cwd
+                    .as_deref()
+                    .and_then(|cwd| launch_path(cwd, None))
+                    .is_some_and(|cwd| path_within(&cwd, &project.root));
+                let classpath_matches = java_classpath(process).is_some_and(|classpath| {
+                    classpath
+                        .split(if cfg!(windows) { ';' } else { ':' })
+                        .any(|entry| {
+                            launch_path(entry, process.cwd.as_deref())
+                                .is_some_and(|path| path_within(&path, &project.root))
+                        })
+                });
+                let class_launch = ["java", "java.exe", "javaw", "javaw.exe"]
+                    .contains(&process.name.to_ascii_lowercase().as_str())
+                    && matches!(java_target(&process.args), Some(JavaTarget::Class(_)));
+                let specificity = if cwd_matches || !class_launch {
+                    project.root.len()
+                } else {
+                    0
+                };
+                (index, (cwd_matches, classpath_matches, specificity))
+            })
+            .collect();
+        let best = candidates.iter().map(|(_, score)| *score).max();
+        let mut winners = candidates.iter().filter(|(_, score)| Some(*score) == best);
+        let owner = winners
+            .next()
+            .map(|(index, _)| *index)
+            .filter(|_| winners.next().is_none());
         if let Some(owner) = owner {
             owners.insert(process.pid, owner);
         }
@@ -500,6 +575,7 @@ fn aggregate(
                 project_path: project.path.clone(),
                 managed_state: None,
                 listening_ports: None,
+                port_error: None,
                 java_pids,
                 pids,
                 memory_bytes: (has_members && memory > 0).then_some(memory),
@@ -517,9 +593,114 @@ fn aggregate(
         .collect()
 }
 
+fn java_classpath(process: &Observation) -> Option<&str> {
+    let JavaTarget::Class(class) = java_target(&process.args)? else {
+        return None;
+    };
+    let mut index = 0;
+    while let Some(arg) = process.args.get(index) {
+        if arg == class {
+            break;
+        }
+        if ["-cp", "-classpath", "--class-path"].contains(&arg.as_str()) {
+            return process.args.get(index + 1).map(String::as_str);
+        }
+        if let Some(value) = arg.strip_prefix("--class-path=") {
+            return Some(value);
+        }
+        index += 1;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn external_listeners_follow_project_identity_not_parent_editor_or_port_number() {
+        let projects = vec![project("app", "d:/code/中文 服务")];
+        let external = process(10, Some(900), "java.exe", r"d:\code\中文 服务\target\server.jar");
+        let worker = process(11, Some(10), "worker.exe", "");
+        let unrelated = process(12, None, "java.exe", "d:/other/server.jar");
+        let mut metrics = aggregate(&projects, &[external, worker, unrelated], 20, 1);
+        let listeners = ports::parse_windows_listeners(
+            "TCP 0.0.0.0:18080 0.0.0.0:0 LISTENING 10\n\
+             TCP [::]:18080 [::]:0 LISTENING 10\n\
+             TCP 127.0.0.1:15005 0.0.0.0:0 LISTENING 11\n\
+             TCP 0.0.0.0:19090 0.0.0.0:0 LISTENING 12",
+        );
+        apply_listeners(&mut metrics, Ok(listeners));
+        assert_eq!(metrics[0].pids, vec![10, 11]);
+        assert_eq!(metrics[0].listening_ports, Some(vec![15005, 18080]));
+        assert_eq!(metrics[0].port_error, None);
+        let mut exited = aggregate(&projects, &[], 21, 1);
+        apply_listeners(&mut exited, Ok(HashMap::new()));
+        assert_eq!(exited[0].listening_ports, Some(vec![]));
+    }
+
+    #[test]
+    fn listener_failure_is_distinct_from_no_listeners_and_recovers() {
+        let projects = vec![project("app", "d:/code/app")];
+        let mut metrics = aggregate(&projects, &[], 20, 1);
+        apply_listeners(&mut metrics, Err(io::Error::new(io::ErrorKind::TimedOut, "采集超时")));
+        assert_eq!(metrics[0].listening_ports, None);
+        assert_eq!(metrics[0].port_error.as_deref(), Some("采集超时"));
+        let json = serde_json::to_value(&metrics[0]).unwrap();
+        assert!(json["listeningPorts"].is_null());
+        assert_eq!(json["portError"], "采集超时");
+        apply_listeners(&mut metrics, Ok(HashMap::new()));
+        assert_eq!(metrics[0].listening_ports, Some(vec![]));
+        assert_eq!(metrics[0].port_error, None);
+    }
+
+    #[test]
+    fn managed_identity_is_applied_before_children_metrics_and_ports() {
+        let projects = vec![project("app", "d:/code/app")];
+        let mut java = process(10, None, "java.exe", "");
+        // IDE/Maven argument files can hide the actual main class.
+        java.args = vec!["@hidden-arguments".into()];
+        let child = process(11, Some(10), "worker.exe", "");
+        let processes = vec![java, child];
+        let managed = vec![("app".into(), 10, 10)];
+        let mut metrics = aggregate_with_managed(&projects, &processes, 20, 1, &managed);
+        apply_listeners(&mut metrics, Ok(ports::parse_windows_listeners(
+            "TCP 0.0.0.0:18080 0.0.0.0:0 LISTENING 10\n\
+             TCP 127.0.0.1:15005 0.0.0.0:0 LISTENING 11",
+        )));
+        assert_eq!(metrics[0].pids, vec![10, 11]);
+        assert_eq!(metrics[0].memory_bytes, Some(2048));
+        assert_eq!(metrics[0].listening_ports, Some(vec![15005, 18080]));
+        let stale = vec![("app".into(), 10, 9)];
+        assert!(aggregate_with_managed(&projects, &processes, 20, 1, &stale)[0].pids.is_empty());
+    }
+
+    #[test]
+    fn duplicate_main_classes_require_launch_path_evidence() {
+        let mut first = project("first", "d:/first");
+        let mut second = project("second", "d:/second-longer");
+        first.main_classes = vec!["example.Application".into()];
+        second.main_classes = first.main_classes.clone();
+        let projects = vec![first, second];
+        let mut java = process(10, None, "java.exe", "");
+        java.args = vec!["java.exe".into(), "example.Application".into()];
+        let ambiguous = aggregate(&projects, &[java.clone()], 20, 1);
+        assert!(ambiguous.iter().all(|project| project.pids.is_empty()));
+        java.cwd = Some("d:/first".into());
+        let resolved = aggregate(&projects, &[java.clone()], 20, 1);
+        assert_eq!(resolved[0].pids, vec![10]);
+        assert!(resolved[1].pids.is_empty());
+        java.cwd = Some("d:/".into());
+        java.args.insert(1, "--class-path=second-longer/target/classes".into());
+        let resolved = aggregate(&projects, &[java.clone()], 20, 1);
+        assert!(resolved[0].pids.is_empty());
+        assert_eq!(resolved[1].pids, vec![10]);
+        java.args[1] = format!(
+            "--class-path=first/target/classes{}second-longer/target/classes",
+            if cfg!(windows) { ';' } else { ':' },
+        );
+        assert!(aggregate(&projects, &[java], 20, 1).iter().all(|project| project.pids.is_empty()));
+    }
+
     #[test]
     fn self_cpu_is_normalized_and_unknown_samples_are_not_zero() {
         assert_eq!(normalized_self_cpu(None, 8), None);

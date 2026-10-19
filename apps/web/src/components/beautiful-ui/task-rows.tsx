@@ -149,9 +149,9 @@ export default function TaskRows({
               <span className="flex size-8 shrink-0 items-center justify-center">
                 {badgeFor(row)}
               </span>
-              <span className="min-w-0 flex-1 text-[13px] font-medium text-ink">
+              <span className="bui-task-label min-w-0 flex-1 text-[13px] font-medium text-ink">
                 <span className="block truncate" title={row.label}>{row.label}</span>
-                {cards && <span className="bui-task-summary"><span className="bui-task-kind text-[10px] font-normal text-ink-3">{row.amount}</span>{row.metadata}</span>}
+                {cards && row.metadata && <span className="bui-task-summary">{row.metadata}</span>}
                 {row.path && <span className="mt-1 block truncate font-mono text-[11px] font-normal text-ink-3" title={row.path}>{row.path}</span>}
                 {row.caption && <span className="bui-task-caption mt-1 flex items-center gap-1.5 text-[10px] font-normal text-ink-2"><span className="size-1 rounded-full bg-ink-3" />{row.caption}</span>}
               </span>
@@ -201,8 +201,8 @@ export default function TaskRows({
                               : undefined
                           }
                         >
-                          <span className="break-all text-[12px] text-ink-2">{d.label}</span>
-                          <span className="break-all font-mono text-[11.5px] text-ink-3 tabular-nums">
+                          <span className="bui-task-detail-label break-all text-[12px] text-ink-2">{d.label}</span>
+                          <span className="bui-task-detail-value break-all font-mono text-[11.5px] text-ink-3 tabular-nums">
                             {d.meta}
                           </span>
                         </div>

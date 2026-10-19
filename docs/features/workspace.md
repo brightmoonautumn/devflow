@@ -6,6 +6,17 @@
 
 ## 工作区管理
 
+### 本地浏览器启动器（Windows）
+
+- 根目录 `DevFlow.vbs` 隐藏启动 Windows PowerShell 中的 `scripts/launch.ps1`，启动后台并等待健康检查及网页就绪后打开默认浏览器。禁用 VBScript 时可用 `DevFlow.cmd` 调用相同流程。普通启动不编译、不安装依赖、不依赖 Vite，使用后端提供的 `apps/web/dist`。API/MCP 路由继续鉴权，静态页面在取得会话前即可加载。
+- 使用本机命名互斥锁串行处理重复启动，健康后台直接复用；非 DevFlow 程序占用固定回环端口 31080 时明确失败，不杀进程。并发启动由绑定端口的结果及健康检查兜底。启动等待最多约 30 秒，单次请求超时可能令总等待略长；失败时显示日志位置，不强制清理业务进程。
+- 首次未配置授权位置时弹出本机文件夹选择器，取消则不启动。仅将用户所选目录及显式授权目录交给现有核心引擎校验，不授予整机文件访问权限。`.devflow/launcher.json` 保存初始 `workspace`、`allowedRoots`，不包含令牌；显式启动参数优先于环境变量，环境变量优先于保存配置。复用已有后台时不会切换该后台的工作区或授权目录。
+- 后台作为独立进程隐藏运行，浏览器关闭或启动器退出均不结束后台。当前只实现打开与复用，不包含后台重启、托管状态迁移、崩溃守护或自动恢复页面最近切换的工作区。原有开发脚本退出时的清理行为不变。
+- `scripts/package.ps1` 由开发者显式执行构建，输出新的便携发布目录，包含 `DevFlow.vbs`、`DevFlow.cmd`、`scripts/launch.ps1`、`devflow.exe` 和完整前端静态资源；不覆盖既有输出目录，不携带本机配置、授权目录、令牌或日志。使用者解压到可写目录后直接启动。
+- 新增 `scripts/verify-launcher.ps1`，覆盖中文与空格路径、授权根去重、配置优先级、配置恢复和程序查找规则。按用户约定本轮未运行编译、打包或测试命令。待验收：冷启动、重复双击、端口冲突、缺少静态资源、后台异常退出、文件夹选择取消及关闭浏览器后后台继续运行。
+
+- 字体统一使用 Segoe UI 与微软雅黑中文后备字体，等宽区使用 Consolas 与同一中文后备字体。服务名称 14px、常用界面和树节点 13px、状态/类型/操作与日志 12px、辅助说明最低 11px，使用共享字号令牌，窄屏也不退回 9–10px 小字。浅色主题正文、次级和辅助文字分别为 `#24292f`、`#4b5563`、`#636b75`，卡片组件复用相同灰阶，消除双套文字令牌导致的浅灰字；保留深色配色和现有布局。
+
 - 打开已有 `.code-workspace` 文件，正确显示其中的文件夹。
 - 创建并保存与 VS Code 相同格式的工作区文件，支持添加文件夹。
 - 支持直接打开文件夹，无须先创建工作区文件。
@@ -28,6 +39,12 @@
 ### 验收标准
 
 服务列表按运行状态排序：检测到运行进程的服务优先，其余服务排后；同组保持工作区原有顺序，随运行状态采样自动更新，搜索和类型筛选后仍保持此规则。
+
+服务卡片不展示 Maven / Node.js 类型标签，通过顶部类型筛选区分服务；名称下方仅按需显示端口与运行状态，无端口时不保留空摘要行。
+
+服务列表底部不再重复展示服务数量、Maven / Node.js 类型说明和进程指标刷新提示；数量与筛选保留在顶部，指标不可用时由各服务卡片提示。
+
+暗色 / 浅色主题切换使用 View Transition，从页面中心以圆形向外扩散，约 560ms 完成；过渡期间忽略重复点击，继续记忆主题偏好。浏览器不支持该能力或系统启用减少动态效果时直接切换。
 
 - 能打开 `D:\WorkSpace` 中现有的全部 `.code-workspace` 文件，正确显示文件夹名称及解析后的路径；路径不可用时正确标记。
 - 当前验收样本共 9 个文件：`2.0.0`、`ai-chat`、`extreme-plus-portal`、`extreme-skills`、`framework-master`、`health-management`、`main-system`、`plan`、`vue3-upgrade-design`（均带 `.code-workspace` 扩展名）。
@@ -97,21 +114,31 @@ Node 验收目录当前没有 `package.json`，需定位其所属主工程的启
 | `POST /api/workspace`，`operation.type=remove_folder` | `workspace_remove_folder` | path 指定工作区根引用，移除并标记未保存，不删除文件或停止进程 |
 | `POST /api/workspace`，`operation.type=save` | `workspace_save` | 保存；可选 path 指定另存为位置 |
 | `GET /api/runtime/self` | `devflow_metrics` | 当前 DevFlow 后端 PID、CPU、物理内存、运行时间及采样时间；不要求已打开工作区 |
+| `GET /api/runtime/projects` | `runtime_list` | 工作区项目的关联 PID、资源指标、实际 TCP 监听端口与采集错误 |
 | `POST /api/runtime/java` | `java_execute` | `projectPath`、`expectedRevision`、`operation`：Java 启动、停止或 Arthas 附加 |
 | `GET /api/runtime/java/options?projectPath=...` | `java_options` | Java 主类及资源目录中 `application-{profile}.yml/yaml/properties` 的 Profile 候选 |
 | `GET /api/runtime/java/output?projectPath=...&after=...&runId=...` | `java_output` | 托管状态、stdout/stderr/构建/Arthas 增量日志、退出码及 Arthas 地址 |
 
 ### Java 使用约定
 
-卡片以图标角落的绿色圆点表示运行，构建中为黄色；运行时不显示“检测到运行进程”文字。类型旁显示实际 TCP 监听端口标签，最多显示 3 个及剩余数量，悬停或展开详情可看完整列表。端口由共享核心按关联 PID 聚合，不从 Spring 配置猜测，也不把出站连接或 UDP 当作监听端口。当前 Windows 复用 [系统 netstat](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/netstat) 的数值/PID 模式，一次采样读取全表后按服务分配，随已有 2 秒缓存刷新；进程退出后清空，IPv4/IPv6 相同端口去重。无监听端口与采集不可用分开提示；当前其他系统返回不可用。端口列表包含业务、调试和 Arthas 等诊断端口，不代表每个端口都是 HTTP 页面。
+卡片以图标角落的绿色圆点表示运行，构建中为黄色；运行时不显示“检测到运行进程”文字。类型旁显示实际 TCP 监听端口标签，最多显示 3 个及剩余数量，悬停或展开详情可看完整列表。端口由共享核心按关联 PID 聚合，不从 Spring 配置猜测，也不把出站连接或 UDP 当作监听端口。当前 Windows 复用 [系统 netstat](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/netstat) 的 `-ano -p tcp` 模式，一次采样读取本机全表后按服务分配，随已有 2 秒缓存刷新；进程退出后清空，IPv4/IPv6 相同端口去重。端口列表包含业务、调试和 Arthas 等诊断端口，不代表每个端口都是 HTTP 页面。
 
-- 启动配置区的 JVM 参数、程序参数均每行一个完整参数，无须为包含空格的值添加引号；HTTP/MCP 对应 `jvmArgs`、`args` 字符串数组。`profiles` 为 Spring Profile 数组，支持多选检测候选或手填，空数组沿用应用默认配置。`mainClass` 必须来自当前项目发现结果。界面在本机记忆上次成功提交的配置。
+- 通用发现无需服务名或固定端口预设，不限于 DevFlow 或当前编辑器启动的进程。外部 Java 根据启动主类或可执行 JAR 路径识别，Node 根据实际执行脚本识别，并聚合关联子进程；详情显示关联 PID。同主类存在多个项目时优先参考工作目录及 classpath，无法消除歧义时不任意归属。classpath 中的依赖本身不视为运行服务。托管进程以内部记录的 PID 和启动时间校验身份，在端口和子进程聚合之前补入；HTTP/MCP 运行操作使用与展示相同的工作区范围和归属规则。
+- `listeningPorts: []` 表示采集成功但没有关联监听端口；`listeningPorts: null` 配合新增 `portError` 给出失败原因，包括 netstat 无法启动、超时、异常退出、读取失败或超出 4 MiB 限制。其他系统明确返回尚未支持的原因，失败不阻断其余运行指标。Web 区分“等待监听”“暂无监听端口”“端口采集失败”，具体错误可在悬停与展开详情中查看。旧后端缺少 `listeningPorts` 字段时显示“后端需更新”，提示由用户重新编译并重启后端。
+- 范围为本机 Windows 可读取身份的进程与监听端口；外部进程的启动信息不可读、仅有未展开的 Java 参数文件或 JAR 位于工作区外且缺少可验证关联信息时，不能保证归属。Docker/WSL 仅能在宿主机层看到公开的端口，容器内服务归属与远程服务器实例不在本次范围内。未接入 Nacos、未增加预期端口配置或启动前端口冲突拦截；不能仅凭端口号推断服务身份。
+
+本次通用端口修正新增了外部进程及子进程端口归属、中文 Windows 路径、IPv4/IPv6 去重、退出后清空、采集失败恢复、托管 PID 聚合顺序与 PID 复用、同主类多项目歧义的单元用例。按用户约定未执行编译、格式化或测试命令，待用户编译并重启后验证。
+
+- 点击服务卡片“启动”直接使用本机已保存配置；无配置时使用空参数、默认 Spring Profile 和唯一启动主类，不再弹出配置。更多操作菜单提供“启动配置”，保存仅更新本机偏好，下次启动生效，不影响运行中的服务；有多个主类且未选择时，在运行输出面板提示先配置。HTTP/MCP 继续使用同一核心启动操作，接口不变。
+- 启动配置区的 JVM 参数、程序参数均每行一个完整参数，无须为包含空格的值添加引号；HTTP/MCP 对应 `jvmArgs`、`args` 字符串数组。`profiles` 为 Spring Profile 数组，支持多选检测候选或手填，空数组沿用应用默认配置。`mainClass` 必须来自当前项目发现结果。界面兼容读取原先成功提交时保存的配置。
+- 表单通过 `apps/web/src/components/form` 公共组件层收口：`BaseSelect`、`BaseCheckbox` 内部适配 Radix 交互原语，业务只使用项目定义的值、选项和回调；`BaseField`、`BaseInput`、`BaseTextarea`、`BaseButton` 统一标签、字号、尺寸、焦点及禁用状态，复用工作区深浅色令牌。启动配置已整体接入，日志工具栏的 PID 选择复用同一 `BaseSelect`；其他既有表单按后续实际修改逐步迁移。下拉层挂在所属原生 dialog 内，保留模态焦点约束、方向键选项导航与 Escape 先关闭下拉的行为。
+- 启动、停止请求提交时，卡片按钮显示旋转图标与“启动中… / 停止中…”，阻止重复提交，并等待操作后的新指标采样再恢复按钮状态；构建期间继续显示启动动画，且允许点击取消启动。系统启用减少动态效果时保留状态文字，停止旋转动画。
 - 请求示例：`{ "projectPath": "D:/code/app", "expectedRevision": 1, "operation": { "type": "start", "jvmArgs": ["-Xmx512m"], "args": ["--server.port=8080"], "profiles": ["dev"], "mainClass": "example.Application" } }`。停止传 `{ "type": "stop" }`；外部进程需另传 `pid`，附加传 `{ "type": "attach", "pid": 12345 }`。
 - Java 启动器优先使用 `DEVFLOW_JAVA_HOME`，其次 `JAVA_HOME`、PATH；Maven 使用 `MAVEN_HOME`/`M2_HOME` 或 PATH 中 Maven 的 ClassWorlds 启动器，直接调用 Java，不调用 cmd/PowerShell、不执行请求指定的 shell。Windows 默认给子 JVM 配置 `.devflow/sockets` 原生 NIO 临时路径，避免当前系统继承 TEMP 路径导致的 Unix-domain loopback 错误；可用 `DEVFLOW_JAVA_SOCKET_DIR` 指定更短的本机目录，或通过 JVM 参数覆盖系统属性。
 - 启动时异步返回 `starting`，Maven 完成后变为 `running`；表示进程已启动，不等于业务服务健康就绪。失败、退出、取消均写入输出，构建过程可取消。停止校验 PID 与启动时间并清理当前进程树，避免误伤 PID 复用。正常 Ctrl+C 关闭 DevFlow 会清理托管进程；操作系统强制终止后端不保证执行清理。
 - 资源指标的 `pids` 包含关联的进程树，另提供 `javaPids` 作为 Java 操作候选，排除 conhost 和 Maven 启动器。托管服务优先选择其应用主 PID，外部服务存在多个 Java 进程时要求选择目标。
 - 输出保留每个会话最近 2000 条、单条最多 16 KiB，每次最多返回 500 条。将返回的 `runId`、`nextCursor` 作为下次 `runId`、`after`，新会话自动从头读取。输出区保留最近 2000 条，支持手动查看历史和回到底部；进程与日志状态不跨后端重启持久化。
-- 输出面板的运行状态、PID 选择、停止与 Arthas 操作和“运行输出”标题同排，不再额外占一行；窄屏缩为带提示和无障碍名称的图标按钮。正文不显示 stdout/stderr 等来源前缀，保留原始级别文字：INFO 蓝色、WARN 黄色、ERROR/FATAL 红色、DEBUG 紫色、TRACE 灰色，构建/启动成功为绿色。异常堆栈延续错误/警告色；无级别 stderr 默认标红，移除 ANSI 控制码，使用 React 纯文本渲染。
+- 输出面板的运行状态、PID 选择、停止与 Arthas 操作和“运行输出”标题同排，不再额外占一行；窄屏缩为带提示和无障碍名称的图标按钮。正文不显示 stdout/stderr 等来源前缀。Spring Boot 标准日志按字段着色：时间与应用/线程上下文为次级文字色，INFO 绿色、WARN 黄色、ERROR/FATAL 红色、DEBUG 蓝紫色、TRACE 灰色，PID 洋红色、类名青色，普通正文保持正常文字色；警告/错误正文分别用黄色/红色，构建/启动成功正文为绿色。非标准格式仍识别级别文字并单独着色，异常堆栈延续错误/警告色，无级别 stderr 默认标红。保留原始空格、字段和文本，适配深浅主题，移除 ANSI 控制码，使用 React 文本节点渲染。
 - 从 [Arthas 官方来源](https://arthas.aliyun.com/en/doc/quick-start.html) 下载 `arthas-boot.jar` 到 `.devflow/tools/arthas-boot.jar`，或配置 `DEVFLOW_ARTHAS_BOOT`。首次挂载官方启动器可能下载完整发行包。独立附加应用 JVM，使用 `--attach-only`，随机 HTTP/Telnet 端口仅绑定 `127.0.0.1`，附加最长等待 90 秒，端口就绪后才提供控制台链接；目标应用需允许 JDK Attach 且具有相同用户权限。Arthas 的控制台由官方工具提供，DevFlow 当前不转发任意诊断命令。
 
 写操作需要先读取当前 `revision`，再以 `expectedRevision` 提交。HTTP 请求为 `{ expectedRevision, discardChanges?, operation: { type, path?, name? } }`；MCP 将 `expectedRevision`、`discardChanges`、`path`、`name` 放在工具 arguments 中。版本过期或文件被外部修改时返回 `conflict`，不得盲目重试覆盖；只有明确放弃未保存更改时才传 `discardChanges: true`。

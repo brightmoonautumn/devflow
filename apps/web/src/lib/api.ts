@@ -70,6 +70,7 @@ export function executeWorkspace(operation: WorkspaceOperation, expectedRevision
 export interface ProjectRuntime {
   javaPids?: number[]
   listeningPorts?: number[] | null
+  portError?: string | null
   managedState?: 'starting' | 'running' | 'stopped' | 'failed'
   projectPath: string
   pids: number[]

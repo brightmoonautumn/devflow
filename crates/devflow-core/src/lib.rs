@@ -27,26 +27,33 @@ impl DevFlowEngine {
 
     pub fn runtime_snapshot(&self) -> Result<runtime::RuntimeSnapshot, workspace::WorkspaceError> {
         let workspace = self.workspace.snapshot()?;
-        let mut snapshot = self.runtime.snapshot_for_projects(&workspace.projects)?;
+        let mut outputs = Vec::new();
+        let mut managed = Vec::new();
         for project in &workspace.projects {
             if matches!(project.kind, workspace::ProjectKind::Node) {
                 continue;
             }
             let output = self.java.output(project, u64::MAX, None)?;
+            if matches!(output.state.as_str(), "starting" | "running") {
+                if let Some((pid, started)) = self.java.managed_identity(project) {
+                    if output.pid == Some(pid) {
+                        managed.push((project.path.clone(), pid, started));
+                    }
+                }
+            }
+            outputs.push((project.path.clone(), output));
+        }
+        let mut snapshot = self
+            .runtime
+            .snapshot_with_managed(&workspace.projects, &managed)?;
+        for (path, output) in outputs {
             if let Some(metrics) = snapshot
                 .projects
                 .iter_mut()
-                .find(|p| p.project_path == project.path)
+                .find(|p| p.project_path == path)
             {
                 if output.state != "external" {
                     metrics.managed_state = Some(output.state.clone());
-                    if matches!(output.state.as_str(), "starting" | "running") {
-                        if let Some(pid) = output.pid {
-                            if !metrics.pids.contains(&pid) {
-                                metrics.pids.push(pid);
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -69,12 +76,11 @@ impl DevFlowEngine {
             .workspace
             .runtime_project(&request.project_path, Some(request.expected_revision))?;
         self.runtime.invalidate();
-        let observed = self
-            .runtime
-            .snapshot_for_projects(std::slice::from_ref(&project))?;
+        let observed = self.runtime_snapshot()?;
         let pids = observed
             .projects
-            .first()
+            .iter()
+            .find(|metrics| metrics.project_path == project.path)
             .map(|p| p.pids.as_slice())
             .unwrap_or_default();
         let target = |pid: u32| -> Result<(u32, u64), workspace::WorkspaceError> {

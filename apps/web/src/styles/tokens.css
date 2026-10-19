@@ -1,5 +1,9 @@
 :root {
-  font-family: Inter, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  --font-ui: 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  --font-mono: Consolas, 'Microsoft YaHei', 'PingFang SC', monospace;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
   color: #d9dee7; background: #111318; font-synthesis: none;
   --surface: #15181e; --border: #272c35; --muted: #858e9e; --accent: #9bb9f0;
 }
@@ -75,7 +79,7 @@ h2 span { margin-left: 7px; color: #778395; font-size: 10px; }
 .panel-heading small { color: #7889a1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel-content { min-height: 130px; max-height: 24dvh; overflow: auto; padding: 18px; }
 .panel-caption { color: #62738b; letter-spacing: 1px; font-size: 9px; }
-.panel-content p { font-family: Consolas, 'Microsoft YaHei', monospace; font-size: 11px; line-height: 1.9; color: #8e9caf; margin: 12px 0 0; overflow-wrap: anywhere; }
+.panel-content p { font-family: var(--font-mono); font-size: 11px; line-height: 1.9; color: #8e9caf; margin: 12px 0 0; overflow-wrap: anywhere; }
 .statusbar { height: 27px; flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 12px; background: #1a2029; border-top: 1px solid #2d3541; color: #8998af; font-size: 9px; }
 .connection { display: flex; align-items: center; gap: 6px; }
 .connection.online i { background: #79b79b; }

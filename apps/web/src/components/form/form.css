@@ -1,0 +1,55 @@
+/* Application-owned form styles. All colors and typography follow workspace tokens. */
+.df-control, .df-button, .df-select-content, .df-checkbox-field {
+  font: var(--ws-font-body)/1.6 var(--font-ui);
+}
+.df-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.df-field-label { color: var(--ws-ink); font-size: var(--ws-font-body); font-weight: 500; }
+.df-field-hint { color: var(--ws-muted); font-size: var(--ws-font-small); line-height: 1.7; }
+.df-control {
+  width: 100%; min-width: 0; min-height: 38px; padding: 8px 11px;
+  border: 1px solid var(--ws-border); border-radius: 7px; outline: none;
+  background: var(--ws-bg); color: var(--ws-ink);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.df-control.is-mono, .df-select-content.is-mono { font-family: var(--font-mono); }
+.df-control::placeholder, .df-select[data-placeholder] { color: var(--ws-dim); }
+.df-control:hover:not(:disabled) { border-color: var(--ws-muted); }
+.workspace-shell .df-control:focus-visible, .workspace-shell .df-control[data-state='open'] {
+  outline: none; border-color: var(--ws-accent); box-shadow: 0 0 0 3px var(--ws-accent-bg);
+}
+.df-control:disabled { opacity: .55; cursor: default; }
+.df-textarea { display: block; resize: vertical; min-height: 90px; }
+.df-select { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; }
+.df-select > span:first-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.df-select-icon { display: flex; flex-shrink: 0; color: var(--ws-muted); transition: transform 140ms ease; }
+.df-select[data-state='open'] .df-select-icon { transform: rotate(180deg); }
+.df-select-content {
+  z-index: 100; min-width: var(--radix-select-trigger-width); width: var(--radix-select-trigger-width);
+  max-width: calc(100vw - 24px); max-height: min(260px, var(--radix-select-content-available-height));
+  overflow: hidden; border: 1px solid var(--ws-border); border-radius: 8px;
+  background: var(--ws-surface); color: var(--ws-ink); box-shadow: var(--ws-shadow);
+  animation: df-select-in 120ms ease-out;
+}
+.df-select-viewport { padding: 4px; }
+.df-select-item { position: relative; padding: 8px 30px 8px 9px; border-radius: 5px; outline: none; cursor: default; overflow-wrap: anywhere; user-select: none; }
+.df-select-item[data-highlighted] { background: var(--ws-hover); }
+.df-select-item[data-state='checked'] { background: var(--ws-accent-bg); color: var(--ws-accent); }
+.df-select-indicator { position: absolute; right: 9px; top: 0; bottom: 0; display: flex; align-items: center; }
+.df-select-scroll { display: flex; justify-content: center; padding: 3px; color: var(--ws-muted); }
+.df-checkbox-field { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 4px 9px; border: 1px solid var(--ws-border); border-radius: 6px; color: var(--ws-ink); }
+.df-checkbox-field:has([data-state='checked']) { border-color: var(--ws-accent); background: var(--ws-accent-bg); }
+.df-checkbox-field[data-disabled] { opacity: .55; }
+.df-checkbox-field label { cursor: pointer; overflow-wrap: anywhere; }
+.df-checkbox { display: grid; place-items: center; width: 16px; height: 16px; padding: 0; flex-shrink: 0; border: 1px solid var(--ws-muted); border-radius: 4px; background: var(--ws-bg); color: var(--ws-bg); }
+.df-checkbox[data-state='checked'] { background: var(--ws-accent); border-color: var(--ws-accent); }
+.df-checkbox-indicator { display: flex; }
+.df-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 7px 13px; border: 1px solid var(--ws-border); border-radius: 7px; background: var(--ws-surface); color: var(--ws-ink); }
+.df-button:hover:not(:disabled) { background: var(--ws-hover); }
+.df-button.is-primary { background: var(--ws-primary); border-color: transparent; color: var(--ws-primary-ink); }
+.df-button.is-primary:hover:not(:disabled) { background: var(--ws-primary-hover); }
+.df-button:disabled { opacity: .45; cursor: default; }
+@keyframes df-select-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .df-control, .df-select-icon { transition: none; }
+  .df-select-content { animation: none; }
+}

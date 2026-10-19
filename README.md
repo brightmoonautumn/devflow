@@ -14,6 +14,24 @@
 
 ## 快速开始
 
+### 双击打开浏览器（Windows）
+
+已构建的目录或完整发布包中，双击根目录 `DevFlow.vbs` 即可启动后台并自动打开 **http://127.0.0.1:31080**。不需要单独启动前端开发服务器。重复双击会复用已就绪的后台；关闭浏览器不会停止后台或业务项目。
+
+如果系统禁用了 VBScript，可双击 `DevFlow.cmd` 使用相同启动流程（会短暂显示命令窗口）。
+
+首次没有启动配置时选择一个项目目录，该目录会作为初始工作区与允许访问的根目录。配置以 UTF-8 保存在安装目录的 `.devflow/launcher.json`，可修改 `workspace`（文件夹或 `.code-workspace` 文件）和 `allowedRoots`（额外授权目录数组）；启动器不自动保存页面中后来切换的工作区。也可从 PowerShell 运行 `scripts/launch.ps1 -Workspace 'D:\code' -AllowedRoots @('D:\code', 'D:\WorkSpace')`。优先级为显式参数、`DEVFLOW_*` 环境变量、保存的启动配置。
+
+给其他人使用时，由开发者在依赖安装完成后运行一次以下打包命令：
+
+```powershell
+.\scripts\package.ps1
+```
+
+该命令显式执行前端和 release 后端构建，并在 `releases/DevFlow-时间戳/` 生成独立目录。将整个目录交给使用者，解压到可写位置后双击 `DevFlow.vbs`。使用者启动 DevFlow 无需安装 Rust、Node.js 或 pnpm；运行 Java/Maven 项目仍需对应工具链。普通启动绝不自动安装依赖或编译；缺少文件、端口占用、启动失败会弹窗提示，后台日志位于 `.devflow/backend-*.log`。尚未提供后台重启按钮、崩溃自动恢复或托盘退出入口。
+
+### 源码开发
+
 在 Windows 上安装依赖后，可以通过一条命令同时启动前后端：
 
 ```powershell
