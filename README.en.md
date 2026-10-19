@@ -4,7 +4,7 @@
 
 Local-first development control center. **Rust + Tokio + Axum + React + TypeScript + MCP** in one repository.
 
-> This is a runnable **starter scaffold**, not a finished IDE. Currently functional: health API, shallow Maven/Node project discovery, read-only `workspace_list` MCP tool, and React shell. Runtime, Arthas, context basket, and QA are extension points for Codex.
+> This is a workspace-focused starter, not a finished IDE. Workspace management, Maven/Node discovery, metrics, managed Java launch/stop, live output and official Arthas attachment share one core engine across Web and MCP. Node launch/stop remains unimplemented. See [workspace documentation](docs/features/workspace.md).
 
 ## Prerequisites
 - Rust stable toolchain (rustup; supports edition 2024)
@@ -19,12 +19,14 @@ On Windows, you can start both services with one command after installing depend
 pnpm install --frozen-lockfile
 .\scripts\dev.ps1
 # Optional: .\scripts\dev.ps1 -Workspace 'D:\code'
+# Cross-directory workspace:
+# .\scripts\dev.ps1 -Workspace 'D:\WorkSpace\main-system.code-workspace' -AllowedRoots @('D:\WorkSpace', 'D:\CompanyProject', 'D:\AiFlow')
 ```
 
 The script resolves the repository root automatically, waits for the API to become ready,
 and stops its backend process tree when the frontend exits. Backend logs are saved in
 `.devflow/`. Without `-Workspace` or `DEVFLOW_WORKSPACE`, the shell starts with an empty
-project list. `.env.example` is a reference; environment files are not loaded automatically.
+project list. Configure `-AllowedRoots` / `DEVFLOW_ALLOWED_ROOTS` to open workspaces in the UI; referenced project folders must also be allowlisted. `.env.example` is a reference; environment files are not loaded automatically.
 
 Alternatively, use two terminals:
 
@@ -54,7 +56,8 @@ Open **http://127.0.0.1:31080** from the repository root (frontend bundled from 
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:31080/api/health
-Invoke-RestMethod http://127.0.0.1:31080/api/projects
+$session = Invoke-RestMethod http://127.0.0.1:31080/api/session -Headers @{'X-DevFlow-Client'='web'}
+Invoke-RestMethod http://127.0.0.1:31080/api/projects -Headers @{Authorization="Bearer $($session.token)"}
 cargo test --workspace
 pnpm web:check
 ```
@@ -62,13 +65,13 @@ pnpm web:check
 ### Codex MCP (experimental starter)
 
 ```bash
-codex mcp add devflow --url http://127.0.0.1:31080/mcp
+codex mcp add devflow --url http://127.0.0.1:31080/mcp --bearer-token-env-var DEVFLOW_API_TOKEN
 ```
 
-`/mcp` exposes a minimal stateless JSON-RPC subset (`initialize`, `ping`, `tools/list`, `tools/call`) with one **read-only** `workspace_list` tool. Some MCP clients may require fuller session/notification support; upgrade to the maintained Rust MCP SDK before production. Do not expose the port to the public network. The web dev proxy is intended for browser API requests; Codex talks to Axum directly.
+Set the same `DEVFLOW_API_TOKEN` in the backend and MCP client processes. `/mcp` exposes a minimal JSON-RPC subset (`initialize`, `ping`, `tools/list`, `tools/call`) with workspace read/open/create/add/save tools and read-only process metrics. Some MCP clients may require fuller session/notification support; upgrade to a maintained Rust MCP SDK before production. Do not expose the port to the public network. See the workspace documentation for tool arguments.
 
 ## Supported workspaces
-`DEVFLOW_WORKSPACE` is the parent folder, e.g. `D:\code`, containing Maven `pom.xml` and/or Node `package.json` projects. Discovery currently checks the root and direct subfolders only. It does not yet parse multi-module Maven metadata or npm/pnpm workspace graphs. This is intentionally safe and predictable for v0.1.
+`DEVFLOW_WORKSPACE` accepts a directory or a VS Code `.code-workspace` file. Web and MCP support open/create/add-folder/save/save-as operations, JSONC comments and trailing commas, relative paths, display names, and local file URIs while retaining configuration fields. Remote URIs are unsupported. Runnable application discovery follows declared Maven modules and parses real Java entry points, excluding aggregators, libraries, and test sources; Node packages require dev/start/serve scripts. It does not run Maven, scan dependency archives, or provide complete effective-POM/npm-workspace resolution.
 
 ## Repository organization
 

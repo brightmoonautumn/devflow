@@ -1,7 +1,161 @@
-# Workspace
+# 工作区
 
-## Purpose
-Feature-first boundary for DevFlow workspace functionality.
+## 功能概述
 
-## MVP follow-up
-See `docs/architecture.md` and `AGENTS.md`. Write API contracts and tests before shipping process-affecting tools.
+当前仅建设工作区：管理 VS Code 兼容的工作区文件和文件夹，启动 Java/Spring Boot 与 Node 项目，并支持 Arthas 附加。所有业务能力由同一核心引擎提供，Web UI 和 MCP 共用业务规则、状态及权限校验。
+
+## 工作区管理
+
+- 打开已有 `.code-workspace` 文件，正确显示其中的文件夹。
+- 创建并保存与 VS Code 相同格式的工作区文件，支持添加文件夹。
+- 支持直接打开文件夹，无须先创建工作区文件。
+- 相对路径以工作区文件所在目录为基准解析；兼容绝对路径、中文、Windows 路径及文件夹显示名称。
+- 兼容 VS Code 工作区 JSONC 格式，包括注释和尾随逗号；保存时保留已有 `settings` 等未知配置字段。
+- 文件夹不存在或无法访问时明确显示异常，不静默忽略。
+- 工作区文件夹在左侧资源管理器中以树展示；展开时只读取当前目录的一层子文件夹和文件，支持折叠、刷新、键盘方向键及路径提示，不读取文件正文。窄屏默认收起，点击资源管理器图标后以侧栏覆盖显示。
+- 根文件夹支持右键、Shift+F10 和行末“文件夹操作”按钮，从工作区移除对应根引用；子目录不提供根移除动作。移除只改内存配置并标记未保存，保存后持久化，不删除磁盘目录、不停止进程。重复引用一并移除，失效或越界引用也可清理，仍校验工作区版本与身份。
+- 左上角 Logo 使用复制到 `apps/web/src/assets/extreme-plus-logo.svg` 的本地 SVG；暗色主题自动切换透明底、浅灰与蓝色的 `extreme-plus-logo-dark.svg`，不加白色底块。目录树复用现有 Lucide 图标，按目录用途和文件类型使用鲜明配色：暗色主题提高图标亮度和饱和度，浅色主题使用更深的同色系；背景、文字及 Logo 保持原配色。
+- 对工作区中授权的工程按需识别 Maven 模块和 Node 工程，避免无界递归扫描。
+- 顶部工作区菜单负责新建、浏览打开、保存/另存为和关闭；新建时可选择起始文件夹，再选择 `.code-workspace` 的保存目录与名称，也可新建空工作区。资源树的添加入口只把已有文件夹加入当前工作区，不创建磁盘文件夹。
+- 目录选择器从授权位置逐层浏览，只读取一层目录及 `.code-workspace` 文件，不要求输入完整路径；支持返回上一级、回到本机位置、筛选和刷新。关闭工作区不停止进程、不删除文件；未保存更改仍要求先保存或明确放弃。
+- 资源树支持拖拽调宽、宽度记忆、左右方向键微调、Home/End 到边界、双击复位。桌面宽度 200–520px，并为服务区保留空间；窄屏最多 360px，并为手柄预留至少 28px 空间。去掉侧栏和项目菜单的全屏点击遮罩，侧栏位于服务内容之上；活动栏宽度与侧栏左边界一致。拖拽热区 12px，带可见握柄，使用 Pointer Capture 和 window 事件兼容嵌入式浏览器，结束、取消、失焦和卸载时均清理。目录节点使用 memo，拖拽调宽不重新渲染整棵树。
+- 服务搜索统一放在顶部导航栏，“全部 / Maven / Node.js”类型筛选与“服务”标题在首行左右对齐，不再显示 LOCAL 标记。对话框沿用 [Beautiful UI](https://www.beautifului.dev/) 的简洁边框、圆角与操作层级，并保留原生 dialog 的焦点约束和 Escape 关闭。
+- 服务页仅展示当前工作区的真实服务与采样指标，移除演示入口、示例项目和模拟趋势。卡片铺满服务区，按服务区实际可用宽度布局：达到 760px 时每行两张，否则每行一张，拖动侧栏也会自适应。默认展示名称、类型、运行状态与指标；项目目录、识别文件和启动入口收进下拉详情。点击卡片查看底部运行输出，仅点击箭头展开详情。Java 启动按钮为绿色实心三角，停止按钮为红色实心圆点，并保留文字；运行状态未知时禁用操作，Node.js 启停暂不开放。
+- 顶栏展示 DevFlow 后端自身的 CPU 和物理内存；仅采集当前服务 PID，不包括托管工程、Codex 或浏览器，CPU 按可用逻辑核心容量归一。首次 CPU 采样为 null，页面显示采样中；每 3 秒刷新，后台页面暂停轮询，请求超时 10 秒。核心独立采样器仅刷新自身 PID，缓存 2 秒，避免影响工程指标采样；关闭工作区后仍可查看。窄屏顶栏第二行同时容纳搜索与自身指标。
+- 指标区不重复显示 DevFlow 名称，图标与数值按占用分色：CPU 低于 30% 为绿色、30% 至低于 70% 为黄色、达到 70% 为红色；内存低于 256 MiB 为绿色、256 MiB 至低于 512 MiB 为黄色、达到 512 MiB 为红色。内存阈值为当前后端进程物理内存的绝对值，不表示整机内存压力；无采样时为灰色，悬停说明阈值，并提供文字状态供辅助技术读取。
+- JVM 诊断、运行输出等底部面板支持拖拽上边缘调整高度，保留高度偏好；支持上下方向键微调、Home/End 到边界、双击恢复默认高度。高度随容器空间约束，为上方服务列表保留空间；使用 Pointer Capture 和 window 事件，结束、取消、失焦或卸载时清理拖拽。JVM 诊断当前提供官方 Arthas 快速附加与独立 HTTP 控制台入口。
+
+### 验收标准
+
+服务列表按运行状态排序：检测到运行进程的服务优先，其余服务排后；同组保持工作区原有顺序，随运行状态采样自动更新，搜索和类型筛选后仍保持此规则。
+
+- 能打开 `D:\WorkSpace` 中现有的全部 `.code-workspace` 文件，正确显示文件夹名称及解析后的路径；路径不可用时正确标记。
+- 当前验收样本共 9 个文件：`2.0.0`、`ai-chat`、`extreme-plus-portal`、`extreme-skills`、`framework-master`、`health-management`、`main-system`、`plan`、`vue3-upgrade-design`（均带 `.code-workspace` 扩展名）。
+- 能创建工作区、添加文件夹并保存，保存后可由 DevFlow 和 VS Code 重新打开，文件夹及原有配置正确。
+- 能直接打开文件夹并显示其中识别到的工程。
+
+## 项目启动与 Arthas
+
+- 支持启动 Java/Spring Boot 项目，识别 Maven 多模块工程及实际启动模块。
+- Spring Boot 支持附加启动配置，区分 JVM 参数、应用参数、环境变量和 Spring Profile。
+- 支持启动 Node 项目，根据所属工程的包管理器、脚本及配置确定工作目录与启动方式。
+- 展示启动日志和进程状态，支持停止由 DevFlow 启动的进程并清理相应进程树。
+- 支持向目标 Java 进程附加 Arthas，展示附加结果；附加是独立操作，不与启动或 JVM DEBUG 绑定。
+- UI 和 MCP 可以操作、查询同一运行实例，使用一致的错误语义；重复启动和跨入口并发操作由核心统一处理。
+
+### 验收标准
+
+| 类型 | 目标路径 | 验收结果 |
+| --- | --- | --- |
+| Java/Spring Boot | `D:\CompanyProject\extreme-plus\extreme-module\extreme-plus-system` | 能带指定附加参数启动，查看真实日志和状态，停止进程，并能对运行中的目标 JVM 附加 Arthas。 |
+| Node | `D:\CompanyProject\main-system\projects\extreme-plus-system-ai` | 能通过所属工程的实际启动方式运行目标项目，查看真实日志和状态，并停止所启动的进程。 |
+
+Node 验收目录当前没有 `package.json`，需定位其所属主工程的启动配置，不能假设直接在该目录执行 `npm run dev`。Java 验收目标是 Maven 子模块，需结合父工程解析启动配置。依赖、工具链、实际启动命令和附加参数在实现及验收前确认，不在需求中臆定。
+
+## 当前实现与边界
+
+- 已有基础项目发现、工作区页面，以及 HTTP/MCP 共用的只读进程指标服务。
+- 当前进程指标基于应用启动主类、执行 JAR 或 Node 入口脚本进行尽力观测，不代表 DevFlow 已托管该进程；未匹配到进程也不能证明服务已停止。Java classpath 中出现依赖模块不作为其运行依据，JVM 与 Node 工程分类型匹配；只聚合匹配入口的子进程。内存指标为进程物理内存，不是 JVM 堆。
+- 演示数据已移除。Java 操作使用真实共享运行服务，Node.js 暂时仅观测。
+- Java 检测到 PID 或处于托管构建阶段时显示“停止”，未检测到时显示“启动”；外部启动且关联到项目的 Java 应用也可以选择 PID 停止或附加，但无法追溯获取外部 stdout。
+- 服务发现本身不执行 Maven；实际启动会在目标模块执行 Maven `compile dependency:build-classpath`，使用本机 Maven 配置和仓库，随后直接启动识别出的主类。依赖尚未安装的多模块项目仍需按项目要求先构建/安装父工程及依赖；不自动安装整个仓库，不支持任意自定义构建命令、Gradle 或自定义 classes 输出目录。
+- UI 适配 400–550px 分屏，保持紧凑，支持项目列表搜索和类型筛选；未知状态不得显示为正在运行或已完成。
+- 本次整理不包含独立的上下文检索、QA 或完整诊断平台，也不删除对应代码目录。
+
+## 工作区管理使用说明
+
+点击顶部工作区名称或“管理工作区”，可以打开工作区文件/文件夹、新建工作区、添加文件夹、保存及另存为。浏览器页面通过输入本机完整路径操作，也提供授权根目录下已有工作区文件的快捷列表。添加文件夹先修改内存中的共享工作区，需主动保存；切换工作区前提示未保存的更改。当前活动工作区及未保存状态不跨后端重启保留，已保存的工作区文件可重新打开。
+
+启动示例（命令由用户自行执行，会编译并启动服务）：
+
+```powershell
+.\scripts\dev.ps1 -Workspace 'D:\WorkSpace\framework-master.code-workspace' -AllowedRoots @('D:\WorkSpace', 'D:\CompanyProject', 'D:\PersonalProject', 'D:\AiFlow', 'D:\DevelopmentTools\Maven\repository', 'D:\Temp')
+```
+
+- `DEVFLOW_WORKSPACE` 或 `-Workspace`：初始工作区文件或目录；其目录自动加入授权范围。
+- `DEVFLOW_ALLOWED_ROOTS` 或 `-AllowedRoots`：可访问的目录白名单，必须存在；环境变量使用系统路径列表分隔符（Windows 为分号）。工作区文件引用其他目录不会自动扩大授权范围。
+- `DEVFLOW_API_TOKEN`：可选的固定 Bearer 令牌，供 MCP 客户端配置；未设置则每次启动生成随机令牌。Web 从受本地 Host/Origin 和自定义请求头保护的 `/api/session` 获取会话令牌，仅保存在内存。`.env.example` 不会自动加载。
+- 工作区文件最大 2 MiB、最多 512 个文件夹。仅访问本地路径及 `file:` URI；远程 URI 保留并显示不支持，不尝试连接。
+- 保存已有文件时保留配置和注释、检测外部修改并使用同目录临时文件替换；新建/另存为不覆盖其他已有文件。另存为会把原来的相对文件夹路径改为绝对路径，避免位置变化导致引用失效。
+
+## HTTP 与 MCP 契约
+
+所有下述业务接口使用 `Authorization: Bearer <token>`；HTTP 和 MCP 调用同一 `DevFlowEngine` 的工作区与运行服务。
+
+| HTTP | MCP | 用途 |
+| --- | --- | --- |
+| `GET /api/workspace`（兼容 `/api/projects`） | `workspace_get` | 当前工作区、文件夹、项目、版本和未保存状态 |
+| `GET /api/workspace?refresh=true`（兼容 `/api/projects?refresh=true`） | `workspace_refresh` | 重新从源码识别可启动服务，不改变工作区版本或启动项目 |
+| `GET /api/workspace/catalog` | `workspace_catalog` | 授权目录及其直属工作区文件，不递归扫描 |
+| `GET /api/workspace/browse?path=...` | `workspace_browse` | 浏览授权位置的一层文件夹与工作区文件；省略 path 返回授权根，不要求已有工作区 |
+| `GET /api/workspace/children?path=...&expectedRevision=...` | `workspace_children` | 当前工作区内目录的一层子项；目录优先排序，最多处理 2000 项，排除链接及依赖/构建/Git 目录 |
+| `POST /api/workspace`，`operation.type=open` | `workspace_open` | 打开工作区文件或文件夹 |
+| `POST /api/workspace`，`operation.type=create` | `workspace_create` | 新建空工作区文件并打开 |
+| `POST /api/workspace`，`operation.type=create_from_folder` | `workspace_create_from_folder` | 用 path 指定新文件、folder 指定起始文件夹；校验完成后原子创建并打开 |
+| `POST /api/workspace`，`operation.type=close` | `workspace_close` | 关闭当前工作区，遵守版本和未保存保护，不停止进程 |
+| `POST /api/workspace`，`operation.type=add_folder` | `workspace_add_folder` | 添加文件夹及可选显示名称 |
+| `POST /api/workspace`，`operation.type=remove_folder` | `workspace_remove_folder` | path 指定工作区根引用，移除并标记未保存，不删除文件或停止进程 |
+| `POST /api/workspace`，`operation.type=save` | `workspace_save` | 保存；可选 path 指定另存为位置 |
+| `GET /api/runtime/self` | `devflow_metrics` | 当前 DevFlow 后端 PID、CPU、物理内存、运行时间及采样时间；不要求已打开工作区 |
+| `POST /api/runtime/java` | `java_execute` | `projectPath`、`expectedRevision`、`operation`：Java 启动、停止或 Arthas 附加 |
+| `GET /api/runtime/java/options?projectPath=...` | `java_options` | Java 主类及资源目录中 `application-{profile}.yml/yaml/properties` 的 Profile 候选 |
+| `GET /api/runtime/java/output?projectPath=...&after=...&runId=...` | `java_output` | 托管状态、stdout/stderr/构建/Arthas 增量日志、退出码及 Arthas 地址 |
+
+### Java 使用约定
+
+卡片以图标角落的绿色圆点表示运行，构建中为黄色；运行时不显示“检测到运行进程”文字。类型旁显示实际 TCP 监听端口标签，最多显示 3 个及剩余数量，悬停或展开详情可看完整列表。端口由共享核心按关联 PID 聚合，不从 Spring 配置猜测，也不把出站连接或 UDP 当作监听端口。当前 Windows 复用 [系统 netstat](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/netstat) 的数值/PID 模式，一次采样读取全表后按服务分配，随已有 2 秒缓存刷新；进程退出后清空，IPv4/IPv6 相同端口去重。无监听端口与采集不可用分开提示；当前其他系统返回不可用。端口列表包含业务、调试和 Arthas 等诊断端口，不代表每个端口都是 HTTP 页面。
+
+- 启动配置区的 JVM 参数、程序参数均每行一个完整参数，无须为包含空格的值添加引号；HTTP/MCP 对应 `jvmArgs`、`args` 字符串数组。`profiles` 为 Spring Profile 数组，支持多选检测候选或手填，空数组沿用应用默认配置。`mainClass` 必须来自当前项目发现结果。界面在本机记忆上次成功提交的配置。
+- 请求示例：`{ "projectPath": "D:/code/app", "expectedRevision": 1, "operation": { "type": "start", "jvmArgs": ["-Xmx512m"], "args": ["--server.port=8080"], "profiles": ["dev"], "mainClass": "example.Application" } }`。停止传 `{ "type": "stop" }`；外部进程需另传 `pid`，附加传 `{ "type": "attach", "pid": 12345 }`。
+- Java 启动器优先使用 `DEVFLOW_JAVA_HOME`，其次 `JAVA_HOME`、PATH；Maven 使用 `MAVEN_HOME`/`M2_HOME` 或 PATH 中 Maven 的 ClassWorlds 启动器，直接调用 Java，不调用 cmd/PowerShell、不执行请求指定的 shell。Windows 默认给子 JVM 配置 `.devflow/sockets` 原生 NIO 临时路径，避免当前系统继承 TEMP 路径导致的 Unix-domain loopback 错误；可用 `DEVFLOW_JAVA_SOCKET_DIR` 指定更短的本机目录，或通过 JVM 参数覆盖系统属性。
+- 启动时异步返回 `starting`，Maven 完成后变为 `running`；表示进程已启动，不等于业务服务健康就绪。失败、退出、取消均写入输出，构建过程可取消。停止校验 PID 与启动时间并清理当前进程树，避免误伤 PID 复用。正常 Ctrl+C 关闭 DevFlow 会清理托管进程；操作系统强制终止后端不保证执行清理。
+- 资源指标的 `pids` 包含关联的进程树，另提供 `javaPids` 作为 Java 操作候选，排除 conhost 和 Maven 启动器。托管服务优先选择其应用主 PID，外部服务存在多个 Java 进程时要求选择目标。
+- 输出保留每个会话最近 2000 条、单条最多 16 KiB，每次最多返回 500 条。将返回的 `runId`、`nextCursor` 作为下次 `runId`、`after`，新会话自动从头读取。输出区保留最近 2000 条，支持手动查看历史和回到底部；进程与日志状态不跨后端重启持久化。
+- 输出面板的运行状态、PID 选择、停止与 Arthas 操作和“运行输出”标题同排，不再额外占一行；窄屏缩为带提示和无障碍名称的图标按钮。正文不显示 stdout/stderr 等来源前缀，保留原始级别文字：INFO 蓝色、WARN 黄色、ERROR/FATAL 红色、DEBUG 紫色、TRACE 灰色，构建/启动成功为绿色。异常堆栈延续错误/警告色；无级别 stderr 默认标红，移除 ANSI 控制码，使用 React 纯文本渲染。
+- 从 [Arthas 官方来源](https://arthas.aliyun.com/en/doc/quick-start.html) 下载 `arthas-boot.jar` 到 `.devflow/tools/arthas-boot.jar`，或配置 `DEVFLOW_ARTHAS_BOOT`。首次挂载官方启动器可能下载完整发行包。独立附加应用 JVM，使用 `--attach-only`，随机 HTTP/Telnet 端口仅绑定 `127.0.0.1`，附加最长等待 90 秒，端口就绪后才提供控制台链接；目标应用需允许 JDK Attach 且具有相同用户权限。Arthas 的控制台由官方工具提供，DevFlow 当前不转发任意诊断命令。
+
+写操作需要先读取当前 `revision`，再以 `expectedRevision` 提交。HTTP 请求为 `{ expectedRevision, discardChanges?, operation: { type, path?, name? } }`；MCP 将 `expectedRevision`、`discardChanges`、`path`、`name` 放在工具 arguments 中。版本过期或文件被外部修改时返回 `conflict`，不得盲目重试覆盖；只有明确放弃未保存更改时才传 `discardChanges: true`。
+
+`create_from_folder` 另需 `folder`，`close` 无路径参数。原有工具与请求保持兼容，文件浏览和工作区操作的授权均由共享核心校验。
+
+兼容工具 `workspace_list` 继续返回项目数组的文本内容，新增 `workspace_get` 提供完整工作区快照。`runtime_list` 和 HTTP 指标接口改为跟随当前工作区的全部可访问项目。MCP 传输仍为实验性 JSON-RPC 基础，完整协议兼容待后续完善。
+
+## 开源复用与验证记录
+
+### Java 运行链路验证（2026-10-19）
+
+- `cargo test --workspace` 共 37 项通过、2 项既有实机测试默认忽略；`pnpm web:check`、`pnpm web:build`、`cargo build --workspace` 通过。新版后端已启动，当前工作区恢复为 `D:\WorkSpace\framework.code-workspace`。
+- 可重跑脚本为 `scripts/verify-java-runtime.ps1`，使用独立真实 Spring Boot 3.5.14 样例，17 项 HTTP/MCP 验证通过：中文/空格路径、Profile 候选与实际激活、JVM/应用参数、stdout/stderr、Java PID 筛选、增量日志、跨入口重复启动防护、错误 PID、过期版本、官方 Arthas 附加及 HTTP 控制台、MCP 停止 Web 启动的进程、父子进程清理、新会话及构建阶段取消。样例和 JSON 证据保存在 `.devflow/acceptance/Java 中文 空格/`；脚本 finally 恢复先前工作区并清理测试运行。
+- 内置浏览器实际填写启动参数并启动，输出确认 `READY|qa|qa-value|页面 中文 空格|页面参数 空格`；点击卡片保持详情折叠，箭头可单独展开；页面挂载 Arthas 后展示控制台链接，页面停止后测试主/子进程均退出。截图：`.devflow/acceptance/java-launch-dialog.png`、`java-runtime-ui.png`。现有业务 Java 服务未停止或重启，业务模块完整启动仍需使用实际依赖和环境配置验收。
+- Windows 实机修正了 Java classpath 的 `\\?\` 路径前缀、NIO socket 临时目录兼容问题，以及进程在停止瞬间已退出导致的权限误报。Arthas 启动器来自 [官方项目](https://github.com/alibaba/arthas)，挂载结果结合端口就绪确认，不只依据启动器退出码。
+
+### 既有工作区验证记录
+
+- 工作区字段、名称和相对路径语义参考 [VS Code 官方实现](https://github.com/microsoft/vscode/blob/main/src/vs/platform/workspaces/common/workspaces.ts)，未复制其工作台运行时。
+- JSONC 解析及保留注释的编辑直接使用 MIT 许可的 [dprint/jsonc-parser](https://github.com/dprint/jsonc-parser)；本地 URI 复用 [url](https://github.com/servo/rust-url)，随机标识复用 [uuid](https://github.com/uuid-rs/uuid)。
+- 已只读核对 `D:\WorkSpace` 的 9 个文件，共 46 个文件夹引用；其中 `ai-chat` 有 3 个当前不存在的目录，验收应显示不可用，其他引用目录当前存在。
+- 已补充测试源码：JSONC/中文/相对路径、URI、配置与注释保留、另存为路径、鉴权、版本冲突、重复目录、未保存保护、外部修改和符号链接越界；另有默认忽略的 Windows 实机只读样本验收。
+- 已完成 Rust 格式化、4 个 TypeScript/TSX 文件的语法解析、PowerShell 启动脚本语法解析及 Git 差异空白检查；这些检查不执行编译或业务逻辑。
+- 2026-10-19 用户授权启动与验收后，已通过 `cargo fmt --all -- --check`、`cargo test --workspace --locked`（16 项通过，1 项实机测试默认忽略）、单独执行的 Windows 实机测试（9 个工作区全部通过）、`cargo build -p devflow --locked`、`pnpm web:check` 和 `pnpm web:build`。
+- HTTP/MCP 端到端验收共 56 项检查通过，覆盖 9 个文件的目录与状态、双入口状态一致、新建/添加/保存/另存为、JSONC 保留、失效路径、鉴权与来源校验、版本及外部编辑冲突。另验证了 Vite 代理鉴权和运行指标跟随当前工作区。真实工作区文件验收前后的 SHA256 全部一致。
+- 浏览器已操作验证打开现有工作区、新建文件、添加中文目录及显示名称、保存、未保存保护、MCP 修改后的并发提示和直接打开文件夹；检查了 400px、450px、550px 的实际 iframe 分屏布局。发现并修正空工作区提示/添加入口以及浅色主题下管理窗口标题颜色。
+- 本机验收脚本、JSON 明细和截图保存在 `.devflow/acceptance/`（忽略目录，不提交）。服务当前打开 `main-system.code-workspace`，Web 地址 `http://127.0.0.1:5173/`，API/已构建页面地址 `http://127.0.0.1:31080/`。该记录仅表示工作区管理 a 的本地功能验收，项目启动、Arthas 和完整 MCP 客户端协议兼容不在本轮验收范围。
+- 后续左侧树与按钮状态修正：后端测试共 18 项通过（实机样本仍默认忽略），前端类型检查/构建通过；实测 HTTP/MCP 目录子项一致、产物目录被排除，以及页面多层展开、方向键折叠和运行项目显示“停止”。当前服务已恢复重启前的 `framework-master` 工作区。
+- 工作区入口与交互调整：完成源码修改、Rust 格式化、差异空白检查，以及运行中前端的顶部搜索、菜单分离、对话框、450px 窄屏、鼠标拖拽、键盘调宽、宽度记忆和双击复位检查。新增浏览边界、原子创建及关闭保护测试源码；依照默认不编译约定，本轮未执行编译或自动化测试命令。新增后端接口需重新编译并重启后才能端到端验证。
+- 随后关闭操作的 HTTP 422 已确认来自仍运行的旧后端：其请求枚举不包含 `close`。用户明确授权后，已编译并重启新版后端，通过 Rust 测试 30 项（2 项实机测试维持默认忽略）、前端类型检查/构建及原有 56 项接口验收；新增 8 项接口检查验证了浏览的 HTTP/MCP 一致性、双入口从文件夹创建、关闭、无工作区时浏览及文件保留。浏览器实际点击关闭成功，HTTP/MCP 均返回空工作区，原 Java 服务进程仍在。当前页面保留已关闭状态；截图为 `.devflow/acceptance/workspace-close-fixed.png`。前端也增加旧后端不支持新增操作时的明确版本提示，避免仅显示 HTTP 422。
+- 窄屏交互、根引用移除与自身指标调整：源码已补充，已完成 Rust 格式化、差异空白检查；浏览器验证桌面及 450px 真实鼠标拖拽、拖拽后的树节点折叠、右键菜单打开，并检查 400px 顶栏与资源树布局。新增了移除引用的 JSONC/重复引用/失效目录/版本保护和自身指标归一化/缓存测试源码。本轮新增后端功能的编译、运行验收仍等待明确授权，暂不把指标占位值或菜单显示视为后端验收通过。
+- 用户随后授权编译重启：Rust 常规测试 33 项通过（2 项实机测试维持默认忽略），前端类型检查/构建通过；已编译并启动新版后端。新增 20 项 HTTP/MCP 验收通过，覆盖移除后的根/服务/dirty 同步、Windows 路径大小写、嵌套目录拒绝、版本冲突、未保存保护、失效目录清理、JSONC 保留、保存重开、磁盘文件保留、自身 PID 校验、CPU 预热与归一化、鉴权及关闭工作区后的指标可用。浏览器在临时工作区实际右键移除成功，并核对 HTTP/MCP 状态和文件保留；400px 分屏中实际拖拽从 327px 调至 247px，随后树节点展开与更多菜单仍可用，真实 CPU/内存与搜索同排显示。已恢复用户的 `framework.code-workspace`，真实工作区文件未被改写。脚本与结果位于 `.devflow/acceptance/tree-metrics-verify.ps1`、`tree-metrics-result.json`，截图为 `tree-remove-ui-passed.png`、`tree-metrics-ready.png`。
+
+## 可启动服务识别
+
+右侧列表展示可启动应用，不把构建描述符、聚合模块或依赖库直接当成服务；左侧目录树仍展示完整工作区。
+
+- Maven 使用 [roxmltree](https://github.com/RazrFalcon/roxmltree) 解析 POM，通过声明的 `modules` 有界遍历。`packaging=pom` 只用于找到子模块；仅有 Spring Boot 依赖或插件不足以成为服务。
+- Java 入口复用 [Tree-sitter Java](https://github.com/tree-sitter/tree-sitter-java) 的语法树识别：应用类必须有真实 `public static void main(String[]/String... args)`，并有 Boot 应用注解或启动调用；也支持 POM 实际插件配置明确指定的普通 Java mainClass。排除注释、字符串中的假入口和 `src/test`，不读取依赖 JAR、target 或生成的 class 文件。
+- 此设计参考 [VS Code Spring Boot Dashboard 的主类解析](https://github.com/microsoft/vscode-spring-boot-dashboard/blob/main/src/BootApp.ts)。该扩展依赖 VS Code/JDTLS，不能直接嵌入本系统；这里复用开源解析器进行本地源码发现，不宣称具有 Java 编译器的完整类型解析能力。
+- Node 工程必须有非空 `dev`、`start` 或 `serve` 脚本；只有 build/test 脚本的库不进入列表。由主工程自定义脚本控制、没有独立 package.json 的子项目仍由主工程代表。
+- `mainClasses`、`launchScripts` 作为兼容的可选响应字段返回，项目详情显示识别依据。状态未知或新服务尚未采样时，操作按钮显示“状态未知/读取中”，不误显示“启动”。
+- 默认 Java 源目录为 `src/main/java`，支持本 POM 的 `build/sourceDirectory`；继承模块属性和解析默认激活 profile 的 modules，不解析任意 profile 条件、Gradle、Kotlin 或自定义构建生成入口。超出边界、无法解析或达到预算时返回 warnings，不执行构建猜测。
+- 每个导入目录的服务发现缓存 30 秒，页面手动刷新及 MCP `workspace_refresh` 立即重查。最多 512 个模块、32 层目录、50000 个源码目录项、20000 个文件及 64 MiB 总读取预算；单 POM/package.json 2 MiB，单 Java 源文件 512 KiB。
+- 实机 `D:\CompanyProject\extreme-plus` 识别到 14 个有源码启动入口的模块：12 个 extreme-module 业务模块，以及同样有真实 Boot main 的 common-docker、third-oa；不会根据 common/third 目录名武断隐藏真实入口。普通 API/common 库和聚合工程不再进入服务列表。
+- 本轮验证：Rust 常规测试 27 项、实机测试 2 项全部通过，前端类型检查与构建通过，原有 HTTP/MCP 工作区验收 56 项全部通过。当前 framework-master 工作区共 28 个可启动服务；HTTP、MCP 查询和强制刷新列表一致，浏览器确认 System 服务显示“停止”及真实启动主类。截图见 `.devflow/acceptance/runnable-services-ready.png`。

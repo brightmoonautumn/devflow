@@ -28,10 +28,6 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .activity-button.active::before { content: ''; position: absolute; left: 0; height: 22px; width: 2px; background: var(--accent); }
 .editor-area { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .main-content { flex: 1; overflow: auto; min-height: 0; padding: 0 28px; }
-.page-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 42px; border-bottom: 1px solid #222730; }
-.breadcrumb { font-size: 10px; color: #929bad; }
-.breadcrumb span { color: #495363; margin: 0 7px; }
-.preview-label { font-size: 9px; color: #778395; white-space: nowrap; }
 .workspace-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 29px; }
 h1 { font-size: 22px; font-weight: 550; letter-spacing: -.6px; margin: 0; color: #e4e9f1; }
 .workspace-heading p { font-size: 11px; color: var(--muted); line-height: 1.7; margin: 8px 0 0; }
@@ -66,15 +62,13 @@ h2 span { margin-left: 7px; color: #778395; font-size: 10px; }
 .menu-note { font-size: 9px; color: #818c9f; border-top: 1px solid #353e4c; margin-top: 3px; padding: 7px 8px 3px; }
 .empty-state { min-height: 300px; padding: 46px 10px; display: flex; flex-direction: column; align-items: center; text-align: center; }
 .empty-symbol { color: #70829c; background: #1a202a; width: 58px; height: 58px; border: 1px solid #2b3544; border-radius: 15px; display: grid; place-items: center; margin-bottom: 18px; }
-.empty-state h3, .feature-placeholder h3 { margin: 0; font-size: 14px; font-weight: 500; color: #c8d1e0; }
-.empty-state p, .feature-placeholder p { max-width: 280px; margin: 10px 0 22px; color: #7f8b9f; font-size: 11px; line-height: 1.9; }
+.empty-state h3 { margin: 0; font-size: 14px; font-weight: 500; color: #c8d1e0; }
+.empty-state p { max-width: 280px; margin: 10px 0 22px; color: #7f8b9f; font-size: 11px; line-height: 1.9; }
 .primary-button { display: flex; align-items: center; gap: 7px; background: #91b2eb; color: #17243a; border: 1px solid #a6c1ee; font-size: 11px; border-radius: 4px; padding: 8px 14px; }
 .primary-button:hover { background: #b2cbf4; }
 .empty-state > .text-button { margin-top: 13px; }
 .workspace-note { display: flex; align-items: center; gap: 6px; color: #657185; font-size: 9px; padding: 20px 0 25px; }
 .workspace-note > span { width: 3px; height: 3px; }
-.feature-placeholder { padding: 70px 10px; display: flex; flex-direction: column; align-items: center; text-align: center; color: #7588a4; }
-.feature-placeholder h3 { margin-top: 20px; }
 .bottom-panel { flex-shrink: 0; background: #11151b; border-top: 1px solid #364052; }
 .panel-heading { height: 37px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid #252c37; }
 .panel-heading > span { display: flex; align-items: center; gap: 8px; font-size: 10px; color: #bbc7db; min-width: 0; }
@@ -88,8 +82,10 @@ h2 span { margin-left: 7px; color: #778395; font-size: 10px; }
 .statusbar button { height: 26px; padding: 0 5px; display: flex; align-items: center; gap: 6px; background: none; font-size: 9px; color: #8d9bb1; }
 .statusbar button:hover, .statusbar button.selected { color: #c4d5ef; background: #293344; }
 .status-version { margin-left: auto; color: #68788f; }
-.alert { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 14px; padding: 10px; background: #38272b; border: 1px solid #5b383f; color: #e0a4ac; font-size: 10px; overflow-wrap: anywhere; }
-.alert button { background: none; color: #ecc1c6; font-size: 10px; flex-shrink: 0; }
+.service-error { margin-left: auto; min-width: 0; display: flex; align-items: center; gap: 6px; color: #e0a4ac; }
+.service-error > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.statusbar .service-error button { color: inherit; flex-shrink: 0; }
+.connection, .statusbar > button { flex-shrink: 0; }
 .spinning { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (min-width: 900px) { .main-content { padding: 0 clamp(28px, 5vw, 72px); } .workspace-heading { margin-top: 38px; } .project { padding: 24px 0; } }

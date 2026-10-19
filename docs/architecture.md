@@ -1,26 +1,23 @@
-# Architecture
+# 架构
 
-```text
-Codex --> MCP (/mcp) ---+
-                          |
-React --> HTTP (/api) ----+--> devflow-core --> local Maven/Node projects
-                          |                   JVM/Arthas/HTTP QA (future)
-                  Axum adapters
-```
+DevFlow 提供两个原生入口：面向人类的 Web UI，以及面向 AI 的 MCP。两个入口调用同一套核心引擎，共享业务规则、状态与权限校验。
 
-## Boundaries
-- The same core service methods are called from both HTTP and MCP adapters.
-- `DEVFLOW_WORKSPACE` is the only allowed initial scan root; canonicalize and verify every file access before expanding filesystem APIs.
-- Managed projects can be Maven (Spring Boot) or Node (React/Vue/Vite/Next.js); use descriptors and scripts to drive runtime discovery rather than Rust-centric assumptions.
-- Rust serves the built frontend from `apps/web/dist` during local compiled runs (relative to current working directory).
+## 职责边界
 
-## Roadmap
-1. Accurate Maven modules and Node package manager/script parsing (respect workspace boundaries).
-2. Process supervisor: JDK detection, Maven builds, Spring Boot DEBUG launches, Node dev server scripts, structured logs.
-3. PID/JVM discovery, bounded Arthas attach/trace/stop.
-4. Context Picker and snapshot IDs exposed to MCP.
-5. Existing JS HTTP QA scenario migration, assertions, reports.
-6. Protocol-complete MCP via rmcp SDK, HTTP sessions/auth and Origin/DNS-rebinding defenses.
+- `apps/web`：React UI，负责展示、输入和交互，通过 HTTP 使用业务能力。
+- `crates/devflow`：HTTP 与 MCP 适配器，负责协议、参数和结果转换，不重复实现业务逻辑。
+- `crates/devflow-core`：共享核心引擎，负责工作区、项目启动、进程状态和 Arthas 附加等业务能力。
+- 服务启动时创建共享的核心服务实例，两个入口操作和查询相同的业务状态。新增业务能力同时规划 UI 与 MCP 的使用方式。
 
-## Build strategy
-Run backend and Vite separately in development. Build React before starting backend to serve it at port 31080. For eventual one-file release, embed static assets and include a proper installation/upgrade lifecycle.
+## 当前范围
+
+仅规划工作区功能，需求和验收标准集中在 [工作区](features/workspace.md)。启动和 Arthas 可继续使用内部 runtime、diagnose 模块，不作为独立功能规划。
+
+工作区管理的是用户的 Maven/Spring Boot 和 Node 工程；根据实际工程配置识别模块及启动方式，不能假设目标工程是 Rust 项目。
+
+## 访问边界
+
+- 本地服务绑定回环地址；涉及进程操作前落实认证及权限校验。
+- 当前发现入口使用 `DEVFLOW_WORKSPACE`。后续打开工作区文件或文件夹时，明确登记授权访问的目录；工作区文件所在目录与其引用的工程目录可能不同。
+- 文件访问校验规范化后的路径和授权范围，防止符号链接、Windows junction 或路径穿越越界。
+- 不通过 HTTP/MCP 暴露任意 Shell 执行或任意文件系统遍历；不递归扫描 `node_modules`、`target`、`.git`、`build`、`dist`。

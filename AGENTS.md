@@ -1,7 +1,10 @@
 # DevFlow — Codex Development Instructions
 
 ## Vision
-Local-first AI development control center for Java/Spring Boot Maven and Node.js frontend workspaces. Codex remains the coding interface. DevFlow provides process management, context picking, JVM diagnosis, and QA through Web and MCP.
+Local-first development control center for Java/Spring Boot Maven and Node.js frontend workspaces. The current scope is workspace management, project launches, and Arthas attachment.
+
+## Core principle
+DevFlow has two native entry points: Web UI for humans and MCP for AI. Both MUST use the same core engine and share business rules, state, and permission checks. Entry-point layers handle interaction and protocol adaptation only; never duplicate business logic. Plan both UI and MCP access for every new business capability.
 
 ## Architecture
 - Monorepo; two Rust crates: `devflow` (Axum HTTP / MCP adapters), `devflow-core` (domain logic).
@@ -14,19 +17,17 @@ Local-first AI development control center for Java/Spring Boot Maven and Node.js
 - No embedded AI chat and no source editor in MVP.
 
 ## Features
-- `workspace`: import/detect local projects, Maven pom.xml, Node package.json; later parse modules and package managers.
-- `runtime`: Maven/Spring Boot debug launches and Node dev scripts, tracked process trees and structured logs. JVM debug and Arthas attachment are independent operations.
-- `diagnose`: Arthas and bounded log collection; integrate safely with managed JVMs.
-- `explorer`: fast file/symbol search and stable context selection IDs shared by Web & MCP.
-- `qa`: HTTP scenarios, variables, assertions, reports; migrate legacy JS gradually.
+- Only the workspace feature is currently planned: open/create VS Code-compatible `.code-workspace` files, add folders, open folders directly, launch Java/Node projects, and attach Arthas independently of startup or JVM debugging.
+- Runtime and diagnosis code may remain in their existing internal modules; their current requirements belong to `docs/features/workspace.md`. Other scaffold directories do not imply planned or implemented features.
 
 ## Coding agreements
 - Avoid new crates until necessary. Favor feature-local code; extract shared only after actual reuse.
 - Tests accompany new runtime logic; test Windows paths and process cleanup.
 - Keep handlers thin, normalize errors, maintain backward-compatible DTOs.
 - UI design: low visual noise, keyboard search, minimal card surfaces, no Monaco dependency.
-- Use `cargo fmt --all`, `cargo test --workspace`, `pnpm web:check`, `pnpm web:build`.
+- Read and write text files as UTF-8, including Chinese content.
+- Do not compile or run build/test commands unless the user explicitly requests it. When authorized, use the applicable checks: `cargo fmt --all`, `cargo test --workspace`, `pnpm web:check`, `pnpm web:build`.
 - For a feature, update matching documentation in `docs/features`.
 
 ## MVP status
-Working starter includes HTTP health/project discovery, basic read-only MCP `workspace_list`, React shell and proxy. Other feature directories are intentionally scaffolds, **not finished implementations**. MCP starter is only a minimal JSON-RPC foundation; add protocol tests and secure sessions before production deployment.
+Implemented code includes VS Code-compatible workspace management, project discovery, process metrics, managed Java launch/stop, bounded stdout/stderr output, and official Arthas attachment shared by HTTP and MCP. Runtime mutations require authentication, active workspace membership and revision checks. Node launch/stop remains unimplemented. MCP starter is still a minimal JSON-RPC foundation; add full protocol compliance before production deployment. See `docs/features/workspace.md` for validation status, configuration, and acceptance criteria.

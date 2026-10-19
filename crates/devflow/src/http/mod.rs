@@ -1,27 +1,133 @@
-use crate::AppState;
-use axum::{Json, extract::State, http::StatusCode};
+use crate::{AppState, call_core, security};
+use axum::{
+    Json,
+    extract::{Query, State},
+    http::{HeaderMap, StatusCode},
+};
+use devflow_core::workspace::{WorkspaceChildrenRequest, WorkspaceError, WorkspaceRequest};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+type ApiResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
+fn response<T: serde::Serialize>(result: Result<T, WorkspaceError>) -> ApiResult {
+    match result {
+        Ok(value) => Ok(Json(json!(value))),
+        Err(err) => {
+            let status = match err.code {
+                "unauthorized" => StatusCode::UNAUTHORIZED,
+                "outside_roots" | "outside_workspace" | "excluded_directory"
+                | "permission_denied" => StatusCode::FORBIDDEN,
+                "not_found" => StatusCode::NOT_FOUND,
+                "conflict" | "already_exists" | "unsaved_changes" | "duplicate_folder" => {
+                    StatusCode::CONFLICT
+                }
+                "unavailable" | "io_error" => StatusCode::SERVICE_UNAVAILABLE,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            Err((status, Json(json!(err))))
+        }
+    }
+}
 pub async fn health() -> Json<Value> {
     Json(json!({"status":"ok","name":"devflow","version":env!("CARGO_PKG_VERSION")}))
 }
-
+pub async fn session(State(state): State<Arc<AppState>>) -> Json<Value> {
+    Json(json!({"token": state.api_token}))
+}
+#[derive(serde::Deserialize)]
+pub struct WorkspaceQuery {
+    #[serde(default)]
+    refresh: bool,
+}
 pub async fn projects(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let Some(root) = &state.workspace_root else {
-        return Ok(Json(
-            json!({"workspaceRoot":null,"projects":[],"hint":"Set DEVFLOW_WORKSPACE to an existing folder"}),
-        ));
-    };
-    match devflow_core::workspace::detect_projects(root) {
-        Ok(projects) => Ok(Json(
-            json!({"workspaceRoot":root.display().to_string(),"projects":projects}),
-        )),
-        Err(err) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error":err.to_string()})),
-        )),
-    }
+    Query(query): Query<WorkspaceQuery>,
+) -> ApiResult {
+    response(
+        call_core(state, move |engine| {
+            if query.refresh {
+                engine.workspace.refresh()
+            } else {
+                engine.workspace.snapshot()
+            }
+        })
+        .await,
+    )
+}
+pub async fn workspace_catalog(State(state): State<Arc<AppState>>) -> ApiResult {
+    response(call_core(state, |engine| engine.workspace.catalog()).await)
+}
+pub async fn workspace_browse(
+    State(state): State<Arc<AppState>>,
+    Query(request): Query<devflow_core::workspace::WorkspaceBrowseRequest>,
+) -> ApiResult {
+    response(call_core(state, move |engine| engine.workspace.browse(request)).await)
+}
+pub async fn workspace_children(
+    State(state): State<Arc<AppState>>,
+    Query(request): Query<WorkspaceChildrenRequest>,
+) -> ApiResult {
+    response(call_core(state, move |engine| engine.workspace.children(request)).await)
+}
+pub async fn workspace_execute(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<WorkspaceRequest>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(
+        call_core(state, move |engine| {
+            engine.workspace.execute(request, authenticated)
+        })
+        .await,
+    )
+}
+pub async fn runtime_projects(State(state): State<Arc<AppState>>) -> ApiResult {
+    response(call_core(state, |engine| engine.runtime_snapshot()).await)
+}
+pub async fn devflow_metrics(State(state): State<Arc<AppState>>) -> ApiResult {
+    response(
+        call_core(state, |engine| {
+            engine.runtime.self_snapshot().map_err(Into::into)
+        })
+        .await,
+    )
+}
+pub async fn java_execute(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<devflow_core::runtime::java::JavaRequest>,
+) -> ApiResult {
+    response(call_core(state, move |engine| engine.java_execute(request)).await)
+}
+pub async fn java_options(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<devflow_core::runtime::java::JavaQuery>,
+) -> ApiResult {
+    response(
+        call_core(state, move |engine| {
+            devflow_core::runtime::java::options(
+                &engine
+                    .workspace
+                    .runtime_project(&query.project_path, None)?,
+            )
+        })
+        .await,
+    )
+}
+pub async fn java_output(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<devflow_core::runtime::java::JavaQuery>,
+) -> ApiResult {
+    response(
+        call_core(state, move |engine| {
+            engine.java.output(
+                &engine
+                    .workspace
+                    .runtime_project(&query.project_path, None)?,
+                query.after,
+                query.run_id.as_deref(),
+            )
+        })
+        .await,
+    )
 }

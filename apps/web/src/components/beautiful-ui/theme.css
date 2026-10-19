@@ -1,0 +1,34 @@
+/* Official Beautiful UI tokens. Copyright (c) 2026 Shane Levine; MIT. */
+@import "tailwindcss/theme" layer(theme);
+@import "tailwindcss/utilities" layer(utilities);
+@source "./";
+@theme inline {
+  --color-surface: var(--surface);
+  --color-inset: var(--inset);
+  --color-hover: var(--hover);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-green: var(--green);
+  --color-green-tint: var(--green-tint);
+  --color-red: var(--red);
+  --color-red-tint: var(--red-tint);
+  --radius-card: 14px;
+  --radius-control: 8px;
+  --shadow-card: var(--bui-shadow-card);
+  --shadow-raised: var(--bui-shadow-raised);
+  --shadow-hairline: 0 0 0 1px var(--line);
+}
+.workspace-shell[data-theme='light'] .workspace-page { --page:oklch(98.5% .001 286.376);--canvas:oklch(96.1% .002 247.84);--surface:oklch(100% 0 0);--inset:oklch(97.9% .002 247.839);--hover:oklch(97% .002 247.839);--hover-2:oklch(93.3% .003 247.86);--ink:oklch(24.7% .006 258.361);--ink-2:oklch(50.6% .01 264.477);--ink-3:oklch(69.5% .009 264.505);--line:oklch(94.6% .003 264.542);--line-strong:oklch(91.2% .005 258.326);--line-soft:oklch(96.6% .002 264.542);--grid-line:var(--line)--field:oklch(96.1% .001 286.375);--stripe:oklch(40.5% 0 0/.075);--stripe-bg:oklch(97% 0 0);--accent:oklch(62.6% .205 254.947);--accent-ink:oklch(55.6% .187 255.617);--accent-tint:oklch(96% .019 252.878);--green:oklch(60.3% .155 150.883);--green-tint:oklch(95.8% .017 159.118);--orange:oklch(68.9% .179 49.902);--orange-tint:oklch(96.4% .021 67.581);--red:oklch(62.1% .192 23.042);--red-tint:oklch(95.6% .017 17.462);--tooltip-bg:oklch(27.2% .008 264.435);--tooltip-fg:oklch(97.6% .002 247.839);--tooltip-muted:oklch(73.1% .008 260.731);--tooltip-border:oklch(35.6% .007 264.474);--shadow-hairline:0 0 0 1px var(--line);--shadow-btn:0 0 0 1px var(--line-strong),var(--shadow-xs);--bui-shadow-card:0 0 0 1px var(--line),var(--shadow-sm);--bui-shadow-raised:0 0 0 1px var(--line),var(--shadow-md);--shadow-overlay:0 0 0 1px var(--line),var(--shadow-lg);--shadow-inset-field:inset 0 1px 2px oklch(0% 0 0/.12) }
+.workspace-shell[data-theme='dark'] .workspace-page { --page:oklch(20.9% .004 264.477);--canvas:oklch(23.1% .004 264.487);--surface:oklch(26% .006 271.191);--inset:oklch(24.3% .004 264.492);--hover:oklch(28.9% .006 271.22);--hover-2:oklch(31.8% .007 274.747);--ink:oklch(96.4% .002 247.839);--ink-2:oklch(73.1% .008 260.731);--ink-3:oklch(54.1% .01 264.484);--line:oklch(30.8% .006 258.354);--line-strong:oklch(35.6% .007 264.474);--line-soft:oklch(27.8% .006 258.354);--field:oklch(29.3% .006 271.223);--stripe:oklch(100% 0 0/.055);--stripe-bg:oklch(22.6% .004 264.485);--accent:oklch(68% .173 253.301);--accent-ink:oklch(78.8% .113 248.33);--accent-tint:oklch(68% .173 253.301/.16);--green:oklch(70.5% .154 153.814);--green-tint:oklch(70.5% .154 153.814/.14);--orange:oklch(74.6% .156 55.642);--orange-tint:oklch(74.6% .156 55.642/.14);--red:oklch(66.6% .18 21.433);--red-tint:oklch(66.6% .18 21.433/.14);--tooltip-bg:oklch(18.2% .004 264.459);--tooltip-fg:oklch(96.4% .002 247.839);--tooltip-muted:oklch(73.1% .008 260.731);--tooltip-border:oklch(30.8% .006 258.354);--shadow-hairline:0 0 0 1px var(--line);--shadow-btn:0 0 0 1px oklch(100% 0 0/.1),0 1px 2px oklch(0% 0 0/.3);--bui-shadow-card:0 0 0 1px oklch(100% 0 0/.11),0 1px 2px oklch(0% 0 0/.2),0 2px 6px oklch(0% 0 0/.2);--bui-shadow-raised:0 0 0 1px oklch(100% 0 0/.13),0 2px 10px oklch(0% 0 0/.22);--shadow-overlay:0 0 0 1px oklch(100% 0 0/.15),0 8px 28px oklch(0% 0 0/.34);--shadow-inset-field:inset 0 1px 2px oklch(0% 0 0/.4) }
+@layer base {
+  .workspace-page :is(.bui-search, .bui-task-rows) * { border: 0 solid; }
+  .workspace-page :is(.bui-search, .bui-task-rows) :is(button, input) { background-color: transparent; }
+}
+@keyframes fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pop-in { from { opacity: 0; transform: scale(.8); } to { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .workspace-page :is(.bui-search, .bui-task-rows) * { animation: none !important; transition: none !important; }
+}

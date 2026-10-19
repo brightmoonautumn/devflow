@@ -1,1 +1,715 @@
-//! Runtime feature boundary. Implement domain logic here, never in HTTP/MCP handlers.
+//! Process observations and managed Java execution shared by HTTP and MCP.
+pub mod java;
+mod ports;
+use crate::workspace::{DetectedProject, ProjectKind, detect_projects};
+use serde::Serialize;
+use std::{
+    collections::HashMap,
+    io,
+    path::Path,
+    sync::Mutex,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRuntime {
+    pub project_path: String,
+    pub pids: Vec<u32>,
+    pub java_pids: Vec<u32>,
+    pub listening_ports: Option<Vec<u16>>,
+    pub memory_bytes: Option<u64>,
+    pub cpu_percent: Option<f32>,
+    pub uptime_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed_state: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeSnapshot {
+    pub sampled_at: u64,
+    pub projects: Vec<ProjectRuntime>,
+}
+
+#[derive(Clone, Debug)]
+struct Observation {
+    pid: u32,
+    parent: Option<u32>,
+    started: u64,
+    name: String,
+    cwd: Option<String>,
+    args: Vec<String>,
+    memory: u64,
+    cpu: Option<f32>,
+}
+struct RuntimeProject {
+    path: String,
+    root: String,
+    java: bool,
+    node: bool,
+    main_classes: Vec<String>,
+}
+
+struct Sampler {
+    system: System,
+    identities: HashMap<u32, u64>,
+    cached: Option<(Instant, Vec<String>, RuntimeSnapshot)>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DevFlowMetrics {
+    pub sampled_at: u64,
+    pub pid: u32,
+    pub memory_bytes: Option<u64>,
+    pub cpu_percent: Option<f32>,
+    pub uptime_seconds: Option<u64>,
+}
+struct SelfSampler {
+    system: System,
+    cached: Option<(Instant, DevFlowMetrics)>,
+}
+pub struct RuntimeService {
+    projects: Mutex<Sampler>,
+    own_process: Mutex<SelfSampler>,
+}
+
+impl Default for RuntimeService {
+    fn default() -> Self {
+        Self {
+            projects: Mutex::new(Sampler {
+                system: System::new(),
+                identities: HashMap::new(),
+                cached: None,
+            }),
+            own_process: Mutex::new(SelfSampler {
+                system: System::new(),
+                cached: None,
+            }),
+        }
+    }
+}
+
+impl RuntimeService {
+    pub fn invalidate(&self) {
+        if let Ok(mut sampler) = self.projects.lock() {
+            sampler.cached = None;
+        }
+    }
+    /// Sample only this backend PID, even with no workspace open. A separate
+    /// sampler avoids changing managed-project CPU measurement intervals.
+    pub fn self_snapshot(&self) -> io::Result<DevFlowMetrics> {
+        if !sysinfo::IS_SUPPORTED_SYSTEM {
+            return Err(io::Error::other(
+                "Process metrics unsupported on this platform",
+            ));
+        }
+        let mut sampler = self
+            .own_process
+            .lock()
+            .map_err(|_| io::Error::other("DevFlow sampler unavailable"))?;
+        if let Some((time, cached)) = &sampler.cached {
+            if time.elapsed() < Duration::from_secs(2) {
+                return Ok(cached.clone());
+            }
+        }
+        let ready = sampler.cached.is_some();
+        let pid = sysinfo::Pid::from_u32(std::process::id());
+        sampler.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing()
+                .without_tasks()
+                .with_memory()
+                .with_cpu(),
+        );
+        let process = sampler
+            .system
+            .process(pid)
+            .ok_or_else(|| io::Error::other("DevFlow process metrics unavailable"))?;
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let result = DevFlowMetrics {
+            sampled_at: now_seconds(),
+            pid: pid.as_u32(),
+            memory_bytes: Some(process.memory()),
+            cpu_percent: normalized_self_cpu(ready.then(|| process.cpu_usage()), cores),
+            uptime_seconds: Some(process.run_time()),
+        };
+        sampler.cached = Some((Instant::now(), result.clone()));
+        Ok(result)
+    }
+    /// Roots come only from server configuration, never from request arguments.
+    /// CPU requires two observations. Newly seen PIDs return null for the first.
+    pub fn snapshot(&self, root: Option<&Path>) -> io::Result<RuntimeSnapshot> {
+        let mut projects = Vec::new();
+        if let Some(root) = root {
+            let canonical_root = root.canonicalize()?;
+            projects = detect_projects(&canonical_root)?
+                .into_iter()
+                .filter(|project| {
+                    Path::new(&project.path)
+                        .canonicalize()
+                        .is_ok_and(|path| path.starts_with(&canonical_root))
+                })
+                .collect();
+        }
+        self.snapshot_for_projects(&projects)
+    }
+
+    /// The caller supplies only projects authorized by the workspace service.
+    pub fn snapshot_for_projects(
+        &self,
+        authorized: &[DetectedProject],
+    ) -> io::Result<RuntimeSnapshot> {
+        if authorized.is_empty() {
+            return Ok(RuntimeSnapshot {
+                sampled_at: now_seconds(),
+                projects: Vec::new(),
+            });
+        }
+        let projects: Vec<RuntimeProject> = authorized
+            .iter()
+            .filter_map(|project| {
+                Path::new(&project.path)
+                    .canonicalize()
+                    .ok()
+                    .map(|path| RuntimeProject {
+                        path: project.path.clone(),
+                        root: normalize_path(&path.to_string_lossy()),
+                        java: matches!(
+                            project.kind,
+                            ProjectKind::Maven | ProjectKind::MavenAndNode
+                        ),
+                        node: matches!(project.kind, ProjectKind::Node | ProjectKind::MavenAndNode),
+                        main_classes: project.main_classes.clone(),
+                    })
+            })
+            .collect();
+        let cache_key: Vec<String> = projects
+            .iter()
+            .map(|p| format!("{}|{}|{}|{:?}", p.path, p.java, p.node, p.main_classes))
+            .collect();
+        let mut sampler = self
+            .projects
+            .lock()
+            .map_err(|_| io::Error::other("Runtime sampler unavailable"))?;
+        if let Some((time, cached_root, snapshot)) = &sampler.cached {
+            if cached_root == &cache_key && time.elapsed() < Duration::from_secs(2) {
+                return Ok(snapshot.clone());
+            }
+        }
+        if !sysinfo::IS_SUPPORTED_SYSTEM {
+            return Err(io::Error::other(
+                "Process metrics unsupported on this platform",
+            ));
+        }
+        sampler.system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing()
+                .without_tasks()
+                .with_memory()
+                .with_cpu()
+                .with_cmd(UpdateKind::Always)
+                .with_cwd(UpdateKind::Always),
+        );
+        let observations: Vec<Observation> = sampler
+            .system
+            .processes()
+            .iter()
+            .map(|(pid, process)| {
+                let stable = sampler.identities.get(&pid.as_u32()) == Some(&process.start_time());
+                Observation {
+                    pid: pid.as_u32(),
+                    parent: process.parent().map(|pid| pid.as_u32()),
+                    started: process.start_time(),
+                    name: process.name().to_string_lossy().into_owned(),
+                    cwd: process.cwd().map(|cwd| cwd.to_string_lossy().into_owned()),
+                    args: process
+                        .cmd()
+                        .iter()
+                        .map(|arg| arg.to_string_lossy().into_owned())
+                        .collect(),
+                    memory: process.memory(),
+                    cpu: stable.then(|| process.cpu_usage()),
+                }
+            })
+            .collect();
+        sampler.identities = observations.iter().map(|p| (p.pid, p.started)).collect();
+        let sampled_at = now_seconds();
+        let cores = std::thread::available_parallelism().map_or(1, |count| count.get());
+        let mut snapshot = RuntimeSnapshot {
+            sampled_at,
+            projects: aggregate(&projects, &observations, sampled_at, cores),
+        };
+        if let Some(listeners) = ports::listeners() {
+            for project in &mut snapshot.projects {
+                let ports: std::collections::BTreeSet<_> = project
+                    .pids
+                    .iter()
+                    .filter_map(|pid| listeners.get(pid))
+                    .flatten()
+                    .copied()
+                    .collect();
+                project.listening_ports = Some(ports.into_iter().collect());
+            }
+        }
+        sampler.cached = Some((Instant::now(), cache_key, snapshot.clone()));
+        Ok(snapshot)
+    }
+}
+
+fn normalized_self_cpu(cpu: Option<f32>, cores: usize) -> Option<f32> {
+    cpu.filter(|value| value.is_finite())
+        .map(|value| (value / cores.max(1) as f32).clamp(0., 100.))
+}
+
+fn now_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn normalize_path(value: &str) -> String {
+    let value = value.replace('\\', "/");
+    let value = value
+        .strip_prefix("//?/")
+        .unwrap_or(&value)
+        .trim_end_matches('/');
+    if cfg!(windows) {
+        value.to_lowercase()
+    } else {
+        value.to_owned()
+    }
+}
+
+fn path_within(path: &str, root: &str) -> bool {
+    path == root
+        || path
+            .strip_prefix(root)
+            .is_some_and(|tail| tail.starts_with('/'))
+}
+
+fn launch_path(target: &str, cwd: Option<&str>) -> Option<String> {
+    let target = normalize_path(target);
+    let absolute = target.starts_with('/') || target.as_bytes().get(1) == Some(&b':');
+    let target = if absolute {
+        target
+    } else {
+        format!("{}/{target}", normalize_path(cwd?))
+    };
+    let mut clean = std::path::PathBuf::new();
+    for component in Path::new(&target).components() {
+        match component {
+            std::path::Component::ParentDir => {
+                clean.pop();
+            }
+            std::path::Component::CurDir => {}
+            component => clean.push(component.as_os_str()),
+        }
+    }
+    Some(normalize_path(&clean.to_string_lossy()))
+}
+fn node_matches(process: &Observation, project: &RuntimeProject) -> bool {
+    let mut index = 0;
+    if process.args.first().is_some_and(|s| {
+        ["node", "node.exe"].contains(&normalize_path(s).rsplit('/').next().unwrap_or(""))
+    }) {
+        index = 1;
+    }
+    while let Some(arg) = process.args.get(index) {
+        if ["-e", "--eval", "-p", "--print", "--run"].contains(&arg.as_str()) {
+            return false;
+        }
+        if [
+            "-r",
+            "--require",
+            "--import",
+            "--loader",
+            "--experimental-loader",
+            "--conditions",
+            "-C",
+            "--inspect-port",
+            "--icu-data-dir",
+            "--openssl-config",
+            "--redirect-warnings",
+        ]
+        .contains(&arg.as_str())
+        {
+            index += 2;
+            continue;
+        }
+        if arg.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        return launch_path(arg, process.cwd.as_deref())
+            .is_some_and(|path| path_within(&path, &project.root));
+    }
+    false
+}
+
+enum JavaTarget<'a> {
+    Jar(&'a str),
+    Class(&'a str),
+}
+fn java_target(args: &[String]) -> Option<JavaTarget<'_>> {
+    let mut index = 0;
+    if args.first().is_some_and(|s| {
+        ["java", "java.exe", "javaw", "javaw.exe"]
+            .contains(&normalize_path(s).rsplit('/').next().unwrap_or(""))
+    }) {
+        index = 1;
+    }
+    while let Some(arg) = args.get(index) {
+        if arg == "-jar" {
+            return args.get(index + 1).map(|s| JavaTarget::Jar(s));
+        }
+        if arg == "-m" || arg == "--module" {
+            return args
+                .get(index + 1)
+                .and_then(|s| s.split_once('/'))
+                .map(|(_, class)| JavaTarget::Class(class));
+        }
+        if let Some(module) = arg.strip_prefix("--module=") {
+            return module
+                .split_once('/')
+                .map(|(_, class)| JavaTarget::Class(class));
+        }
+        if [
+            "-cp",
+            "-classpath",
+            "--class-path",
+            "-p",
+            "--module-path",
+            "--upgrade-module-path",
+            "--add-opens",
+            "--add-exports",
+            "--add-reads",
+            "--patch-module",
+            "--add-modules",
+            "--limit-modules",
+            "--enable-native-access",
+            "--source",
+        ]
+        .contains(&arg.as_str())
+        {
+            index += 2;
+            continue;
+        }
+        if arg.starts_with('-') || arg.starts_with('@') {
+            index += 1;
+            continue;
+        }
+        return Some(JavaTarget::Class(arg));
+    }
+    None
+}
+fn java_matches(process: &Observation, project: &RuntimeProject) -> bool {
+    match java_target(&process.args) {
+        Some(JavaTarget::Class(class)) => project.main_classes.iter().any(|main| main == class),
+        Some(JavaTarget::Jar(jar)) => launch_path(jar, process.cwd.as_deref())
+            .is_some_and(|path| path_within(&path, &project.root)),
+        None => false,
+    }
+}
+fn aggregate(
+    projects: &[RuntimeProject],
+    processes: &[Observation],
+    now: u64,
+    cores: usize,
+) -> Vec<ProjectRuntime> {
+    let by_pid: HashMap<u32, &Observation> = processes.iter().map(|p| (p.pid, p)).collect();
+    let mut owners: HashMap<u32, usize> = HashMap::new();
+    for process in processes {
+        if !["java", "java.exe", "javaw", "javaw.exe", "node", "node.exe"]
+            .contains(&process.name.to_ascii_lowercase().as_str())
+        {
+            continue;
+        }
+        // The most specific project wins when roots are nested.
+        let owner = projects
+            .iter()
+            .enumerate()
+            .filter(|(_, project)| {
+                if ["java", "java.exe", "javaw", "javaw.exe"]
+                    .contains(&process.name.to_ascii_lowercase().as_str())
+                {
+                    return project.java && java_matches(process, project);
+                }
+                project.node && node_matches(process, project)
+            })
+            .max_by_key(|(_, project)| project.root.len())
+            .map(|(index, _)| index);
+        if let Some(owner) = owner {
+            owners.insert(process.pid, owner);
+        }
+    }
+    // Include descendants (e.g. esbuild), without overriding directly matched
+    // child projects. Guard PID reuse and cycles. No process is counted twice.
+    for process in processes {
+        if owners.contains_key(&process.pid) {
+            continue;
+        }
+        let mut current = process;
+        let mut visited = std::collections::HashSet::new();
+        while let Some(parent) = current.parent.and_then(|pid| by_pid.get(&pid).copied()) {
+            if parent.started > current.started || !visited.insert(parent.pid) {
+                break;
+            }
+            if let Some(owner) = owners.get(&parent.pid).copied() {
+                owners.insert(process.pid, owner);
+                break;
+            }
+            current = parent;
+        }
+    }
+    projects
+        .iter()
+        .enumerate()
+        .map(|(index, project)| {
+            let members: Vec<_> = processes
+                .iter()
+                .filter(|p| owners.get(&p.pid) == Some(&index))
+                .collect();
+            let mut pids: Vec<_> = members.iter().map(|p| p.pid).collect();
+            pids.sort_unstable();
+            let mut java_pids: Vec<_> = members
+                .iter()
+                .filter(|p| {
+                    matches!(
+                        p.name.to_ascii_lowercase().as_str(),
+                        "java" | "java.exe" | "javaw" | "javaw.exe"
+                    ) && !p.args.iter().any(|arg| arg.contains("org.codehaus.plexus"))
+                })
+                .map(|p| p.pid)
+                .collect();
+            java_pids.sort_unstable();
+            let has_members = !members.is_empty();
+            let memory = members
+                .iter()
+                .map(|p| p.memory)
+                .fold(0u64, u64::saturating_add);
+            let cpu = members.iter().try_fold(0.0f32, |total, p| {
+                p.cpu.filter(|cpu| cpu.is_finite()).map(|cpu| total + cpu)
+            });
+            ProjectRuntime {
+                project_path: project.path.clone(),
+                managed_state: None,
+                listening_ports: None,
+                java_pids,
+                pids,
+                memory_bytes: (has_members && memory > 0).then_some(memory),
+                cpu_percent: has_members
+                    .then_some(cpu)
+                    .flatten()
+                    .map(|cpu| (cpu / cores.max(1) as f32).clamp(0.0, 100.0)),
+                uptime_seconds: members
+                    .iter()
+                    .filter(|p| p.started > 0)
+                    .map(|p| now.saturating_sub(p.started))
+                    .max(),
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn self_cpu_is_normalized_and_unknown_samples_are_not_zero() {
+        assert_eq!(normalized_self_cpu(None, 8), None);
+        assert_eq!(normalized_self_cpu(Some(f32::NAN), 8), None);
+        assert_eq!(normalized_self_cpu(Some(400.), 8), Some(50.));
+        assert_eq!(normalized_self_cpu(Some(-1.), 8), Some(0.));
+        assert_eq!(normalized_self_cpu(Some(900.), 8), Some(100.));
+        assert_eq!(normalized_self_cpu(Some(10.), 0), Some(10.));
+    }
+    #[test]
+    fn self_sampler_only_reports_current_process_without_a_workspace() {
+        if !sysinfo::IS_SUPPORTED_SYSTEM {
+            return;
+        }
+        let runtime = RuntimeService::default();
+        let first = runtime.self_snapshot().unwrap();
+        assert_eq!(first.pid, std::process::id());
+        assert!(first.memory_bytes.is_some_and(|memory| memory > 0));
+        assert_eq!(first.cpu_percent, None);
+        let cached = runtime.self_snapshot().unwrap();
+        assert_eq!(first.sampled_at, cached.sampled_at);
+        assert_eq!(first.memory_bytes, cached.memory_bytes);
+        assert!(
+            runtime
+                .snapshot_for_projects(&[])
+                .unwrap()
+                .projects
+                .is_empty()
+        );
+        assert_eq!(runtime.self_snapshot().unwrap().pid, first.pid);
+    }
+    fn project(name: &str, root: &str) -> RuntimeProject {
+        RuntimeProject {
+            path: name.into(),
+            root: root.into(),
+            java: true,
+            node: true,
+            main_classes: Vec::new(),
+        }
+    }
+    fn process(pid: u32, parent: Option<u32>, name: &str, arg: &str) -> Observation {
+        Observation {
+            pid,
+            parent,
+            started: 10,
+            name: name.into(),
+            cwd: None,
+            args: if name.starts_with("java") {
+                vec!["-jar".into(), arg.into()]
+            } else {
+                vec![arg.into()]
+            },
+            memory: 1024,
+            cpu: Some(10.0),
+        }
+    }
+    #[test]
+    fn windows_paths_and_segment_boundaries() {
+        let root = "d:/code/app";
+        assert!(path_within(
+            &launch_path(r"d:\code\app\node_modules\vite\bin\vite.js", None).unwrap(),
+            root
+        ));
+        assert!(!path_within(
+            &launch_path(r"d:\code\app-copy\index.js", None).unwrap(),
+            root
+        ));
+        assert!(!path_within(
+            &launch_path("../other/server.jar", Some(root)).unwrap(),
+            root
+        ));
+        assert_eq!(normalize_path(r"\\?\d:\code\app"), root);
+    }
+    #[test]
+    fn java_operations_exclude_console_hosts_and_maven_launchers() {
+        let projects = vec![project("app", "d:/code/app")];
+        let mut launcher = process(3, Some(1), "java.exe", "");
+        launcher.args = vec!["org.codehaus.plexus.classworlds.launcher.Launcher".into()];
+        let processes = vec![
+            process(1, None, "java.exe", "d:/code/app/app.jar"),
+            process(2, Some(1), "conhost.exe", ""),
+            launcher,
+        ];
+        let metrics = aggregate(&projects, &processes, 20, 2);
+        assert_eq!(metrics[0].pids, vec![1, 2, 3]);
+        assert_eq!(metrics[0].java_pids, vec![1]);
+    }
+    #[test]
+    fn children_aggregate_once_and_exited_processes_clear_metrics() {
+        let projects = vec![project("app", "d:/code/app")];
+        let processes = vec![
+            process(1, None, "node.exe", "d:/code/app/start.js"),
+            process(2, Some(1), "esbuild.exe", ""),
+            process(3, None, "java.exe", "d:/other/main.jar"),
+        ];
+        let metrics = aggregate(&projects, &processes, 20, 2);
+        assert_eq!(metrics[0].pids, vec![1, 2]);
+        assert!(metrics[0].java_pids.is_empty());
+        assert_eq!(metrics[0].memory_bytes, Some(2048));
+        assert_eq!(metrics[0].cpu_percent, Some(10.0));
+        assert_eq!(metrics[0].uptime_seconds, Some(10));
+        let cleared = aggregate(&projects, &[], 20, 2);
+        assert!(cleared[0].pids.is_empty());
+        assert_eq!(cleared[0].memory_bytes, None);
+    }
+    #[test]
+    fn nested_projects_and_pid_reuse() {
+        let projects = vec![project("root", "d:/code"), project("child", "d:/code/app")];
+        let mut parent = process(1, None, "node", "d:/code/app/start.js");
+        parent.started = 30;
+        let child = process(2, Some(1), "worker", "");
+        let metrics = aggregate(&projects, &[parent, child], 40, 1);
+        assert!(metrics[0].pids.is_empty());
+        assert_eq!(metrics[1].pids, vec![1]);
+    }
+    #[test]
+    fn warming_up_cpu_is_not_zero() {
+        let projects = vec![project("app", "d:/app")];
+        let mut p = process(1, None, "java", "d:/app/app.jar");
+        p.cpu = None;
+        assert_eq!(aggregate(&projects, &[p], 20, 1)[0].cpu_percent, None);
+    }
+    #[test]
+    fn java_classpath_dependencies_are_not_running_applications() {
+        let mut system = project("system", "d:/code/system");
+        system.main_classes = vec!["example.SystemApplication".into()];
+        system.node = false;
+        let mut dependency = project("notice", "d:/code/notice");
+        dependency.main_classes = vec!["example.NoticeApplication".into()];
+        dependency.node = false;
+        let mut java = process(1, None, "java.exe", "");
+        java.cwd = Some("d:/code".into());
+        java.args = vec![
+            "java.exe",
+            "-Dspring.profiles.active=dev",
+            "-classpath",
+            "d:/code/notice/target/classes;d:/code/system/target/classes;d:/repository/spring.jar",
+            "example.SystemApplication",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let mut tooling = process(2, None, "java.exe", "");
+        tooling.cwd = Some("d:/code/system".into());
+        tooling.args = vec![
+            "java.exe",
+            "-cp",
+            "d:/code/system/target/classes",
+            "org.eclipse.equinox.launcher.Main",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let metrics = aggregate(&[system, dependency], &[java, tooling], 20, 1);
+        assert_eq!(metrics[0].pids, vec![1]);
+        assert!(metrics[1].pids.is_empty());
+    }
+    #[test]
+    fn java_jar_launch_uses_executable_jar_not_classpath_or_unrelated_cwd() {
+        let mut app = project("app", "d:/code/app");
+        app.node = false;
+        let mut p = process(1, None, "java", "d:/other/server.jar");
+        p.cwd = Some("d:/code/app".into());
+        assert!(aggregate(&[app], &[p], 20, 1)[0].pids.is_empty());
+        let mut app = project("app", "d:/code/app");
+        app.node = false;
+        let mut p = process(2, None, "java", "target/app.jar");
+        p.cwd = Some("d:/code/app".into());
+        assert_eq!(aggregate(&[app], &[p], 20, 1)[0].pids, vec![2]);
+    }
+    #[test]
+    fn node_uses_executed_script_not_cwd_or_imported_dependencies() {
+        let app = project("app", "d:/code/app");
+        let mut tool = process(1, None, "node.exe", "d:/tools/language-server.js");
+        tool.cwd = Some("d:/code/app".into());
+        tool.args = vec![
+            "node.exe",
+            "--require",
+            "d:/code/app/node_modules/register.js",
+            "d:/tools/language-server.js",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let mut server = process(2, None, "node.exe", "node_modules/vite/bin/vite.js");
+        server.cwd = Some("d:/code/app".into());
+        let worker = process(3, Some(2), "esbuild.exe", "");
+        assert_eq!(
+            aggregate(&[app], &[tool, server, worker], 20, 1)[0].pids,
+            vec![2, 3]
+        );
+    }
+}

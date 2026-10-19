@@ -4,7 +4,7 @@
 
 本地优先的开发工作台。采用 **Rust + Tokio + Axum + React + TypeScript + MCP** 技术栈，所有代码统一维护在一个仓库中。
 
-> **当前处于可运行的脚手架阶段，并非完整 IDE。** 已实现的功能包括：健康检查 API、Maven/Node 项目浅层扫描、只读的 `workspace_list` MCP 工具以及 React 基础界面。运行时管理、Arthas、上下文篮子及 QA 测试等能力目前作为扩展点，供后续使用 Codex 逐步实现。
+> **当前聚焦工作区，并非完整 IDE。** 已有工作区管理、Maven/Node 服务发现、进程指标、Java 启停和实时输出，以及官方 Arthas 附加。Web 与 MCP 共用核心引擎。Node.js 启停尚未接入，详见 [工作区文档](docs/features/workspace.md)。
 
 ## 环境要求
 
@@ -20,11 +20,13 @@
 pnpm install --frozen-lockfile
 .\scripts\dev.ps1
 # 可选：.\scripts\dev.ps1 -Workspace 'D:\code'
+# 工作区文件及跨目录工程：
+# .\scripts\dev.ps1 -Workspace 'D:\WorkSpace\main-system.code-workspace' -AllowedRoots @('D:\WorkSpace', 'D:\CompanyProject', 'D:\AiFlow')
 ```
 
 启动脚本会自动定位仓库根目录，等待后端 API 就绪，并在前端退出时结束后端进程树。后端日志保存在 `.devflow/` 目录下。
 
-如果没有指定 `-Workspace` 或 `DEVFLOW_WORKSPACE`，初始项目列表将为空。`.env.example` 仅供参考，程序不会自动加载环境文件。
+如果没有指定 `-Workspace` 或 `DEVFLOW_WORKSPACE`，初始项目列表将为空。可设置 `-AllowedRoots` / `DEVFLOW_ALLOWED_ROOTS` 后在页面打开工作区；引用其他目录的工程也必须在授权范围内。`.env.example` 仅供参考，程序不会自动加载环境文件。
 
 也可以使用两个终端分别启动：
 
@@ -54,7 +56,8 @@ cargo run -p devflow
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:31080/api/health
-Invoke-RestMethod http://127.0.0.1:31080/api/projects
+$session = Invoke-RestMethod http://127.0.0.1:31080/api/session -Headers @{'X-DevFlow-Client'='web'}
+Invoke-RestMethod http://127.0.0.1:31080/api/projects -Headers @{Authorization="Bearer $($session.token)"}
 cargo test --workspace
 pnpm web:check
 ```
@@ -62,10 +65,10 @@ pnpm web:check
 ### Codex MCP 接入（实验性）
 
 ```bash
-codex mcp add devflow --url http://127.0.0.1:31080/mcp
+codex mcp add devflow --url http://127.0.0.1:31080/mcp --bearer-token-env-var DEVFLOW_API_TOKEN
 ```
 
-`/mcp` 当前提供最小化、无状态的 JSON-RPC 接口，支持 `initialize`、`ping`、`tools/list` 和 `tools/call`，并提供一个**只读**的 `workspace_list` 工具。
+后端与 MCP 客户端进程需设置相同的 `DEVFLOW_API_TOKEN`。`/mcp` 当前提供最小化 JSON-RPC 接口，支持 `initialize`、`ping`、`tools/list` 和 `tools/call`，包括工作区查询、打开、新建、添加文件夹、保存及只读指标工具。详细参数见工作区文档。
 
 部分 MCP 客户端可能需要更完整的会话和通知机制。正式用于生产环境前，建议升级为持续维护的 Rust MCP SDK。**请勿将此端口直接暴露到公网。**
 
@@ -73,9 +76,9 @@ Web 开发代理仅用于浏览器 API 请求，Codex 则直接与 Axum 服务�
 
 ## 支持的工作区
 
-`DEVFLOW_WORKSPACE` 指定项目所在的父目录，例如 `D:\code`。目录下可以包含基于 Maven `pom.xml` 和／或 Node.js `package.json` 的项目。
+`DEVFLOW_WORKSPACE` 可以指定目录或 VS Code `.code-workspace` 文件。支持页面及 MCP 打开、新建、添加文件夹、保存和另存为；兼容 JSONC 注释、尾随逗号、相对路径、显示名称和本地 file URI，保留配置字段。远程 URI 暂不支持。
 
-目前仅扫描工作区根目录及其直属子目录，暂不解析 Maven 多模块元数据，也不解析 npm/pnpm workspace 依赖关系。该限制是 v0.1 阶段有意采用的设计，以保证扫描行为安全、可预测。
+右侧只列出可启动应用：沿 Maven 声明的多层 modules 找到真实 Java 启动主类，排除聚合模块、普通依赖库和测试入口；Node 工程需有 dev/start/serve 启动脚本。发现不运行 Maven、不扫描依赖 JAR，不等价于完整 effective POM 或 npm/pnpm workspace 图解析。详细边界见工作区文档。
 
 ## 仓库结构
 

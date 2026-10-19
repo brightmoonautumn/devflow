@@ -1,14 +1,22 @@
-param([string]$Workspace = "")
+param([string]$Workspace = "", [string[]]$AllowedRoots = @())
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $backend = $null
 if ($Workspace) {
     $resolvedWorkspace = (Resolve-Path -LiteralPath $Workspace).Path
-    if (-not (Test-Path -LiteralPath $resolvedWorkspace -PathType Container)) {
-        throw 'Workspace must be a directory.'
+    if (-not (Test-Path -LiteralPath $resolvedWorkspace -PathType Container) -and [System.IO.Path]::GetExtension($resolvedWorkspace) -ne '.code-workspace') {
+        throw 'Workspace must be a directory or a .code-workspace file.'
     }
     $env:DEVFLOW_WORKSPACE = $resolvedWorkspace
+}
+if ($AllowedRoots.Count -gt 0) {
+    $resolvedRoots = foreach ($root in $AllowedRoots) {
+        $resolvedRoot = (Resolve-Path -LiteralPath $root).Path
+        if (-not (Test-Path -LiteralPath $resolvedRoot -PathType Container)) { throw 'Allowed roots must be directories.' }
+        $resolvedRoot
+    }
+    $env:DEVFLOW_ALLOWED_ROOTS = $resolvedRoots -join [System.IO.Path]::PathSeparator
 }
 foreach ($command in @('cargo', 'pnpm')) {
     if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
