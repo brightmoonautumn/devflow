@@ -77,6 +77,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/runtime/java", post(http::java_execute))
         .route("/api/runtime/java/options", get(http::java_options))
         .route("/api/runtime/java/output", get(http::java_output))
+        .route("/api/runtime/node", post(http::node_execute))
+        .route("/api/runtime/node/options", get(http::node_options))
+        .route("/api/runtime/node/output", get(http::node_output))
         .route("/mcp", post(mcp::handle))
         // Authenticate API/MCP routes; the browser must load the static shell
         // before it can obtain a session token. Add the static fallback below.
@@ -96,7 +99,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         app
     };
 
-    let addr: SocketAddr = "127.0.0.1:31080".parse()?;
+    let port = std::env::var("DEVFLOW_PORT")
+        .unwrap_or_else(|_| "31080".into())
+        .parse::<u16>()?;
+    if port == 0 {
+        return Err("DEVFLOW_PORT must be between 1 and 65535".into());
+    }
+    let addr: SocketAddr = format!("127.0.0.1:{port}").parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("DevFlow at http://{addr}");
     axum::serve(listener, app)

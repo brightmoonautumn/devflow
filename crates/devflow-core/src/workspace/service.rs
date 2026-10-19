@@ -210,6 +210,40 @@ impl WorkspaceService {
             .clear();
         self.snapshot()
     }
+    pub fn node_runtime_project(
+        &self,
+        path: &str,
+        script: Option<&str>,
+        revision: Option<u64>,
+    ) -> Result<DetectedProject> {
+        let state = self.lock()?;
+        if revision.is_some_and(|value| value != state.revision) {
+            return Err(error("conflict", "工作区已改变，请重新选择服务"));
+        }
+        let path = self.authorize(Path::new(path))?;
+        let candidates: Vec<_> = self
+            .snapshot_of(&state)?
+            .projects
+            .into_iter()
+            .filter(|project| {
+                !project.launch_scripts.is_empty()
+                    && Path::new(&project.path)
+                        .canonicalize()
+                        .is_ok_and(|p| p == path)
+                    && project
+                        .node_script
+                        .as_deref()
+                        .is_none_or(|selected| script == Some(selected))
+            })
+            .collect();
+        if candidates.len() != 1 {
+            return Err(error(
+                "outside_workspace",
+                "服务不在当前工作区，或需要指定聚合工程的启动脚本",
+            ));
+        }
+        Ok(candidates.into_iter().next().unwrap())
+    }
     fn services_in(&self, root: &Path) -> Result<Discovery> {
         let mut cache = self
             .discovery
@@ -682,7 +716,7 @@ impl WorkspaceService {
                         result.warnings.extend(found.warnings);
                         for project in found.projects {
                             if self.authorize(Path::new(&project.path)).is_ok()
-                                && projects.insert(project.path.clone())
+                                && projects.insert(project.runtime_key())
                             {
                                 result.projects.push(project);
                             }

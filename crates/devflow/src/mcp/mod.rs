@@ -43,6 +43,10 @@ fn tools() -> Value {
         json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}})
     };
     json!({"tools":[
+        {"name":"node_execute","description":"Start or stop an authorized Node service using a discovered package script, never an arbitrary command. For aggregate projects pass nodeScript from workspace_get as script. npm/pnpm/yarn are supported; dependencies are not installed automatically.","inputSchema":{"type":"object","properties":{"projectPath":{"type":"string"},"script":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0},"operation":{"oneOf":[{"type":"object","properties":{"type":{"const":"start"},"packageManager":{"enum":["npm","pnpm","yarn"]},"args":{"type":"array","items":{"type":"string"}}},"required":["type"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"stop"},"pid":{"type":"integer"}},"required":["type"],"additionalProperties":false}]}},"required":["projectPath","expectedRevision","operation"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}},
+        {"name":"node_options","description":"Read discovered launch scripts and preferred package manager for an active workspace Node service.","inputSchema":{"type":"object","properties":{"projectPath":{"type":"string"},"script":{"type":"string"}},"required":["projectPath"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}},
+        {"name":"node_output","description":"Read bounded Node stdout/stderr and run state; pass runId and nextCursor as runId/after. Include script for aggregate services.","inputSchema":{"type":"object","properties":{"projectPath":{"type":"string"},"script":{"type":"string"},"after":{"type":"integer","minimum":0},"runId":{"type":"string"}},"required":["projectPath"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}},
+
         read("workspace_list", "List projects in the active workspace (legacy array result)"),
         read("workspace_get", "Read active folders, file, projects, dirty state and revision. Read this before mutations."),
         read("workspace_refresh", "Refresh runnable application discovery from source and return the active workspace; does not run Maven or start services"),
@@ -88,7 +92,39 @@ pub async fn handle(
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-            if name == "java_execute" {
+            if name == "node_execute" {
+                match serde_json::from_value::<devflow_core::runtime::node::NodeRequest>(arguments)
+                {
+                    Ok(request) => Ok(tool_result(
+                        call_core(state, move |e| e.node_execute(request)).await,
+                    )),
+                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
+            } else if matches!(name, "node_options" | "node_output") {
+                let output = name == "node_output";
+                match serde_json::from_value::<devflow_core::runtime::node::NodeQuery>(arguments) {
+                    Ok(query) => Ok(tool_result(
+                        call_core(state, move |e| {
+                            let project = e.workspace.node_runtime_project(
+                                &query.project_path,
+                                query.script.as_deref(),
+                                None,
+                            )?;
+                            if output {
+                                Ok(json!(e.node.output(
+                                    &project,
+                                    query.after,
+                                    query.run_id.as_deref()
+                                )?))
+                            } else {
+                                Ok(json!(devflow_core::runtime::node::options(&project)?))
+                            }
+                        })
+                        .await,
+                    )),
+                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
+            } else if name == "java_execute" {
                 match serde_json::from_value::<devflow_core::runtime::java::JavaRequest>(arguments)
                 {
                     Ok(request) => Ok(tool_result(
@@ -282,7 +318,7 @@ mod tests {
     fn workspace_tools_advertise_revision_and_required_paths() {
         let catalog = tools();
         let tools = catalog["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 18);
+        assert_eq!(tools.len(), 21);
         for name in [
             "workspace_open",
             "workspace_create",
@@ -292,6 +328,7 @@ mod tests {
             "workspace_close",
             "workspace_create_from_folder",
             "java_execute",
+            "node_execute",
         ] {
             let tool = tools.iter().find(|t| t["name"] == name).unwrap();
             assert!(

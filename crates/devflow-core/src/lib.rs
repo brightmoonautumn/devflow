@@ -9,7 +9,8 @@ pub struct DevFlowEngine {
     pub workspace: workspace::WorkspaceService,
     pub runtime: runtime::RuntimeService,
     pub java: runtime::java::JavaService,
-    java_operations: std::sync::Mutex<()>,
+    pub node: runtime::node::NodeService,
+    runtime_operations: std::sync::Mutex<()>,
 }
 
 impl DevFlowEngine {
@@ -21,7 +22,8 @@ impl DevFlowEngine {
             workspace: workspace::WorkspaceService::new(roots, initial)?,
             runtime: runtime::RuntimeService::default(),
             java: runtime::java::JavaService::default(),
-            java_operations: std::sync::Mutex::new(()),
+            node: runtime::node::NodeService::default(),
+            runtime_operations: std::sync::Mutex::new(()),
         })
     }
 
@@ -31,6 +33,11 @@ impl DevFlowEngine {
         let mut managed = Vec::new();
         for project in &workspace.projects {
             if matches!(project.kind, workspace::ProjectKind::Node) {
+                let output = self.node.output(project, u64::MAX, None)?;
+                if let Some((pid, started)) = self.node.managed_identity(project) {
+                    managed.push((project.runtime_key(), pid, started));
+                }
+                outputs.push((project.runtime_key(), output));
                 continue;
             }
             let output = self.java.output(project, u64::MAX, None)?;
@@ -47,11 +54,12 @@ impl DevFlowEngine {
             .runtime
             .snapshot_with_managed(&workspace.projects, &managed)?;
         for (path, output) in outputs {
-            if let Some(metrics) = snapshot
-                .projects
-                .iter_mut()
-                .find(|p| p.project_path == path)
-            {
+            if let Some(metrics) = snapshot.projects.iter_mut().find(|p| {
+                p.node_script.as_ref().map_or_else(
+                    || p.project_path.clone(),
+                    |s| format!("node:{}#{s}", p.project_path),
+                ) == path
+            }) {
                 if output.state != "external" {
                     metrics.managed_state = Some(output.state.clone());
                 }
@@ -66,7 +74,7 @@ impl DevFlowEngine {
     ) -> Result<runtime::java::JavaOutput, workspace::WorkspaceError> {
         use runtime::java::JavaOperation;
         let _operation = self
-            .java_operations
+            .runtime_operations
             .lock()
             .map_err(|_| workspace::WorkspaceError {
                 code: "unavailable",
@@ -112,6 +120,60 @@ impl DevFlowEngine {
             JavaOperation::Attach { pid } => {
                 let identity = target(pid)?;
                 self.java.attach(&project, identity)
+            }
+        };
+        self.runtime.invalidate();
+        result
+    }
+    pub fn node_execute(
+        &self,
+        request: runtime::node::NodeRequest,
+    ) -> Result<runtime::node::NodeOutput, workspace::WorkspaceError> {
+        let _operation = self
+            .runtime_operations
+            .lock()
+            .map_err(|_| workspace::WorkspaceError {
+                code: "unavailable",
+                message: "运行服务暂不可用".into(),
+            })?;
+        let project = self.workspace.node_runtime_project(
+            &request.project_path,
+            request.script.as_deref(),
+            Some(request.expected_revision),
+        )?;
+        self.runtime.invalidate();
+        let snapshot = self.runtime_snapshot()?;
+        let metrics = snapshot
+            .projects
+            .iter()
+            .find(|p| p.project_path == project.path && p.node_script == project.node_script);
+        let result = match request.operation {
+            runtime::node::NodeOperation::Start {
+                package_manager,
+                args,
+            } => {
+                if metrics.is_some_and(|m| !m.pids.is_empty()) {
+                    return Err(workspace::WorkspaceError {
+                        code: "conflict",
+                        message: "该服务已有运行进程，请先停止".into(),
+                    });
+                }
+                self.node
+                    .start(project, request.script, package_manager, args)
+            }
+            runtime::node::NodeOperation::Stop { pid } => {
+                let target = pid
+                    .map(|pid| {
+                        if !metrics.is_some_and(|m| m.node_pids.contains(&pid)) {
+                            return Err(workspace::WorkspaceError {
+                                code: "conflict",
+                                message: "进程不属于所选服务或已退出".into(),
+                            });
+                        }
+                        runtime::node::node_identity(pid)
+                    })
+                    .transpose()?;
+                self.node.stop(&project, target)
             }
         };
         self.runtime.invalidate();

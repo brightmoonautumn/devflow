@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Activity, Box, Circle, Coffee, FolderOpen, LoaderCircle, MoreHorizontal, Network, Play, PlugZap, RefreshCw, Search, Settings2, Terminal, X } from 'lucide-react'
-import type { Project, WorkspaceResponse } from '../../lib/api'
+import { projectKey, metricsKey, type Project, type WorkspaceResponse } from '../../lib/api'
 import TaskRows, { type TaskRow } from '../../components/beautiful-ui/task-rows'
 import { useRuntimeMetrics } from '../runtime/useRuntimeMetrics'
 import { ProjectMetrics } from '../runtime/ProjectMetrics'
@@ -49,23 +49,23 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
     })
   }, [runtime.snapshot, runtime.error, monitoringEnabled, pendingActions])
   async function changeProjectState(project: Project, type: 'start' | 'stop') {
-    if (submitting.current.has(project.path) || pendingActions[project.path]) return
-    submitting.current.add(project.path)
-    setPendingActions(current => ({ ...current, [project.path]: { type } }))
+    if (submitting.current.has(projectKey(project)) || pendingActions[projectKey(project)]) return
+    submitting.current.add(projectKey(project))
+    setPendingActions(current => ({ ...current, [projectKey(project)]: { type } }))
     try {
       await onAction(project, type === 'start' ? '启动项目' : '停止项目')
     } finally {
-      submitting.current.delete(project.path)
-      setPendingActions(current => ({ ...current, [project.path]: { type, settledAt: Date.now() } }))
+      submitting.current.delete(projectKey(project))
+      setPendingActions(current => ({ ...current, [projectKey(project)]: { type, settledAt: Date.now() } }))
     }
   }
-  const metricsByPath = new Map(runtime.snapshot?.projects.map(metrics => [metrics.projectPath, metrics]))
+  const metricsByPath = new Map(runtime.snapshot?.projects.map(metrics => [metricsKey(metrics), metrics]))
   const filtered = projects.filter(project => {
     const matchesKind = filter === 'all' || project.kind === filter || project.kind === 'maven_and_node'
     return matchesKind && `${project.name} ${project.path}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
   })
   const rows = filtered.map((project): TaskRow => {
-    const metrics = metricsByPath.get(project.path)
+    const metrics = metricsByPath.get(projectKey(project))
     const observed = !!metrics?.pids.length || metrics?.managedState === 'starting' || metrics?.managedState === 'running'
     const caption = !monitoringEnabled || runtime.error ? '运行指标暂不可用' : !metrics ? '正在读取运行状态…' : metrics.managedState === 'starting' ? '构建 / 启动中' : observed ? undefined : metrics.managedState === 'failed' ? '启动失败或异常退出' : '未检测到进程'
     const listeningPorts = metrics?.listeningPorts
@@ -76,7 +76,7 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
       : metrics?.managedState === 'starting' ? '等待监听' : '暂无监听端口'
     const showPorts = observed && monitoringEnabled && !runtime.error
     return {
-      key: project.path,
+      key: projectKey(project),
       label: project.name,
       amount: kindNames[project.kind],
       status: observed ? 'running' : metrics && monitoringEnabled && !runtime.error ? 'idle' : 'unknown',
@@ -99,28 +99,28 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
   })
   // Stable sorting keeps the workspace order within each runtime group.
   rows.sort((left, right) => Number(right.status === 'running') - Number(left.status === 'running'))
-  const projectsByPath = new Map(filtered.map(project => [project.path, project]))
+  const projectsByPath = new Map(filtered.map(project => [projectKey(project), project]))
   function renderProjectActions(row: TaskRow) {
     const project = projectsByPath.get(row.key)
     if (!project) return null
     const running = row.status === 'running'
-    const pending = pendingActions[project.path]
-    const starting = pending?.type === 'start' || metricsByPath.get(project.path)?.managedState === 'starting'
+    const pending = pendingActions[projectKey(project)]
+    const starting = pending?.type === 'start' || metricsByPath.get(projectKey(project))?.managedState === 'starting'
     const stopping = pending?.type === 'stop'
     const transitioning = starting || stopping
-    const ready = project.kind !== 'node' && monitoringEnabled && !runtime.error && metricsByPath.has(project.path)
+    const ready = monitoringEnabled && !runtime.error && metricsByPath.has(projectKey(project))
     const action = stopping ? '停止中…' : starting ? '启动中…' : ready ? running ? '停止' : '启动' : runtime.error || !monitoringEnabled ? '状态未知' : '读取中'
     const buttonTone = ready ? stopping || (running && !starting) ? 'is-stop' : 'is-start' : ''
-    const actionTitle = project.kind === 'node' ? '当前仅支持 Java 服务启停' : stopping ? '正在停止项目进程树' : starting ? pending ? '正在提交启动请求' : '构建 / 启动中，点击取消启动' : !ready ? '等待有效运行状态' : running ? '停止项目进程树' : '使用已保存配置或默认配置启动'
+    const actionTitle = stopping ? '正在停止项目进程树' : starting ? pending ? '正在提交启动请求' : '构建 / 启动中，点击取消启动' : !ready ? '等待有效运行状态' : running ? '停止项目进程树' : '使用已保存配置或默认配置启动'
     return (<div className="ws-row-actions">
-      <button className={`ws-launch ${transitioning ? 'is-pending' : ''} ${buttonTone}`} disabled={!ready || !!pending} aria-busy={transitioning} aria-label={`${project.name} ${project.kind === 'node' ? '暂未支持' : action}${starting && !pending ? '，点击取消启动' : ''}`} title={actionTitle} onClick={() => void changeProjectState(project, running || starting ? 'stop' : 'start')}>
+      <button className={`ws-launch ${transitioning ? 'is-pending' : ''} ${buttonTone}`} disabled={!ready || !!pending} aria-busy={transitioning} aria-label={`${project.name} ${action}${starting && !pending ? '，点击取消启动' : ''}`} title={actionTitle} onClick={() => void changeProjectState(project, running || starting ? 'stop' : 'start')}>
         {transitioning ? <LoaderCircle size={13} className="spinning" aria-hidden="true" /> : running ? <Circle size={10} fill="currentColor" aria-hidden="true" /> : <Play size={12} fill="currentColor" aria-hidden="true" />}
-        <span>{project.kind === 'node' ? '暂未支持' : action}</span>
+        <span>{action}</span>
       </button><div className="ws-menu-anchor">
-          <button className="ws-icon-button" aria-label={`${project.name} 更多操作`} title="更多操作" aria-expanded={menu === project.path} aria-controls={menu === project.path ? 'workspace-project-actions' : undefined} onClick={event => { menuTrigger.current = event.currentTarget; setMenu(menu === project.path ? null : project.path) }}><MoreHorizontal size={17} /></button>
-          {menu === project.path && <div id="workspace-project-actions" className="ws-menu" aria-label={`${project.name} 操作`} onKeyDown={event => { if (event.key === 'Escape') { setMenu(null); menuTrigger.current?.focus(); event.stopPropagation() } }}>
+          <button className="ws-icon-button" aria-label={`${project.name} 更多操作`} title="更多操作" aria-expanded={menu === projectKey(project)} aria-controls={menu === projectKey(project) ? 'workspace-project-actions' : undefined} onClick={event => { menuTrigger.current = event.currentTarget; setMenu(menu === projectKey(project) ? null : projectKey(project)) }}><MoreHorizontal size={17} /></button>
+          {menu === projectKey(project) && <div id="workspace-project-actions" className="ws-menu" aria-label={`${project.name} 操作`} onKeyDown={event => { if (event.key === 'Escape') { setMenu(null); menuTrigger.current?.focus(); event.stopPropagation() } }}>
             <button autoFocus onClick={() => { setMenu(null); onAction(project, '运行输出') }}><Terminal size={14} />查看运行输出</button>
-            {project.kind !== 'node' && <button onClick={() => { setMenu(null); onAction(project, '启动配置') }}><Settings2 size={14} />启动配置</button>}
+            <button onClick={() => { setMenu(null); onAction(project, '启动配置') }}><Settings2 size={14} />启动配置</button>
             {project.kind !== 'node' && <button onClick={() => { setMenu(null); onAction(project, 'JVM 诊断') }}><Activity size={14} />JVM 诊断</button>}
             {project.kind !== 'node' && <button disabled={!running || !ready} onClick={() => { setMenu(null); onAction(project, 'Arthas 挂载') }}><PlugZap size={14} />快速挂载 Arthas</button>}
           </div>}

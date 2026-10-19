@@ -4,7 +4,7 @@ import type { ProjectRuntime, RuntimeSnapshot } from '../../lib/api'
 export function ProjectMetrics({ metrics, history }: { metrics: ProjectRuntime; history: RuntimeSnapshot[] }) {
   const identity = metrics.pids.join(',')
   const samples = history.flatMap(snapshot => {
-    const sample = snapshot.projects.find(project => project.projectPath === metrics.projectPath)
+    const sample = snapshot.projects.find(project => project.projectPath === metrics.projectPath && project.nodeScript === metrics.nodeScript)
     return sample && sample.pids.join(',') === identity ? [sample] : []
   })
   const memory = samples.flatMap(sample => sample.memoryBytes == null ? [] : [sample.memoryBytes])

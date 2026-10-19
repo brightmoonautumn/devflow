@@ -23,15 +23,16 @@
 - 相对路径以工作区文件所在目录为基准解析；兼容绝对路径、中文、Windows 路径及文件夹显示名称。
 - 兼容 VS Code 工作区 JSONC 格式，包括注释和尾随逗号；保存时保留已有 `settings` 等未知配置字段。
 - 文件夹不存在或无法访问时明确显示异常，不静默忽略。
-- 工作区文件夹在左侧资源管理器中以树展示；展开时只读取当前目录的一层子文件夹和文件，支持折叠、刷新、键盘方向键及路径提示，不读取文件正文。窄屏默认收起，点击资源管理器图标后以侧栏覆盖显示。
-- 根文件夹支持右键、Shift+F10 和行末“文件夹操作”按钮，从工作区移除对应根引用；子目录不提供根移除动作。移除只改内存配置并标记未保存，保存后持久化，不删除磁盘目录、不停止进程。重复引用一并移除，失效或越界引用也可清理，仍校验工作区版本与身份。
+- 工作区文件夹在左侧资源管理器中以树展示；侧栏顶部直接显示工作区名称和未保存状态，名称采用 14px、600 字重与随明暗主题切换的强调色，字号与顶部 DevFlow 名称一致，高于下方 13px 文件夹名称，名称和未保存提示使用独立组件类名；全局标题仅做基础重置，不通过 `h2 span` 等标签组合设置辅助文字样式，不再显示“资源管理器”标题或重复的名称行，长名称省略并保留路径提示。展开时只读取当前目录的一层子文件夹和文件，支持折叠、刷新、键盘方向键及路径提示，不读取文件正文。窄屏默认收起，点击资源管理器图标后以侧栏覆盖显示。
+- 鼠标悬停在任意文件或文件夹行时，直接按 C 复制该条目的绝对路径，无须先点击；保留原始路径格式，不添加引号。文件或文件夹行在悬停或键盘聚焦时显示复制按钮，预留固定位置避免名称抖动；点击复制绝对路径，不触发行选择或展开。复制按钮、C 快捷键和菜单共用剪贴板逻辑，成功后对应行显示绿色勾和“路径已复制”提示，3 秒后恢复；失败在侧栏底部说明。输入框、可编辑区域、输入法组合输入、修饰键组合、按键长按重复及弹窗或树节点菜单打开时不触发；关闭侧栏、切换工作区或刷新目录树时清理监听及反馈。此操作仅将已有路径写入浏览器剪贴板，不新增核心引擎或 MCP 业务接口。
+- 所有文件和文件夹支持右键及 Shift+F10 打开菜单，提供“复制绝对路径”和“复制相对路径”；菜单标明所属根文件夹名称，相对路径使用 `/` 分隔，以所属根文件夹为基准，根自身为 `.`；不属于该根的路径禁用相对复制。菜单支持方向键、Home/End 和 Escape，复制后关闭并恢复焦点。根文件夹支持右键、Shift+F10 和行末“文件夹操作”按钮，从工作区移除对应根引用；子目录不提供根移除动作。移除只改内存配置并标记未保存，保存后持久化，不删除磁盘目录、不停止进程。重复引用一并移除，失效或越界引用也可清理，仍校验工作区版本与身份。
 - 左上角 Logo 使用复制到 `apps/web/src/assets/extreme-plus-logo.svg` 的本地 SVG；暗色主题自动切换透明底、浅灰与蓝色的 `extreme-plus-logo-dark.svg`，不加白色底块。目录树复用现有 Lucide 图标，按目录用途和文件类型使用鲜明配色：暗色主题提高图标亮度和饱和度，浅色主题使用更深的同色系；背景、文字及 Logo 保持原配色。
 - 对工作区中授权的工程按需识别 Maven 模块和 Node 工程，避免无界递归扫描。
 - 顶部工作区菜单负责新建、浏览打开、保存/另存为和关闭；新建时可选择起始文件夹，再选择 `.code-workspace` 的保存目录与名称，也可新建空工作区。资源树的添加入口只把已有文件夹加入当前工作区，不创建磁盘文件夹。
 - 目录选择器从授权位置逐层浏览，只读取一层目录及 `.code-workspace` 文件，不要求输入完整路径；支持返回上一级、回到本机位置、筛选和刷新。关闭工作区不停止进程、不删除文件；未保存更改仍要求先保存或明确放弃。
 - 资源树支持拖拽调宽、宽度记忆、左右方向键微调、Home/End 到边界、双击复位。桌面宽度 200–520px，并为服务区保留空间；窄屏最多 360px，并为手柄预留至少 28px 空间。去掉侧栏和项目菜单的全屏点击遮罩，侧栏位于服务内容之上；活动栏宽度与侧栏左边界一致。拖拽热区 12px，带可见握柄，使用 Pointer Capture 和 window 事件兼容嵌入式浏览器，结束、取消、失焦和卸载时均清理。目录节点使用 memo，拖拽调宽不重新渲染整棵树。
 - 服务搜索统一放在顶部导航栏，“全部 / Maven / Node.js”类型筛选与“服务”标题在首行左右对齐，不再显示 LOCAL 标记。对话框沿用 [Beautiful UI](https://www.beautifului.dev/) 的简洁边框、圆角与操作层级，并保留原生 dialog 的焦点约束和 Escape 关闭。
-- 服务页仅展示当前工作区的真实服务与采样指标，移除演示入口、示例项目和模拟趋势。卡片铺满服务区，按服务区实际可用宽度布局：达到 760px 时每行两张，否则每行一张，拖动侧栏也会自适应。默认展示名称、类型、运行状态与指标；项目目录、识别文件和启动入口收进下拉详情。点击卡片查看底部运行输出，仅点击箭头展开详情。Java 启动按钮为绿色实心三角，停止按钮为红色实心圆点，并保留文字；运行状态未知时禁用操作，Node.js 启停暂不开放。
+- 服务页仅展示当前工作区的真实服务与采样指标，移除演示入口、示例项目和模拟趋势。卡片铺满服务区，按服务区实际可用宽度布局：达到 760px 时每行两张，否则每行一张，拖动侧栏也会自适应。默认展示名称、类型、运行状态与指标；项目目录、识别文件和启动入口收进下拉详情。点击卡片查看底部运行输出，仅点击箭头展开详情。Java 启动按钮为绿色实心三角，停止按钮为红色实心圆点，并保留文字；运行状态未知时禁用操作，Node.js 服务同样支持一键启停、独立启动配置与运行输出。
 - 顶栏展示 DevFlow 后端自身的 CPU 和物理内存；仅采集当前服务 PID，不包括托管工程、Codex 或浏览器，CPU 按可用逻辑核心容量归一。首次 CPU 采样为 null，页面显示采样中；每 3 秒刷新，后台页面暂停轮询，请求超时 10 秒。核心独立采样器仅刷新自身 PID，缓存 2 秒，避免影响工程指标采样；关闭工作区后仍可查看。窄屏顶栏第二行同时容纳搜索与自身指标。
 - 指标区不重复显示 DevFlow 名称，图标与数值按占用分色：CPU 低于 30% 为绿色、30% 至低于 70% 为黄色、达到 70% 为红色；内存低于 256 MiB 为绿色、256 MiB 至低于 512 MiB 为黄色、达到 512 MiB 为红色。内存阈值为当前后端进程物理内存的绝对值，不表示整机内存压力；无采样时为灰色，悬停说明阈值，并提供文字状态供辅助技术读取。
 - JVM 诊断、运行输出等底部面板支持拖拽上边缘调整高度，保留高度偏好；支持上下方向键微调、Home/End 到边界、双击恢复默认高度。高度随容器空间约束，为上方服务列表保留空间；使用 Pointer Capture 和 window 事件，结束、取消、失焦或卸载时清理拖拽。JVM 诊断当前提供官方 Arthas 快速附加与独立 HTTP 控制台入口。
@@ -73,7 +74,7 @@ Node 验收目录当前没有 `package.json`，需定位其所属主工程的启
 
 - 已有基础项目发现、工作区页面，以及 HTTP/MCP 共用的只读进程指标服务。
 - 当前进程指标基于应用启动主类、执行 JAR 或 Node 入口脚本进行尽力观测，不代表 DevFlow 已托管该进程；未匹配到进程也不能证明服务已停止。Java classpath 中出现依赖模块不作为其运行依据，JVM 与 Node 工程分类型匹配；只聚合匹配入口的子进程。内存指标为进程物理内存，不是 JVM 堆。
-- 演示数据已移除。Java 操作使用真实共享运行服务，Node.js 暂时仅观测。
+- 演示数据已移除。Java 和 Node.js 操作均使用真实共享运行服务。
 - Java 检测到 PID 或处于托管构建阶段时显示“停止”，未检测到时显示“启动”；外部启动且关联到项目的 Java 应用也可以选择 PID 停止或附加，但无法追溯获取外部 stdout。
 - 服务发现本身不执行 Maven；实际启动会在目标模块执行 Maven `compile dependency:build-classpath`，使用本机 Maven 配置和仓库，随后直接启动识别出的主类。依赖尚未安装的多模块项目仍需按项目要求先构建/安装父工程及依赖；不自动安装整个仓库，不支持任意自定义构建命令、Gradle 或自定义 classes 输出目录。
 - UI 适配 400–550px 分屏，保持紧凑，支持项目列表搜索和类型筛选；未知状态不得显示为正在运行或已完成。
@@ -118,6 +119,9 @@ Node 验收目录当前没有 `package.json`，需定位其所属主工程的启
 | `POST /api/runtime/java` | `java_execute` | `projectPath`、`expectedRevision`、`operation`：Java 启动、停止或 Arthas 附加 |
 | `GET /api/runtime/java/options?projectPath=...` | `java_options` | Java 主类及资源目录中 `application-{profile}.yml/yaml/properties` 的 Profile 候选 |
 | `GET /api/runtime/java/output?projectPath=...&after=...&runId=...` | `java_output` | 托管状态、stdout/stderr/构建/Arthas 增量日志、退出码及 Arthas 地址 |
+| `POST /api/runtime/node` | `node_execute` | `projectPath`、聚合服务的 `script`、`expectedRevision` 和 `operation`：启动或停止 Node 服务 |
+| `GET /api/runtime/node/options?projectPath=...&script=...` | `node_options` | 服务的可用脚本与自动识别包管理器 |
+| `GET /api/runtime/node/output?projectPath=...&script=...&after=...&runId=...` | `node_output` | Node 状态、stdout/stderr 增量日志、PID 和退出码 |
 
 ### Java 使用约定
 
@@ -147,7 +151,26 @@ Node 验收目录当前没有 `package.json`，需定位其所属主工程的启
 
 兼容工具 `workspace_list` 继续返回项目数组的文本内容，新增 `workspace_get` 提供完整工作区快照。`runtime_list` 和 HTTP 指标接口改为跟随当前工作区的全部可访问项目。MCP 传输仍为实验性 JSON-RPC 基础，完整协议兼容待后续完善。
 
+### Node.js 使用约定
+
+- 聚合前端例如 `main-system/package.json` 的 `system: npm run serve --project=extreme-plus-system-ai`，显示为 `main-system / system`；`integration/file/notice/...` 各自有卡片、日志、配置和状态。同一服务禁止重复启动，不同脚本允许同时运行；服务共享根目录，操作身份使用 `projectPath + nodeScript`，不使用虚构文件路径。
+- 点击启动直接采用已保存配置或默认脚本；更多操作中的“启动配置”可选择允许的脚本、包管理器及每行一个附加参数，保存仅影响下次启动。Node 服务不展示 JVM/Arthas 操作。启动/停止沿用按钮中间态和公共表单组件，日志复用 `RuntimeConsole`。
+- 包管理器默认按 package.json 的 `packageManager`、pnpm-lock.yaml、yarn.lock、npm 顺序选择，可显式选择 npm/pnpm/yarn。Node 从 `DEVFLOW_NODE_HOME`、`NODE_HOME` 或 PATH 查找；包管理器优先使用 `DEVFLOW_NPM_CLI / DEVFLOW_PNPM_CLI / DEVFLOW_YARN_CLI` 指定的已安装 JS CLI，再查 Node/PATH 目录的安装入口、独立 exe、已安装 Corepack。Corepack 禁止网络下载和自动写入 packageManager，禁用 pnpm 的版本自动安装；不自动运行 install。缺少本机工具或依赖时保留实际失败日志。
+- 核心直接执行 Node + 包管理器 CLI（或已安装包管理器 exe），HTTP/MCP 不接受任意命令或可执行路径。包管理器按项目自身语义执行 package.json 中已授权脚本及 pre/post 钩子；附加参数以参数数组传递，npm 使用 `--` 分隔。启动前重新读取有界 package.json，已删除/不允许的脚本、越界路径、工作区版本过期均拒绝。
+- 状态 `running` 表示启动器已创建，不代表 Vite/业务健康检查通过；真实监听端口继续按服务 PID 归属显示。聚合工程的托管进程优先使用 PID + 启动时间记录；外部进程按包管理器启动脚本、精确 `--project` 选择器与进程树识别，证据不足时不任意分配给同目录的多个服务。`nodePids` 提供 Node 操作候选；停止仅作用于该服务进程树，并校验 PID 身份。
+- Java 和 Node 共享有界日志与进程清理实现：最多保留 2000 行、单行 16 KiB、每次 500 行；通过 runId/nextCursor 增量读取。正常关闭 DevFlow 会清理托管进程，强制杀死后端不能保证清理。
+- 默认后端仍绑定 `127.0.0.1:31080`；直接运行后端可用 `DEVFLOW_PORT` 指定另一回环端口，Host/Origin 校验同步跟随，用于不打断现有会话的隔离验收。Windows 双击启动器仍以 31080 作为固定健康检查端口。
+
 ## 开源复用与验证记录
+
+### Node.js 聚合服务验收（2026-10-19）
+
+- 用户明确授权自行验证后，`cargo fmt --all`、`cargo test --workspace`（47 项通过，2 项既有实机测试忽略）、`pnpm web:check`、`pnpm web:build` 通过；新版后端构建在 `target/node-runtime`，避免覆盖正在运行的旧实例。
+- 可重跑 `python scripts/verify-node-runtime.py --real-project`：隔离的中文/空格路径样例、HTTP/MCP 共用状态、13 个真实聚合别名识别、鉴权/版本/脚本白名单、并行服务 PID/端口隔离、增量/有界日志、失败退出、取消启动、系统进程退出检查及 npm/pnpm/yarn 参数传递共 36 项通过。pnpm/yarn 验收工具仅安装在忽略的 `.devflow/acceptance/node-tools`，不改项目依赖。
+- 真实 `D:\CompanyProject\main-system` 的 `file` 脚本通过 Vite 启动并返回 HTML，停止后所关联进程树在操作系统中全部退出，原有 8081 前端仍可访问。未重启原 31080 实例及其业务会话。
+- 浏览器实际验证了 Node 卡片直接启动、启动中状态、端口/日志显示、配置参数保存与下次启动生效、输出工具栏停止，以及 450px 分屏布局；截图位于 `.devflow/acceptance/node-runtime-ui.jpg`，真实聚合列表见 `.devflow/acceptance/node-main-system-ready.jpg`。隔离实例使用 31081，验收结果与真实 Vite 日志由 `.devflow/acceptance/node-latest.json` 索引。
+
+
 
 ### Java 运行链路验证（2026-10-19）
 
@@ -180,7 +203,7 @@ Node 验收目录当前没有 `package.json`，需定位其所属主工程的启
 - Maven 使用 [roxmltree](https://github.com/RazrFalcon/roxmltree) 解析 POM，通过声明的 `modules` 有界遍历。`packaging=pom` 只用于找到子模块；仅有 Spring Boot 依赖或插件不足以成为服务。
 - Java 入口复用 [Tree-sitter Java](https://github.com/tree-sitter/tree-sitter-java) 的语法树识别：应用类必须有真实 `public static void main(String[]/String... args)`，并有 Boot 应用注解或启动调用；也支持 POM 实际插件配置明确指定的普通 Java mainClass。排除注释、字符串中的假入口和 `src/test`，不读取依赖 JAR、target 或生成的 class 文件。
 - 此设计参考 [VS Code Spring Boot Dashboard 的主类解析](https://github.com/microsoft/vscode-spring-boot-dashboard/blob/main/src/BootApp.ts)。该扩展依赖 VS Code/JDTLS，不能直接嵌入本系统；这里复用开源解析器进行本地源码发现，不宣称具有 Java 编译器的完整类型解析能力。
-- Node 工程必须有非空 `dev`、`start` 或 `serve` 脚本；只有 build/test 脚本的库不进入列表。由主工程自定义脚本控制、没有独立 package.json 的子项目仍由主工程代表。
+- Node 工程识别非空 `dev`、`start`、`serve` 及其带冒号的变体，并有界追踪 npm/pnpm/yarn 对这些脚本的启动别名；build/test/lint/check/scan 等任务和循环别名不进入服务列表。聚合根工程存在启动别名时，每个别名作为独立 Node 服务展示，共用根 package.json 路径，以兼容新增的 `nodeScript` 区分身份；不要求子项目有独立 package.json，不扫描 node_modules，也不把它当作完整 npm workspace 图解析。
 - `mainClasses`、`launchScripts` 作为兼容的可选响应字段返回，项目详情显示识别依据。状态未知或新服务尚未采样时，操作按钮显示“状态未知/读取中”，不误显示“启动”。
 - 默认 Java 源目录为 `src/main/java`，支持本 POM 的 `build/sourceDirectory`；继承模块属性和解析默认激活 profile 的 modules，不解析任意 profile 条件、Gradle、Kotlin 或自定义构建生成入口。超出边界、无法解析或达到预算时返回 warnings，不执行构建猜测。
 - 每个导入目录的服务发现缓存 30 秒，页面手动刷新及 MCP `workspace_refresh` 立即重查。最多 512 个模块、32 层目录、50000 个源码目录项、20000 个文件及 64 MiB 总读取预算；单 POM/package.json 2 MiB，单 Java 源文件 512 KiB。

@@ -4,12 +4,12 @@
 
 Local-first development control center. **Rust + Tokio + Axum + React + TypeScript + MCP** in one repository.
 
-> This is a workspace-focused starter, not a finished IDE. Workspace management, Maven/Node discovery, metrics, managed Java launch/stop, live output and official Arthas attachment share one core engine across Web and MCP. Node launch/stop remains unimplemented. See [workspace documentation](docs/features/workspace.md).
+> This is a workspace-focused starter, not a finished IDE. Workspace management, Maven/Node discovery, metrics, managed Java/Node launch/stop, live output and official Arthas attachment share one core engine across Web and MCP. Aggregate frontend scripts are managed as independent services sharing their package root. See [workspace documentation](docs/features/workspace.md).
 
 ## Prerequisites
 - Rust stable toolchain (rustup; supports edition 2024)
 - Node.js 22+ and pnpm 11.25.0 (`corepack enable` or `npm i -g pnpm@11.25.0`)
-- JDK and Maven for future Spring Boot management; not required to run this starter
+- JDK and Maven for Java services; Node.js and the selected npm/pnpm/yarn installation for frontend services
 
 ## Quick start (two terminals)
 
@@ -71,7 +71,7 @@ codex mcp add devflow --url http://127.0.0.1:31080/mcp --bearer-token-env-var DE
 Set the same `DEVFLOW_API_TOKEN` in the backend and MCP client processes. `/mcp` exposes a minimal JSON-RPC subset (`initialize`, `ping`, `tools/list`, `tools/call`) with workspace read/open/create/add/save tools and read-only process metrics. Some MCP clients may require fuller session/notification support; upgrade to a maintained Rust MCP SDK before production. Do not expose the port to the public network. See the workspace documentation for tool arguments.
 
 ## Supported workspaces
-`DEVFLOW_WORKSPACE` accepts a directory or a VS Code `.code-workspace` file. Web and MCP support open/create/add-folder/save/save-as operations, JSONC comments and trailing commas, relative paths, display names, and local file URIs while retaining configuration fields. Remote URIs are unsupported. Runnable application discovery follows declared Maven modules and parses real Java entry points, excluding aggregators, libraries, and test sources; Node packages require dev/start/serve scripts. It does not run Maven, scan dependency archives, or provide complete effective-POM/npm-workspace resolution.
+`DEVFLOW_WORKSPACE` accepts a directory or a VS Code `.code-workspace` file. Web and MCP support open/create/add-folder/save/save-as operations, JSONC comments and trailing commas, relative paths, display names, and local file URIs while retaining configuration fields. Remote URIs are unsupported. Runnable application discovery follows declared Maven modules and parses real Java entry points, excluding aggregators, libraries, and test sources; Node packages expose dev/start/serve scripts and their launch aliases, including aggregate commands such as `system: npm run serve --project=...`. It does not run Maven, scan dependency archives, or provide complete effective-POM/npm-workspace resolution.
 
 ## Repository organization
 

@@ -202,12 +202,11 @@
 .workspace-shell .workbench { position: relative; }
 .workspace-sidebar { position: relative; z-index: 20; display: flex; flex-direction: column; flex: 0 0 var(--explorer-width, 260px); width: var(--explorer-width, 260px); min-height: 0; min-width: 0; background: var(--ws-surface); border-right: 1px solid var(--ws-border); }
 .ws-explorer-heading { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 10px 7px 7px 13px; }
-.ws-explorer-heading h2 { font-size: var(--ws-font-small); font-weight: 500; color: var(--ws-muted); white-space: nowrap; }
-.ws-explorer-heading > div { display: flex; }
+.ws-explorer-title { display: flex; flex: 1; align-items: center; gap: 7px; min-width: 0; font-size: var(--ws-font-title); line-height: 26px; font-weight: 600; color: var(--ws-accent); }
+.ws-explorer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: .2px; }
+.ws-explorer-unsaved { flex-shrink: 0; color: var(--ws-dim); font-size: var(--ws-font-small); font-weight: 400; }
+.ws-explorer-heading > div { display: flex; flex-shrink: 0; }
 .ws-explorer-heading .ws-icon-button { width: 25px; height: 26px; }
-.ws-tree-workspace { display: flex; align-items: center; gap: 7px; padding: 8px 12px; border-bottom: 1px solid var(--ws-subtle-border); color: var(--ws-ink); font-size: var(--ws-font-small); font-weight: 600; }
-.ws-tree-workspace > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-tree-workspace small { flex-shrink: 0; color: var(--ws-dim); font-size: var(--ws-font-small); font-weight: 400; }
 .ws-tree-scroll { flex: 1; overflow: auto; min-height: 0; padding: 6px 0 14px; }
 .ws-tree-scroll ul { list-style: none; padding: 0; margin: 0; }
 .ws-tree-scroll [role='treeitem'] { outline: none; cursor: pointer; }
@@ -236,6 +235,7 @@
 .ws-tree-empty { padding: 12px; font-size: var(--ws-font-small); color: var(--ws-muted); }
 .ws-tree-empty p { line-height: 1.8; }
 .ws-tree-footer { padding: 9px 12px; border-top: 1px solid var(--ws-subtle-border); font-size: var(--ws-font-caption); color: var(--ws-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-tree-footer.is-error { color: var(--ws-error); }
 @media (max-width: 719px) {
   .workspace-sidebar { position: absolute; left: 51px; top: 0; bottom: 0; width: min(var(--explorer-width, 260px), 360px, calc(100vw - 79px)); box-shadow: var(--ws-shadow); }
   .ws-explorer-heading { flex-wrap: wrap; }
@@ -346,11 +346,21 @@ body:has(.workspace-sidebar.is-resizing) * { cursor: col-resize !important; }
 .ws-tree-more { display: grid; place-items: center; flex-shrink: 0; width: 22px; height: 23px; padding: 0; border-radius: 4px; background: transparent; color: var(--ws-dim); opacity: 0; }
 .ws-tree-row:hover .ws-tree-more, [role='treeitem']:focus-within > .ws-tree-row .ws-tree-more { opacity: 1; }
 .ws-tree-more:hover { background: var(--ws-active); color: var(--ws-ink); }
+.ws-tree-copy { display: grid; place-items: center; flex-shrink: 0; width: 22px; height: 23px; padding: 0; border-radius: 4px; background: transparent; color: var(--ws-dim); opacity: 0; }
+.ws-tree-row:hover .ws-tree-copy, [role='treeitem']:focus > .ws-tree-row .ws-tree-copy, .ws-tree-row:focus-within .ws-tree-copy, .ws-tree-copy.is-copied { opacity: 1; }
+.ws-tree-copy:hover { background: var(--ws-active); color: var(--ws-ink); }
+.ws-tree-copy:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: -2px; }
+.ws-tree-copy.is-copied { color: var(--tree-green); }
+@media (hover: none) { .ws-tree-copy { opacity: 1; } }
 @media (hover: none), (max-width: 719px) { .ws-tree-more { opacity: 1; } }
 .ws-tree-context { position: fixed; z-index: 80; width: 242px; max-width: calc(100vw - 16px); padding: 6px; border: 1px solid var(--ws-border); border-radius: 9px; background: var(--ws-surface); color: var(--ws-ink); box-shadow: var(--ws-shadow); }
 .ws-context-name { display: block; padding: 5px 8px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ws-font-small); color: var(--ws-dim); }
 .ws-tree-context > button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 8px; border-radius: 5px; background: transparent; text-align: left; font-size: var(--ws-font-small); }
 .ws-tree-context > button:hover { background: var(--ws-hover); }
+.ws-tree-context > button > svg { flex-shrink: 0; }
+.ws-tree-context > button > span { min-width: 0; }
+.ws-context-relative { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ws-font-caption); color: var(--ws-dim); }
+.ws-tree-context > .ws-context-remove { margin-top: 4px; border-top: 1px solid var(--ws-subtle-border); border-radius: 0 0 5px 5px; }
 .ws-tree-context > small { display: block; border-top: 1px solid var(--ws-subtle-border); margin-top: 4px; padding: 8px; font-size: var(--ws-font-caption); color: var(--ws-dim); line-height: 1.6; }
 .ws-self-metrics { --metric-normal: #42d392; --metric-warning: #f5c842; --metric-high: #ff7878; display: flex; align-items: center; gap: 12px; flex-shrink: 0; color: var(--ws-muted); font-size: var(--ws-font-small); white-space: nowrap; }
 [data-theme='light'] .ws-self-metrics { --metric-normal: #10864b; --metric-warning: #936600; --metric-high: #cf3546; }

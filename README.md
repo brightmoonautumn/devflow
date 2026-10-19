@@ -4,7 +4,7 @@
 
 本地优先的开发工作台。采用 **Rust + Tokio + Axum + React + TypeScript + MCP** 技术栈，所有代码统一维护在一个仓库中。
 
-> **当前聚焦工作区，并非完整 IDE。** 已有工作区管理、Maven/Node 服务发现、进程指标、Java 启停和实时输出，以及官方 Arthas 附加。Web 与 MCP 共用核心引擎。Node.js 启停尚未接入，详见 [工作区文档](docs/features/workspace.md)。
+> **当前聚焦工作区，并非完整 IDE。** 已有工作区管理、Maven/Node 服务发现、进程指标、Java/Node.js 启停和实时输出，以及官方 Arthas 附加。Web 与 MCP 共用核心引擎。支持聚合前端按启动脚本分别管理，详见 [工作区文档](docs/features/workspace.md)。
 
 ## 环境要求
 
@@ -96,7 +96,7 @@ Web 开发代理仅用于浏览器 API 请求，Codex 则直接与 Axum 服务�
 
 `DEVFLOW_WORKSPACE` 可以指定目录或 VS Code `.code-workspace` 文件。支持页面及 MCP 打开、新建、添加文件夹、保存和另存为；兼容 JSONC 注释、尾随逗号、相对路径、显示名称和本地 file URI，保留配置字段。远程 URI 暂不支持。
 
-右侧只列出可启动应用：沿 Maven 声明的多层 modules 找到真实 Java 启动主类，排除聚合模块、普通依赖库和测试入口；Node 工程需有 dev/start/serve 启动脚本。发现不运行 Maven、不扫描依赖 JAR，不等价于完整 effective POM 或 npm/pnpm workspace 图解析。详细边界见工作区文档。
+右侧只列出可启动应用：沿 Maven 声明的多层 modules 找到真实 Java 启动主类，排除聚合模块、普通依赖库和测试入口；Node 工程识别 dev/start/serve 及关联启动别名，像 `system: npm run serve --project=...` 会作为独立服务展示。发现不运行 Maven、不扫描依赖 JAR，不等价于完整 effective POM 或 npm/pnpm workspace 图解析。详细边界见工作区文档。
 
 ## 仓库结构
 

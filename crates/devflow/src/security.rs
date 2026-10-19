@@ -10,10 +10,14 @@ use serde_json::json;
 use std::sync::Arc;
 
 fn local_host(value: &str) -> bool {
-    matches!(
-        value,
-        "127.0.0.1:31080" | "localhost:31080" | "127.0.0.1:5173" | "localhost:5173"
-    )
+    let port = std::env::var("DEVFLOW_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .filter(|p| *p > 0)
+        .unwrap_or(31080);
+    value == format!("127.0.0.1:{port}")
+        || value == format!("localhost:{port}")
+        || matches!(value, "127.0.0.1:5173" | "localhost:5173")
 }
 pub fn authenticated(headers: &HeaderMap, state: &AppState) -> bool {
     headers

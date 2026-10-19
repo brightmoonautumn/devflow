@@ -9,6 +9,7 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; }
+:where(h1, h2, h3, h4, h5, h6) { margin: 0; font: inherit; color: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
 button { font: inherit; cursor: pointer; color: inherit; border: 0; }
 button:disabled { opacity: .5; cursor: wait; }
@@ -33,7 +34,6 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .editor-area { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .main-content { flex: 1; overflow: auto; min-height: 0; padding: 0 28px; }
 .workspace-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 29px; }
-h1 { font-size: 22px; font-weight: 550; letter-spacing: -.6px; margin: 0; color: #e4e9f1; }
 .workspace-heading p { font-size: 11px; color: var(--muted); line-height: 1.7; margin: 8px 0 0; }
 .icon-button { width: 28px; height: 28px; flex-shrink: 0; display: grid; place-items: center; background: none; color: #939daf; border-radius: 4px; }
 .icon-button:hover { background: #292e39; color: #dae3f5; }
@@ -41,8 +41,6 @@ h1 { font-size: 22px; font-weight: 550; letter-spacing: -.6px; margin: 0; color:
 .workspace-path svg { flex-shrink: 0; }
 .workspace-path span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-toolbar { display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-h2 { margin: 0; font-size: 11px; font-weight: 500; color: #b1bac9; }
-h2 span { margin-left: 7px; color: #778395; font-size: 10px; }
 .text-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: #8e9db5; padding: 5px 0; font-size: 10px; background: none; }
 .text-button:hover, .text-button.selected { color: #bed2f6; }
 .project { display: flex; align-items: flex-start; gap: 12px; padding: 20px 0; border-bottom: 1px solid #232832; }
@@ -93,5 +91,5 @@ h2 span { margin-left: 7px; color: #778395; font-size: 10px; }
 .spinning { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (min-width: 900px) { .main-content { padding: 0 clamp(28px, 5vw, 72px); } .workspace-heading { margin-top: 38px; } .project { padding: 24px 0; } }
-@media (max-width: 550px) { .topbar { gap: 10px; padding: 0 11px; } .workspace-switch span { max-width: 145px; } .local-label { font-size: 8px; } .main-content { padding: 0 17px; } .activity-bar { width: 42px; } .activity-button { width: 41px; } .workspace-heading { margin-top: 24px; } h1 { font-size: 20px; } .project { gap: 9px; } .project-icon { width: 27px; height: 29px; } .project-actions { gap: 0; } .run-button { padding: 0 6px; gap: 4px; } .project-info small { max-width: 160px; } .statusbar { gap: 10px; } }
+@media (max-width: 550px) { .topbar { gap: 10px; padding: 0 11px; } .workspace-switch span { max-width: 145px; } .local-label { font-size: 8px; } .main-content { padding: 0 17px; } .activity-bar { width: 42px; } .activity-button { width: 41px; } .workspace-heading { margin-top: 24px; } .project { gap: 9px; } .project-icon { width: 27px; height: 29px; } .project-actions { gap: 0; } .run-button { padding: 0 6px; gap: 4px; } .project-info small { max-width: 160px; } .statusbar { gap: 10px; } }
 @media (prefers-reduced-motion: reduce) { .spinning { animation: none; } }

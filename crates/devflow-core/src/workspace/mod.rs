@@ -4,6 +4,7 @@ use std::path::Path;
 mod service;
 pub use service::*;
 mod discovery;
+pub(crate) use discovery::node_launch_scripts;
 pub(crate) use discovery::{Discovery, discover_services};
 
 #[derive(Debug, Clone, Serialize)]
@@ -17,6 +18,19 @@ pub struct DetectedProject {
     pub main_classes: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub launch_scripts: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_script: Option<String>,
+    #[serde(skip)]
+    pub(crate) node_selector: Option<String>,
+}
+
+impl DetectedProject {
+    pub fn runtime_key(&self) -> String {
+        match &self.node_script {
+            Some(script) => format!("node:{}#{script}", self.path),
+            None => self.path.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

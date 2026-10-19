@@ -131,3 +131,44 @@ pub async fn java_output(
         .await,
     )
 }
+
+pub async fn node_execute(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<devflow_core::runtime::node::NodeRequest>,
+) -> ApiResult {
+    response(call_core(state, move |engine| engine.node_execute(request)).await)
+}
+pub async fn node_options(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<devflow_core::runtime::node::NodeQuery>,
+) -> ApiResult {
+    response(
+        call_core(state, move |engine| {
+            let project = engine.workspace.node_runtime_project(
+                &query.project_path,
+                query.script.as_deref(),
+                None,
+            )?;
+            devflow_core::runtime::node::options(&project)
+        })
+        .await,
+    )
+}
+pub async fn node_output(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<devflow_core::runtime::node::NodeQuery>,
+) -> ApiResult {
+    response(
+        call_core(state, move |engine| {
+            let project = engine.workspace.node_runtime_project(
+                &query.project_path,
+                query.script.as_deref(),
+                None,
+            )?;
+            engine
+                .node
+                .output(&project, query.after, query.run_id.as_deref())
+        })
+        .await,
+    )
+}

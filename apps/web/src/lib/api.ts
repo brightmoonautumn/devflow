@@ -5,7 +5,10 @@ export interface Project {
   markers: string[]
   mainClasses?: string[]
   launchScripts?: string[]
+  nodeScript?: string
 }
+export function projectKey(project: Pick<Project, 'path' | 'nodeScript'>) { return project.nodeScript ? `node:${project.path}#${project.nodeScript}` : project.path }
+export function metricsKey(metrics: Pick<ProjectRuntime, 'projectPath' | 'nodeScript'>) { return projectKey({ path: metrics.projectPath, nodeScript: metrics.nodeScript }) }
 export interface WorkspaceResponse {
   workspaceRoot: string | null
   workspaceFile: string | null
@@ -68,6 +71,8 @@ export function executeWorkspace(operation: WorkspaceOperation, expectedRevision
 }
 
 export interface ProjectRuntime {
+  nodeScript?: string
+  nodePids?: number[]
   javaPids?: number[]
   listeningPorts?: number[] | null
   portError?: string | null
@@ -104,3 +109,11 @@ export type JavaOperation = { type: 'start'; jvmArgs: string[]; args: string[]; 
 export function getJavaOptions(projectPath: string, signal?: AbortSignal) { return request<JavaOptions>(`/api/runtime/java/options?${new URLSearchParams({ projectPath })}`, { signal }) }
 export function getJavaOutput(projectPath: string, after: number, runId: string, signal: AbortSignal) { return request<JavaOutput>(`/api/runtime/java/output?${new URLSearchParams({ projectPath, after: String(after), runId })}`, { signal }) }
 export function executeJava(projectPath: string, expectedRevision: number, operation: JavaOperation) { return request<JavaOutput>('/api/runtime/java', { method: 'POST', body: JSON.stringify({ projectPath, expectedRevision, operation }) }) }
+
+export type PackageManager = 'npm' | 'pnpm' | 'yarn'
+export interface NodeOptions { scripts: string[]; packageManager: PackageManager }
+export type NodeOperation = { type: 'start'; packageManager?: PackageManager; args: string[] } | { type: 'stop'; pid?: number }
+function nodeParams(project: Project) { return { projectPath: project.path, ...(project.nodeScript ? { script: project.nodeScript } : {}) } }
+export function getNodeOptions(project: Project, signal?: AbortSignal) { return request<NodeOptions>(`/api/runtime/node/options?${new URLSearchParams(nodeParams(project))}`, { signal }) }
+export function getNodeOutput(project: Project, after: number, runId: string, signal: AbortSignal) { return request<JavaOutput>(`/api/runtime/node/output?${new URLSearchParams({ ...nodeParams(project), after: String(after), runId })}`, { signal }) }
+export function executeNode(project: Project, expectedRevision: number, operation: NodeOperation, script?: string) { return request<JavaOutput>('/api/runtime/node', { method: 'POST', body: JSON.stringify({ ...nodeParams(project), ...(script ? { script } : {}), expectedRevision, operation }) }) }

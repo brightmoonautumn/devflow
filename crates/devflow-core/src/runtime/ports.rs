@@ -49,9 +49,7 @@ pub(super) fn listeners() -> io::Result<Listeners> {
     let stdout = child.stdout.take().expect("piped stdout");
     let read = thread::spawn(move || {
         let mut bytes = Vec::new();
-        stdout
-            .take(4 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)?;
+        stdout.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
         if bytes.len() > 4 * 1024 * 1024 {
             return Err(io::Error::other("netstat 输出超过 4 MiB 限制"));
         }
@@ -82,8 +80,8 @@ pub(super) fn listeners() -> io::Result<Listeners> {
         .join()
         .map_err(|_| io::Error::other("netstat 输出读取线程异常"))?;
     status?;
-    let bytes = bytes
-        .map_err(|err| io::Error::new(err.kind(), format!("无法读取 netstat 输出：{err}")))?;
+    let bytes =
+        bytes.map_err(|err| io::Error::new(err.kind(), format!("无法读取 netstat 输出：{err}")))?;
     Ok(parse_windows_listeners(&String::from_utf8_lossy(&bytes)))
 }
 

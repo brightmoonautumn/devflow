@@ -125,7 +125,7 @@ impl Scanner {
             if !scripts.is_empty() {
                 markers.push("package.json".into());
             }
-            self.result.projects.push(DetectedProject {
+            let project = DetectedProject {
                 name: path
                     .file_name()
                     .unwrap_or(path.as_os_str())
@@ -136,7 +136,62 @@ impl Scanner {
                 markers,
                 main_classes,
                 launch_scripts: scripts,
-            });
+                node_script: None,
+                node_selector: None,
+            };
+            let aliases: Vec<_> = project
+                .launch_scripts
+                .iter()
+                .filter(|s| !["dev", "start", "serve"].contains(&s.as_str()))
+                .cloned()
+                .collect();
+            if aliases.is_empty() && project.main_classes.is_empty()
+                || project.launch_scripts.is_empty()
+            {
+                self.result.projects.push(project);
+            } else {
+                let aliases = if aliases.is_empty() {
+                    project.launch_scripts.clone()
+                } else {
+                    aliases
+                };
+                if !project.main_classes.is_empty() {
+                    let mut java = project.clone();
+                    java.kind = ProjectKind::Maven;
+                    java.launch_scripts.clear();
+                    java.markers.retain(|m| m != "package.json");
+                    self.result.projects.push(java);
+                }
+                let manifest = self
+                    .read(&path.join("package.json"), 2 * 1024 * 1024)
+                    .ok()
+                    .and_then(|text| {
+                        serde_json::from_str::<serde_json::Value>(
+                            text.trim_start_matches('\u{feff}'),
+                        )
+                        .ok()
+                    });
+                for script in aliases {
+                    let mut service = project.clone();
+                    service.name = format!("{} / {script}", project.name);
+                    service.kind = ProjectKind::Node;
+                    service.main_classes.clear();
+                    service.markers = vec!["package.json".into()];
+                    service.launch_scripts = vec![script.clone()];
+                    service.node_selector = manifest
+                        .as_ref()
+                        .and_then(|value| value.get("scripts")?.get(&script)?.as_str())
+                        .and_then(|command| {
+                            command.split_whitespace().find_map(|arg| {
+                                arg.strip_prefix("--project=")
+                                    .filter(|s| !s.is_empty())
+                                    .map(str::to_owned)
+                            })
+                        });
+                    service.node_script = Some(script);
+                    self.result.projects.push(service);
+                }
+            }
         }
         for module in module_paths {
             self.candidate(&module, &properties);
@@ -313,18 +368,76 @@ impl Scanner {
         let text = self.read(&path.join("package.json"), 2 * 1024 * 1024)?;
         let value: serde_json::Value =
             serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(io::Error::other)?;
-        Ok(["dev", "start", "serve"]
-            .into_iter()
-            .filter(|key| {
-                value
-                    .get("scripts")
-                    .and_then(|s| s.get(*key))
-                    .and_then(|s| s.as_str())
-                    .is_some_and(|s| !s.trim().is_empty())
-            })
-            .map(str::to_owned)
-            .collect())
+        Ok(node_launch_scripts(&value))
     }
+}
+
+pub(crate) fn node_launch_scripts(value: &serde_json::Value) -> Vec<String> {
+    fn launch(
+        name: &str,
+        scripts: &serde_json::Map<String, serde_json::Value>,
+        visited: &mut HashSet<String>,
+    ) -> bool {
+        if name.is_empty()
+            || name.len() > 128
+            || name.starts_with('-')
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.:@".contains(c))
+            || visited.len() >= 16
+            || !visited.insert(name.into())
+        {
+            return false;
+        }
+        let Some(command) = scripts
+            .get(name)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        else {
+            return false;
+        };
+        if ["dev", "start", "serve"].contains(&name)
+            || ["dev:", "start:", "serve:"]
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+        {
+            return true;
+        }
+        if [
+            "build", "test", "lint", "check", "scan", "report", "format", "install", "prepare",
+            "pre", "post",
+        ]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+        {
+            return false;
+        }
+        let parts: Vec<_> = command.split_whitespace().collect();
+        let target = match parts.as_slice() {
+            ["npm", "run" | "run-script", target, ..] => Some(*target),
+            ["pnpm" | "yarn", "run", target, ..] => Some(*target),
+            ["pnpm" | "yarn", target, ..] if !target.starts_with('-') => Some(*target),
+            _ => None,
+        };
+        target.is_some_and(|target| launch(target, scripts, visited))
+    }
+    let Some(scripts) = value.get("scripts").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    let mut result: Vec<_> = scripts
+        .keys()
+        .filter(|name| launch(name, scripts, &mut HashSet::new()))
+        .cloned()
+        .collect();
+    result.sort_by_key(|name| match name.as_str() {
+        "dev" => (0, name.clone()),
+        "start" => (1, name.clone()),
+        "serve" => (2, name.clone()),
+        _ => (3, name.clone()),
+    });
+    result.truncate(128);
+    result
 }
 pub(crate) fn discover_services(root: &Path) -> io::Result<Discovery> {
     let root = root.canonicalize()?;
@@ -732,5 +845,62 @@ mod tests {
             );
             println!("{}: {}", project.name, project.main_classes.join(", "));
         }
+    }
+
+    #[test]
+    fn aggregate_node_scripts_are_distinct_services() {
+        let fixture = Fixture::new();
+        fixture.write("package.json",r#"{"scripts":{"serve":"vite","system":"npm run serve --project=extreme-system","file":"pnpm run serve --project=extreme-file","admin":"yarn serve --project=admin","loop":"npm run loop","build":"vite build","test":"npm run serve","check":"npm run serve","empty":""}}"#);
+        let result = discover_services(&fixture.0).unwrap();
+        assert_eq!(result.projects.len(), 3);
+        let scripts: Vec<_> = result
+            .projects
+            .iter()
+            .map(|p| p.node_script.as_deref().unwrap())
+            .collect();
+        assert_eq!(scripts, vec!["admin", "file", "system"]);
+        let keys: HashSet<_> = result.projects.iter().map(|p| p.runtime_key()).collect();
+        assert_eq!(keys.len(), 3);
+        let mut alias = result.projects[0].clone();
+        alias.path = "D:/项目 空格".into();
+        alias.node_script = Some("system".into());
+        let mut literal = alias.clone();
+        literal.path = "D:/项目 空格#node:system".into();
+        literal.node_script = None;
+        assert_ne!(alias.runtime_key(), literal.runtime_key());
+        assert!(
+            result
+                .projects
+                .iter()
+                .all(|p| p.path == display_path(&fixture.0.canonicalize().unwrap()))
+        );
+    }
+
+    #[test]
+    fn mixed_java_node_root_keeps_independent_runtime_identities() {
+        let fixture = Fixture::new();
+        fixture.write("pom.xml", "<project/>");
+        fixture.write("src/main/java/Application.java", BOOT);
+        fixture.write(
+            "package.json",
+            r#"{"scripts":{"dev":"vite","start":"vite --host"}}"#,
+        );
+        let result = discover_services(&fixture.0).unwrap();
+        assert_eq!(result.projects.len(), 3);
+        assert!(
+            result
+                .projects
+                .iter()
+                .any(|p| matches!(p.kind, ProjectKind::Maven) && p.launch_scripts.is_empty())
+        );
+        assert_eq!(
+            result
+                .projects
+                .iter()
+                .map(|p| p.runtime_key())
+                .collect::<HashSet<_>>()
+                .len(),
+            3
+        );
     }
 }

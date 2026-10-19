@@ -1,6 +1,8 @@
 //! Process observations and managed Java execution shared by HTTP and MCP.
 pub mod java;
+pub mod node;
 mod ports;
+mod process;
 use crate::workspace::{DetectedProject, ProjectKind, detect_projects};
 use serde::Serialize;
 use std::{
@@ -16,6 +18,9 @@ use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 #[serde(rename_all = "camelCase")]
 pub struct ProjectRuntime {
     pub project_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_script: Option<String>,
+    pub node_pids: Vec<u32>,
     pub pids: Vec<u32>,
     pub java_pids: Vec<u32>,
     pub listening_ports: Option<Vec<u16>>,
@@ -47,6 +52,8 @@ struct Observation {
 }
 struct RuntimeProject {
     path: String,
+    node_script: Option<String>,
+    node_selector: Option<String>,
     root: String,
     java: bool,
     node: bool,
@@ -187,6 +194,8 @@ impl RuntimeService {
                     .ok()
                     .map(|path| RuntimeProject {
                         path: project.path.clone(),
+                        node_script: project.node_script.clone(),
+                        node_selector: project.node_selector.clone(),
                         root: normalize_path(&path.to_string_lossy()),
                         java: matches!(
                             project.kind,
@@ -199,10 +208,17 @@ impl RuntimeService {
             .collect();
         let mut cache_key: Vec<String> = projects
             .iter()
-            .map(|p| format!("{}|{}|{}|{:?}", p.path, p.java, p.node, p.main_classes))
+            .map(|p| {
+                format!(
+                    "{}|{:?}|{:?}|{}|{}|{:?}",
+                    p.path, p.node_script, p.node_selector, p.java, p.node, p.main_classes
+                )
+            })
             .collect();
         cache_key.extend(
-            managed.iter().map(|(path, pid, started)| format!("managed:{path}:{pid}:{started}")),
+            managed
+                .iter()
+                .map(|(path, pid, started)| format!("managed:{path}:{pid}:{started}")),
         );
         let mut sampler = self
             .projects
@@ -338,6 +354,38 @@ fn launch_path(target: &str, cwd: Option<&str>) -> Option<String> {
     Some(normalize_path(&clean.to_string_lossy()))
 }
 fn node_matches(process: &Observation, project: &RuntimeProject) -> bool {
+    if let Some(script) = &project.node_script {
+        let cwd_matches = process
+            .cwd
+            .as_deref()
+            .is_some_and(|cwd| normalize_path(cwd) == project.root);
+        let cli = process.args.iter().any(|arg| {
+            [
+                "npm-cli.js",
+                "pnpm.cjs",
+                "pnpm.mjs",
+                "pnpm.js",
+                "yarn.js",
+                "yarn.cjs",
+            ]
+            .contains(&normalize_path(arg).rsplit('/').next().unwrap_or(""))
+        });
+        return cwd_matches
+            && cli
+            && (process.args.windows(2).any(|args| {
+                ["run", "run-script"].contains(&args[0].as_str()) && &args[1] == script
+            }) || process.args.last() == Some(script)
+                || project.node_selector.as_ref().is_some_and(|selector| {
+                    process
+                        .args
+                        .iter()
+                        .any(|arg| arg == &format!("--project={selector}"))
+                        || process
+                            .args
+                            .windows(2)
+                            .any(|args| args[0] == "--project" && &args[1] == selector)
+                }));
+    }
     let mut index = 0;
     if process.args.first().is_some_and(|s| {
         ["node", "node.exe"].contains(&normalize_path(s).rsplit('/').next().unwrap_or(""))
@@ -460,8 +508,17 @@ fn aggregate_with_managed(
     let by_pid: HashMap<u32, &Observation> = processes.iter().map(|p| (p.pid, p)).collect();
     let mut owners: HashMap<u32, usize> = HashMap::new();
     for (path, pid, started) in managed {
-        if by_pid.get(pid).is_some_and(|process| process.started == *started) {
-            if let Some(index) = projects.iter().position(|project| &project.path == path) {
+        if by_pid
+            .get(pid)
+            .is_some_and(|process| process.started == *started)
+        {
+            if let Some(index) = projects.iter().position(|project| {
+                let key = project.node_script.as_ref().map_or_else(
+                    || project.path.clone(),
+                    |script| format!("node:{}#{script}", project.path),
+                );
+                &key == path
+            }) {
                 owners.insert(*pid, index);
             }
         }
@@ -573,6 +630,15 @@ fn aggregate_with_managed(
             });
             ProjectRuntime {
                 project_path: project.path.clone(),
+                node_script: project.node_script.clone(),
+                node_pids: members
+                    .iter()
+                    .filter(|p| {
+                        ["node", "node.exe", "pnpm", "pnpm.exe"]
+                            .contains(&p.name.to_ascii_lowercase().as_str())
+                    })
+                    .map(|p| p.pid)
+                    .collect(),
                 managed_state: None,
                 listening_ports: None,
                 port_error: None,
@@ -619,7 +685,12 @@ mod tests {
     #[test]
     fn external_listeners_follow_project_identity_not_parent_editor_or_port_number() {
         let projects = vec![project("app", "d:/code/中文 服务")];
-        let external = process(10, Some(900), "java.exe", r"d:\code\中文 服务\target\server.jar");
+        let external = process(
+            10,
+            Some(900),
+            "java.exe",
+            r"d:\code\中文 服务\target\server.jar",
+        );
         let worker = process(11, Some(10), "worker.exe", "");
         let unrelated = process(12, None, "java.exe", "d:/other/server.jar");
         let mut metrics = aggregate(&projects, &[external, worker, unrelated], 20, 1);
@@ -642,7 +713,10 @@ mod tests {
     fn listener_failure_is_distinct_from_no_listeners_and_recovers() {
         let projects = vec![project("app", "d:/code/app")];
         let mut metrics = aggregate(&projects, &[], 20, 1);
-        apply_listeners(&mut metrics, Err(io::Error::new(io::ErrorKind::TimedOut, "采集超时")));
+        apply_listeners(
+            &mut metrics,
+            Err(io::Error::new(io::ErrorKind::TimedOut, "采集超时")),
+        );
         assert_eq!(metrics[0].listening_ports, None);
         assert_eq!(metrics[0].port_error.as_deref(), Some("采集超时"));
         let json = serde_json::to_value(&metrics[0]).unwrap();
@@ -663,15 +737,22 @@ mod tests {
         let processes = vec![java, child];
         let managed = vec![("app".into(), 10, 10)];
         let mut metrics = aggregate_with_managed(&projects, &processes, 20, 1, &managed);
-        apply_listeners(&mut metrics, Ok(ports::parse_windows_listeners(
-            "TCP 0.0.0.0:18080 0.0.0.0:0 LISTENING 10\n\
+        apply_listeners(
+            &mut metrics,
+            Ok(ports::parse_windows_listeners(
+                "TCP 0.0.0.0:18080 0.0.0.0:0 LISTENING 10\n\
              TCP 127.0.0.1:15005 0.0.0.0:0 LISTENING 11",
-        )));
+            )),
+        );
         assert_eq!(metrics[0].pids, vec![10, 11]);
         assert_eq!(metrics[0].memory_bytes, Some(2048));
         assert_eq!(metrics[0].listening_ports, Some(vec![15005, 18080]));
         let stale = vec![("app".into(), 10, 9)];
-        assert!(aggregate_with_managed(&projects, &processes, 20, 1, &stale)[0].pids.is_empty());
+        assert!(
+            aggregate_with_managed(&projects, &processes, 20, 1, &stale)[0]
+                .pids
+                .is_empty()
+        );
     }
 
     #[test]
@@ -690,7 +771,8 @@ mod tests {
         assert_eq!(resolved[0].pids, vec![10]);
         assert!(resolved[1].pids.is_empty());
         java.cwd = Some("d:/".into());
-        java.args.insert(1, "--class-path=second-longer/target/classes".into());
+        java.args
+            .insert(1, "--class-path=second-longer/target/classes".into());
         let resolved = aggregate(&projects, &[java.clone()], 20, 1);
         assert!(resolved[0].pids.is_empty());
         assert_eq!(resolved[1].pids, vec![10]);
@@ -698,7 +780,11 @@ mod tests {
             "--class-path=first/target/classes{}second-longer/target/classes",
             if cfg!(windows) { ';' } else { ':' },
         );
-        assert!(aggregate(&projects, &[java], 20, 1).iter().all(|project| project.pids.is_empty()));
+        assert!(
+            aggregate(&projects, &[java], 20, 1)
+                .iter()
+                .all(|project| project.pids.is_empty())
+        );
     }
 
     #[test]
@@ -735,6 +821,8 @@ mod tests {
     fn project(name: &str, root: &str) -> RuntimeProject {
         RuntimeProject {
             path: name.into(),
+            node_script: None,
+            node_selector: None,
             root: root.into(),
             java: true,
             node: true,
@@ -892,5 +980,54 @@ mod tests {
             aggregate(&[app], &[tool, server, worker], 20, 1)[0].pids,
             vec![2, 3]
         );
+    }
+    #[test]
+    fn aggregate_node_services_use_exact_script_or_project_selector() {
+        let mut a = project("root", "d:/code/中文 space");
+        a.java = false;
+        a.node_script = Some("system".into());
+        a.node_selector = Some("extreme-system".into());
+        let mut b = project("root", "d:/code/中文 space");
+        b.java = false;
+        b.node_script = Some("file".into());
+        b.node_selector = Some("extreme-file".into());
+        let mut first = process(1, None, "node.exe", "");
+        first.cwd = Some("d:/code/中文 space".into());
+        first.args = vec![
+            "node.exe".into(),
+            "d:/tools/node_modules/npm/bin/npm-cli.js".into(),
+            "run".into(),
+            "serve".into(),
+            "--project=extreme-system".into(),
+        ];
+        let child = process(
+            2,
+            Some(1),
+            "node.exe",
+            "d:/code/中文 space/node_modules/vite/bin/vite.js",
+        );
+        let mut second = first.clone();
+        second.pid = 3;
+        second.args = vec![
+            "node.exe".into(),
+            "d:/tools/node_modules/npm/bin/npm-cli.js".into(),
+            "run".into(),
+            "file".into(),
+        ];
+        let child2 = process(4, Some(3), "esbuild.exe", "");
+        let mut unrelated = first.clone();
+        unrelated.pid = 5;
+        unrelated.args = vec![
+            "node.exe".into(),
+            "d:/tools/node_modules/npm/bin/npm-cli.js".into(),
+            "run".into(),
+            "serve".into(),
+            "--project=extreme-system-copy".into(),
+        ];
+        let metrics = aggregate(&[a, b], &[first, child, second, child2, unrelated], 20, 2);
+        assert_eq!(metrics[0].pids, vec![1, 2]);
+        assert_eq!(metrics[1].pids, vec![3, 4]);
+        assert_eq!(metrics[0].node_script.as_deref(), Some("system"));
+        assert_eq!(metrics[0].node_pids, vec![1, 2]);
     }
 }
