@@ -2,6 +2,73 @@ use super::*;
 use operations::{Mutation, Selection};
 
 #[test]
+#[ignore = "requires Git; uses only UUID-scoped temporary repositories"]
+fn repository_catalog_is_lazy_and_cached_status_never_bypasses_fresh_diff_validation() {
+    let fixture = Fixture::new(); let root = fixture.init("缓存 中文");
+    let service = fixture.service(&root); let revision = service.snapshot().unwrap().revision;
+    let catalog = service.git_repositories(GitStatusRequest { expected_revision: revision, force: false }, true).unwrap();
+    assert_eq!(catalog.repositories.len(), 1);
+    assert!(catalog.repositories[0].version.is_empty());
+    assert!(!catalog.refreshing);
+    fs::write(root.join("a.txt"), "changed a\n").unwrap();
+    let status = service.git_status(GitStatusRequest { expected_revision: revision, force: true }, true).unwrap();
+    assert!(!status.refreshing);
+    let repo = &status.repositories[0]; assert!(!repo.version.is_empty());
+    let warm = service.git_repositories(GitStatusRequest { expected_revision: revision, force: false }, true).unwrap();
+    assert_eq!(warm.repositories[0].version, repo.version);
+    // A missed watcher event must never let a stale display authorize a read or write.
+    fs::write(root.join("new.txt"), "external file\n").unwrap();
+    assert_eq!(service.git_diff(GitDiffRequest { expected_revision: revision, repository: repo.root.clone(), version: repo.version.clone(), path: "a.txt".into() }, true).unwrap_err().code, "conflict");
+    assert!(service.git_commit_preview(GitCommitRequest { expected_revision: revision, selections: vec![selection(repo, &["a.txt"])], message: "stale preview".into() }, true).is_err());
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "changed a\n");
+}
+
+#[test]
+#[ignore = "requires Git; creates and removes only UUID-scoped temporary repositories"]
+fn history_reads_immutable_blobs_pages_and_merge_parents_without_touching_disk() {
+    let fixture = Fixture::new(); let root = fixture.init("history 中文");
+    let service = fixture.service(&root); let revision = service.snapshot().unwrap().revision;
+    let initial = fixture.git(&root, &["rev-parse", "HEAD"]).trim().to_owned();
+    fs::write(root.join("a.txt"), "新版 中文\n").unwrap();
+    fixture.git(&root, &["add", "a.txt"]); fixture.git(&root, &["commit", "-m", "更新 中文文件"]);
+    let head = fixture.git(&root, &["rev-parse", "HEAD"]).trim().to_owned();
+    fs::write(root.join("a.txt"), "unsaved on disk\n").unwrap();
+    let repository = display_path(&root);
+    let page = || GitHistoryRequest { expected_revision: revision, repository: repository.clone(), skip: 0, limit: Some(1), reference: Some("HEAD".into()), query: None, version: None };
+    assert!(service.git_history(page(), false).is_err());
+    let mut stale = page(); stale.expected_revision += 1; assert!(service.git_history(stale, true).is_err());
+    let first = service.git_history(page(), true).unwrap();
+    assert_eq!(first.commits[0].id, head); assert_eq!(first.next_skip, Some(1));
+    let mut next = page(); next.skip = 1; next.version = Some(first.version.clone());
+    assert_eq!(service.git_history(next, true).unwrap().commits[0].id, initial);
+    let detail = service.git_history_commit(GitHistoryCommitRequest { expected_revision: revision, repository: repository.clone(), commit: head.clone(), parent: None }, true).unwrap();
+    assert_eq!(detail.files[0].path, "a.txt"); assert_eq!(detail.parent.as_deref(), Some(initial.as_str()));
+    let diff = service.git_history_diff(GitHistoryDiffRequest { expected_revision: revision, repository: repository.clone(), commit: head.clone(), parent: None, path: "a.txt".into() }, true).unwrap();
+    assert!(diff.historical); assert_eq!(diff.diff.before, "base a\n"); assert_eq!(diff.diff.after, "新版 中文\n");
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "unsaved on disk\n");
+    let root_commit = service.git_history_commit(GitHistoryCommitRequest { expected_revision: revision, repository: repository.clone(), commit: initial.clone(), parent: None }, true).unwrap();
+    assert!(root_commit.parent.is_none()); assert_eq!(root_commit.files.len(), 2);
+    assert!(service.git_history_commit(GitHistoryCommitRequest { expected_revision: revision, repository: repository.clone(), commit: initial, parent: Some(head.clone()) }, true).is_err());
+    assert!(service.git_history_diff(GitHistoryDiffRequest { expected_revision: revision, repository: repository.clone(), commit: head.clone(), parent: None, path: "../outside".into() }, true).is_err());
+    fixture.git(&root, &["tag", "v1"]);
+    let mut shifted = page(); shifted.skip = 1; shifted.version = Some(first.version);
+    assert!(service.git_history(shifted, true).is_err());
+    fixture.git(&root, &["restore", "a.txt"]);
+    fixture.git(&root, &["switch", "-c", "feature"]);
+    fs::write(root.join("feature.txt"), "feature\n").unwrap();
+    fixture.git(&root, &["add", "feature.txt"]); fixture.git(&root, &["commit", "-m", "feature"]);
+    fixture.git(&root, &["switch", "main"]);
+    fs::write(root.join("main.txt"), "main\n").unwrap();
+    fixture.git(&root, &["add", "main.txt"]); fixture.git(&root, &["commit", "-m", "main"]);
+    fixture.git(&root, &["merge", "--no-ff", "feature", "-m", "merge"]);
+    let merge = fixture.git(&root, &["rev-parse", "HEAD"]).trim().to_owned();
+    let detail = service.git_history_commit(GitHistoryCommitRequest { expected_revision: revision, repository: repository.clone(), commit: merge.clone(), parent: None }, true).unwrap();
+    assert_eq!(detail.commit.parents.len(), 2); assert_eq!(detail.files[0].path, "feature.txt");
+    let other = service.git_history_commit(GitHistoryCommitRequest { expected_revision: revision, repository, commit: merge, parent: Some(detail.commit.parents[1].clone()) }, true).unwrap();
+    assert_eq!(other.files[0].path, "main.txt");
+}
+
+#[test]
 fn porcelain_keeps_unicode_spaces_renames_and_separate_submodule_states() {
     let bytes = b"# branch.oid 1234\0# branch.head main\0\
 1 .M N... 100644 100644 100644 old index folder/a b.txt\0\
@@ -92,8 +159,8 @@ fn git_path_guards_reject_traversal_and_windows_prefixes() {
         assert!(service.git_path(&fixture.0, path).is_err(), "{path}");
     }
     assert!(service.git_path(&fixture.0, "中文文件.txt").unwrap().starts_with(&fixture.0));
-    assert_eq!(service.git_status(GitStatusRequest { expected_revision: 0 }, false).unwrap_err().code, "unauthorized");
-    assert_eq!(service.git_status(GitStatusRequest { expected_revision: 999 }, true).unwrap_err().code, "conflict");
+    assert_eq!(service.git_status(GitStatusRequest { expected_revision: 0, force: true }, false).unwrap_err().code, "unauthorized");
+    assert_eq!(service.git_status(GitStatusRequest { expected_revision: 999, force: true }, true).unwrap_err().code, "conflict");
 }
 
 #[test]
@@ -134,11 +201,11 @@ fn initialized_submodules_have_separate_selections_and_parent_pointer_commits() 
     let child = parent.join("modules/子仓库").canonicalize().unwrap(); fixture.configure(&child);
     let service = fixture.service(&parent); let revision = service.snapshot().unwrap().revision;
     fs::write(child.join("a.txt"), "child change\n").unwrap();
-    let status = service.git_status(GitStatusRequest { expected_revision: revision }, true).unwrap();
+    let status = service.git_status(GitStatusRequest { expected_revision: revision, force: true }, true).unwrap();
     assert_eq!(status.repositories.len(), 2);
     let parent_repo = status.repositories.iter().find(|repo| repo.parent.is_none()).unwrap();
     let child_repo = status.repositories.iter().find(|repo| repo.parent.is_some()).unwrap();
-    assert!(parent_repo.changes.iter().any(|file| file.submodule && !file.selectable));
+    assert!(!parent_repo.changes.iter().any(|file| file.submodule));
     assert_eq!(child_repo.submodule_path.as_deref(), Some("modules/子仓库"));
     let parent_before = fixture.git(&parent, &["rev-parse", "HEAD"]);
     assert!(commit(&service, revision, child_repo, &["a.txt"]).results[0].error.is_none());
@@ -167,4 +234,53 @@ fn edits_after_preview_invalidate_commit_even_when_porcelain_code_stays_the_same
     fs::write(root.join("a.txt"), "draft two\n").unwrap();
     assert!(service.git_commit_apply(GitCommitApplyRequest { expected_revision: revision, plan_id: preview.plan_id }, true).is_err());
     assert_eq!(fixture.git(&root, &["rev-parse", "HEAD"]), head);
+}
+
+#[test]
+#[ignore = "requires Git; creates only UUID-scoped temporary repositories"]
+fn blame_matches_editor_snapshot_and_enforces_workspace_boundaries() {
+    let fixture = Fixture::new(); let root = fixture.init("blame 中文 空格");
+    let service = fixture.service(&root); let revision = service.snapshot().unwrap().revision;
+    let path = display_path(&root.join("a.txt"));
+    let request = || GitBlameRequest { expected_revision: revision, path: path.clone(), content: Some("base a\n新草稿\n".into()) };
+    assert!(service.git_blame(request(), false).is_err());
+    let mut stale = request(); stale.expected_revision += 1;
+    assert!(service.git_blame(stale, true).is_err());
+    let result = service.git_blame(request(), true).unwrap();
+    assert_eq!(result.commits.len(), 1); assert_eq!(result.commits[0].author, "DevFlow Test");
+    assert!(result.ranges[0].commit.is_some()); assert!(result.ranges[1].commit.is_none());
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "base a\n");
+    let detail = service.git_history_commit(GitHistoryCommitRequest { expected_revision: revision, repository: result.repository, commit: result.commits[0].id.clone(), parent: None }, true).unwrap();
+    assert_eq!(detail.commit.author, "DevFlow Test");
+    let outside = fixture.init("outside"); let mut escaped = request(); escaped.path = display_path(&outside.join("a.txt"));
+    assert!(service.git_blame(escaped, true).is_err());
+    let mut huge = request(); huge.content = Some("x".repeat(1024 * 1024 + 1));
+    assert!(service.git_blame(huge, true).is_err());
+    let mut many = request(); many.content = Some("x\n".repeat(10001));
+    assert!(service.git_blame(many, true).is_err());
+    fs::write(root.join("新 文件.txt"), "new\n").unwrap();
+    let mut untracked = request(); untracked.path = display_path(&root.join("新 文件.txt"));
+    assert!(service.git_blame(untracked, true).is_err());
+    let mut disk = request(); disk.content = None;
+    assert_eq!(service.git_blame(disk, true).unwrap().ranges.len(), 1);
+    fixture.git(&root, &["config", "user.name", "Fly"]);
+    let bom = "\u{feff}第一行\r\n第二行\r\n";
+    fs::write(root.join("日期 中文.java"), bom).unwrap();
+    fixture.git(&root, &["add", "日期 中文.java"]);
+    fixture.git(&root, &["commit", "--date=2026-10-16T12:00:00+08:00", "-m", "date and BOM"]);
+    let dated = service.git_blame(GitBlameRequest { expected_revision: revision, path: display_path(&root.join("日期 中文.java")), content: Some("第一行\n第二行\n".into()) }, true).unwrap();
+    assert_eq!(dated.ranges.len(), 1); assert_eq!(dated.commits[0].author, "Fly");
+    assert_eq!(dated.commits[0].timezone, "+0800");
+    assert_eq!(fs::read_to_string(root.join("日期 中文.java")).unwrap(), bom);
+    // Nearest nested repository wins; a workspace containing only a subfolder
+    // cannot use blame to authorize its parent repository implicitly.
+    let child = fixture.init("child repo");
+    fixture.git(&root, &["-c", "protocol.file.allow=always", "submodule", "add", child.to_str().unwrap(), "nested"]);
+    fixture.git(&root, &["commit", "-am", "add submodule"]);
+    let nested = service.git_blame(GitBlameRequest { expected_revision: revision, path: display_path(&root.join("nested/a.txt")), content: None }, true).unwrap();
+    assert_eq!(Path::new(&nested.repository).canonicalize().unwrap(), root.join("nested").canonicalize().unwrap());
+    fs::create_dir(root.join("folder")).unwrap(); fs::write(root.join("folder/a.txt"), "inside\n").unwrap();
+    fixture.git(&root, &["add", "folder/a.txt"]); fixture.git(&root, &["commit", "-m", "folder"]);
+    let scoped = fixture.service(&root.join("folder"));
+    assert!(scoped.git_blame(GitBlameRequest { expected_revision: scoped.snapshot().unwrap().revision, path: display_path(&root.join("folder/a.txt")), content: None }, true).is_err());
 }

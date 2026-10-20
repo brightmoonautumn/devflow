@@ -37,7 +37,12 @@ pub enum ShareReadRequest {
     },
     Runtime,
     Metrics,
-    GitStatus,
+    GitStatus { #[serde(default)] force: bool },
+    GitRepositories { #[serde(default)] force: bool },
+    GitBlame { path: String },
+    GitHistory { repository: String, #[serde(default)] skip: usize, limit: Option<usize>, reference: Option<String>, query: Option<String>, version: Option<String> },
+    GitHistoryCommit { repository: String, commit: String, parent: Option<String> },
+    GitHistoryDiff { repository: String, commit: String, parent: Option<String>, path: String },
     GitDiff { repository: String, version: String, path: String },
     Output { project_path: String, script: Option<String>, #[serde(default)] after: u64, run_id: Option<String> },
 }
@@ -71,7 +76,8 @@ impl WorkspaceService {
             if !roots.contains(&root) { roots.push(root); }
         }
         if roots.is_empty() { return Err(error("no_workspace", "当前工作区没有可分享的文件夹")); }
-        let isolated = WorkspaceService::new(roots.clone(), None)?;
+        let mut isolated = WorkspaceService::new(roots.clone(), None)?;
+        isolated.git_cache = Arc::new(git::cache::GitCache::with_resources(self.git_cache.resources.clone()));
         isolated.lock()?.session = Some(session);
         let snapshot = isolated.snapshot()?;
         let duration = Duration::from_secs(request.lifetime_minutes * 60);
@@ -131,7 +137,12 @@ impl crate::DevFlowEngine {
             ShareReadRequest::Search { query, mode, case_sensitive, whole_word, regex, include_glob, exclude_glob } => json!(workspace.search(WorkspaceSearchRequest { query, expected_revision: revision, mode, case_sensitive, whole_word, regex, include_glob, exclude_glob }, true)?),
             ShareReadRequest::Runtime => json!(self.runtime_snapshot_for(workspace)?),
             ShareReadRequest::Metrics => json!(self.runtime.self_snapshot()?),
-            ShareReadRequest::GitStatus => json!(workspace.git_status(GitStatusRequest { expected_revision: revision }, true)?),
+            ShareReadRequest::GitBlame { path } => json!(workspace.git_blame(GitBlameRequest { expected_revision: revision, path, content: None }, true)?),
+            ShareReadRequest::GitHistory { repository, skip, limit, reference, query, version } => json!(workspace.git_history(GitHistoryRequest { expected_revision: revision, repository, skip, limit, reference, query, version }, true)?),
+            ShareReadRequest::GitHistoryCommit { repository, commit, parent } => json!(workspace.git_history_commit(GitHistoryCommitRequest { expected_revision: revision, repository, commit, parent }, true)?),
+            ShareReadRequest::GitHistoryDiff { repository, commit, parent, path } => json!(workspace.git_history_diff(GitHistoryDiffRequest { expected_revision: revision, repository, commit, parent, path }, true)?),
+            ShareReadRequest::GitStatus { force } => json!(workspace.git_status(GitStatusRequest { expected_revision: revision, force }, true)?),
+            ShareReadRequest::GitRepositories { force } => json!(workspace.git_repositories(GitStatusRequest { expected_revision: revision, force }, true)?),
             ShareReadRequest::GitDiff { repository, version, path } => json!(workspace.git_diff(GitDiffRequest { expected_revision: revision, repository, version, path }, true)?),
             ShareReadRequest::Output { project_path, script, after, run_id } => {
                 let project = if script.is_some() { workspace.node_runtime_project(&project_path, script.as_deref(), Some(revision))? }

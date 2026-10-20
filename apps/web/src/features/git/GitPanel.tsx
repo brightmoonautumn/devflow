@@ -1,8 +1,11 @@
 import { readOnlyShare } from '../../lib/access'
 import { useDialogs } from '../../components/form/BaseDialog'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, Plus, RefreshCw, Undo2, X } from 'lucide-react'
+import { History, ChevronRight, ChevronsDownUp, ChevronsUpDown, Plus, RefreshCw, Undo2, X } from 'lucide-react'
 import { TreeEntryIcon } from '../../components/files/TreeEntryIcon'
+import { BaseButton } from '../../components/form/BaseButton'
+import { CommitMessageDialog } from './CommitMessageDialog'
+import { ResizableCommitPanel } from './ResizableCommitPanel'
 import type { WorkspaceResponse } from '../../lib/api'
 import { gitRequest, type GitChange, type GitDiff, type GitOutcome, type GitPreview, type GitRepository, type GitSelection, type GitStatus } from './api'
 import './git.css'
@@ -33,11 +36,12 @@ function treeOf(files: GitChange[]) {
   }
   return root
 }
-export function GitPanel({ workspace, active, onOpenDiff, onClose }: { workspace: WorkspaceResponse | null; active: boolean; onOpenDiff: (diff: GitDiff) => void; onClose: () => void }) {
+export function GitPanel({ workspace, active, onOpenDiff, onOpenHistory, onClose }: { workspace: WorkspaceResponse | null; active: boolean; onOpenHistory: () => void; onOpenDiff: (diff: GitDiff) => void; onClose: () => void }) {
   const dialogs = useDialogs()
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [selected, setSelected] = useState(new Set<string>())
   const [message, setMessage] = useState('')
+  const [messageDialogOpen, setMessageDialogOpen] = useState(false)
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -63,13 +67,13 @@ export function GitPanel({ workspace, active, onOpenDiff, onClose }: { workspace
     const controller = new AbortController()
     refreshing.current = controller; setLoading(foreground || !current.current)
     try {
-      const next = await gitRequest<GitStatus>('status', { expectedRevision: revision }, AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]))
+      const next = await gitRequest<GitStatus>('status', { expectedRevision: revision, force: foreground }, AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]))
       if (!mounted.current || controller.signal.aborted) return
       const previous = current.current
       const changed = !previous || JSON.stringify(previous) !== JSON.stringify(next)
       if (changed) {
         setSelected(values => new Set([...values].filter(value => next.repositories.some(repo => previous?.repositories.find(old => old.root === repo.root)?.version === repo.version && repo.changes.some(file => key(repo, file.path) === value)))))
-        if (previous) setPreview(null)
+        if (previous && JSON.stringify(previous.repositories.map(repo => [repo.root, repo.version])) !== JSON.stringify(next.repositories.map(repo => [repo.root, repo.version]))) setPreview(null)
         setStatus(next)
       }
       refreshedAt.current = Date.now()
@@ -87,8 +91,8 @@ export function GitPanel({ workspace, active, onOpenDiff, onClose }: { workspace
     if (revision === undefined) return
     // Keep the polling clock independent of sidebar switches and window focus.
     const timer = setInterval(() => {
-      if (activeRef.current && !running.current && !document.hidden && Date.now() - refreshedAt.current >= 15000) void refresh()
-    }, 15000)
+      if (activeRef.current && !running.current && !document.hidden && Date.now() - refreshedAt.current >= (current.current?.refreshing || current.current?.stale ? 1000 : 5000)) void refresh()
+    }, 1000)
     return () => clearInterval(timer)
   }, [revision, refresh])
   useEffect(() => {
@@ -198,13 +202,15 @@ export function GitPanel({ workspace, active, onOpenDiff, onClose }: { workspace
       </div><div hidden={!repoOpen}>{repo.blocked && <p className="git-notice">{repo.blocked}</p>}{repo.truncated && <p className="git-notice">列表不完整，已禁用修改操作</p>}<div className="git-indent">{renderTree(repo, treeOf(files), group)}</div></div></div>
     })}</div></section>
   }
-  return <div className="git-panel"><header className="ws-explorer-header"><strong>Commit</strong><div><button className="ws-icon-button" title="全部展开" aria-label="全部展开 Git 分组、仓库和目录" onClick={() => setAllCollapsedTo(false)}><ChevronsUpDown size={14} /></button><button className="ws-icon-button" title="全部折叠" aria-label="全部折叠 Git 分组、仓库和目录" onClick={() => setAllCollapsedTo(true)}><ChevronsDownUp size={14} /></button><button className="ws-icon-button" disabled={busy || loading || !workspace} title="刷新 Git 状态" aria-label="刷新 Git 状态" onClick={() => void refresh(true)}><RefreshCw size={14} className={loading ? 'spinning' : ''} /></button>{!readOnlyShare && <><button className="ws-icon-button" disabled={busy} title="Add to VCS" aria-label="添加所选未管理文件" onClick={() => mutate('add')}><Plus size={15} /></button><button className="ws-icon-button" disabled={busy} title="Rollback" aria-label="回滚所选文件" onClick={() => mutate('rollback')}><Undo2 size={15} /></button></>}<button className="ws-icon-button" onClick={onClose} aria-label="关闭 Git 面板"><X size={14} /></button></div></header>
-    <div className="git-scroll">{!workspace ? <p className="git-notice">请先打开工作区。</p> : <>{section(false)}{section(true)}{status && status.repositories.length > 0 && !status.repositories.some(repo => repo.changes.some(visibleChange)) && <p className="git-notice">没有文件变化或子模块引用更新。</p>}{status && !status.repositories.length && <p className="git-notice">没有发现 Git 仓库。请将完整仓库根目录加入工作区。</p>}{status?.warnings.map((warning, index) => <p key={index} className="git-notice">{warning}</p>)}</>}</div>
+  return <div className="git-panel"><header className="ws-explorer-header"><strong>Commit</strong><div><button className="ws-icon-button" title="Git History" aria-label="打开 Git 历史" disabled={!workspace} onClick={onOpenHistory}><History size={14} /></button><button className="ws-icon-button" title="全部展开" aria-label="全部展开 Git 分组、仓库和目录" onClick={() => setAllCollapsedTo(false)}><ChevronsUpDown size={14} /></button><button className="ws-icon-button" title="全部折叠" aria-label="全部折叠 Git 分组、仓库和目录" onClick={() => setAllCollapsedTo(true)}><ChevronsDownUp size={14} /></button><button className="ws-icon-button" disabled={busy || loading || !workspace} title="刷新 Git 状态" aria-label="刷新 Git 状态" onClick={() => void refresh(true)}><RefreshCw size={14} className={loading ? 'spinning' : ''} /></button>{!readOnlyShare && <><button className="ws-icon-button" disabled={busy} title="Add to VCS" aria-label="添加所选未管理文件" onClick={() => mutate('add')}><Plus size={15} /></button><button className="ws-icon-button" disabled={busy} title="Rollback" aria-label="回滚所选文件" onClick={() => mutate('rollback')}><Undo2 size={15} /></button></>}<button className="ws-icon-button" onClick={onClose} aria-label="关闭 Git 面板"><X size={14} /></button></div></header>
+    <div className="git-scroll" aria-busy={status?.refreshing}>{!workspace ? <p className="git-notice">请先打开工作区。</p> : <>{section(false)}{section(true)}{status && !status.refreshing && status.repositories.length > 0 && !status.repositories.some(repo => repo.changes.some(visibleChange)) && <p className="git-notice">没有文件变化或子模块引用更新。</p>}{status && !status.repositories.length && <p className="git-notice">没有发现 Git 仓库。请将完整仓库根目录加入工作区。</p>}{status?.warnings.map((warning, index) => <p key={index} className="git-notice">{warning}</p>)}</>}</div>
+    {status?.refreshing && <p className="git-notice" role="status">正在后台更新变化…</p>}
     {notice && <p className="git-notice" role="status">{notice}</p>}
-    {!readOnlyShare && <div className="git-commit">{status?.repositories.some(repo => repo.parent) && <p className="git-submodule-hint">子模块独立提交：先提交子仓库，再提交父仓库的引用更新。</p>}<textarea aria-label="提交信息" placeholder="Commit Message" value={message} disabled={busy} onChange={event => { setMessage(event.target.value); setPreview(null) }} />
+    {!readOnlyShare && <ResizableCommitPanel><div className="git-commit-heading"><span>Commit Message</span><BaseButton disabled={busy} onClick={() => setMessageDialogOpen(true)}>规范填写</BaseButton></div><textarea aria-label="提交信息" placeholder="Commit Message" value={message} disabled={busy} onChange={event => { setMessage(event.target.value); setPreview(null) }} />
       {preview ? <div className="git-preview"><strong>确认提交 · {preview.repositories.length} 个仓库</strong><div className="git-preview-files">{preview.repositories.map(repo => <div key={repo.repository}><small title={repo.repository}>{repo.repository.split(/[\\/]/).at(-1)} · {repo.branch}</small>{repo.files.map(diff => <button key={diff.path} title={diff.path} onClick={() => onOpenDiff(diff)}><TreeEntryIcon name={diff.path.split('/').at(-1) ?? diff.path} directory={diff.submodule} expanded={false} root={diff.submodule} />{diff.path}</button>)}</div>)}</div><p>点击文件查看 Diff。各仓库分别生成提交。</p><button className="ws-primary-button" disabled={busy} onClick={() => void execute(async () => { guard(preview.repositories.map(repo => ({ repository: repo.repository, version: '', paths: repo.files.map(file => file.path) }))); outcome(await gitRequest<GitOutcome>('commit/apply', { expectedRevision: revision, planId: preview.planId })) })}>{busy ? '提交中…' : '确认 Commit'}</button><button className="ws-outline-button" disabled={busy} onClick={() => setPreview(null)}>取消</button></div>
         : <button className="ws-primary-button" disabled={busy || !message.trim() || !selected.size} onClick={prepare}>{busy ? '处理中…' : `Commit${selected.size ? ` (${selected.size})` : ''}`}</button>}
-    </div>}
+    </ResizableCommitPanel>}
+    {!readOnlyShare && messageDialogOpen && <CommitMessageDialog message={message} onClose={() => setMessageDialogOpen(false)} onApply={value => { setMessage(value); setPreview(null); setMessageDialogOpen(false) }} />}
 
     {menu && <div className="git-context" role="menu" style={{ left: menu.x, top: menu.y }} onClick={event => event.stopPropagation()}><button role="menuitem" onClick={() => { void showDiff(menu.repo, menu.file); setMenu(null) }}>Show Diff</button>{!readOnlyShare && <><button role="menuitem" disabled={busy || !menu.file.selectable || !menu.file.untracked} onClick={() => mutate('add', [{ repository: menu.repo.root, version: menu.repo.version, paths: [menu.file.path] }])}>Add to VCS</button><button role="menuitem" disabled={busy || !menu.file.selectable || menu.file.untracked || menu.file.submodule} onClick={() => mutate('rollback', [{ repository: menu.repo.root, version: menu.repo.version, paths: [menu.file.path] }])}>Rollback…</button></>}</div>}
   </div>

@@ -1,7 +1,8 @@
 .git-panel{display:flex;flex-direction:column;flex:1;min-height:0;color:var(--ws-ink);font-size:12px}
 .git-panel [hidden]{display:none!important}
 .git-panel .ws-explorer-header{display:flex;align-items:center;justify-content:space-between;min-height:38px;padding:0 12px}
-.git-panel .ws-explorer-header>div{display:flex;gap:3px}
+.git-panel .ws-explorer-header>div{display:flex;gap:2px}
+.git-panel .ws-explorer-header .ws-icon-button{width:23px;height:26px}
 .git-scroll{overflow:auto;flex:1;min-height:80px;padding:4px 8px}
 .git-section h3{font-size:12px;font-weight:600;margin:4px 0;white-space:nowrap}
 .git-section-toggle,.git-repo-toggle,.git-repo-chevron{display:flex;align-items:center;gap:5px;min-width:0;padding:3px 2px;border:0;background:none;color:inherit;font:inherit;text-align:left}
@@ -32,9 +33,23 @@
 .git-tree-folder small{flex-shrink:0;font-size:10px;color:var(--ws-muted);font-weight:400}
 .git-tree-folder .is-expanded{transform:rotate(90deg)}
 .git-notice{font-size:11px;color:var(--ws-muted);margin:7px 10px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:110px;overflow:auto}
-.git-commit{border-top:1px solid var(--ws-border);padding:10px;display:flex;flex-direction:column;gap:8px;max-height:55%;overflow:auto}
-.git-submodule-hint{margin:0;font-size:11px;line-height:1.6;color:var(--ws-muted)}
-.git-commit textarea{min-height:85px;resize:vertical;max-height:200px;width:100%;box-sizing:border-box;background:var(--ws-bg);color:var(--ws-ink);border:1px solid var(--ws-border);border-radius:3px;padding:8px;font:12px var(--font-mono)}
+.git-commit{position:relative;box-sizing:border-box;flex-shrink:0;min-height:0;border-top:1px solid var(--ws-border);display:flex;flex-direction:column}
+.git-commit-content{display:flex;flex:1;min-height:0;flex-direction:column;gap:8px;padding:10px;overflow:auto}
+.git-commit-content> :not(textarea){flex-shrink:0}
+.git-commit.is-resizing .ws-panel-resizer::after,.git-commit.is-resizing .ws-panel-resizer>span{background:var(--ws-accent)}
+body:has(.git-commit.is-resizing),body:has(.git-commit.is-resizing) *{cursor:row-resize!important;user-select:none}
+.git-commit-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--ws-muted)}
+.git-commit-heading .df-button{min-height:25px;padding:3px 8px;font-size:11px}
+.git-message-dialog{width:min(580px,calc(100vw - 32px));font-size:12px}
+.git-message-dialog-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
+.git-message-fields{display:flex;flex-direction:column;gap:14px}
+.git-message-header-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+.git-message-fields .df-field{min-width:0}
+.git-message-preview{min-width:0;color:var(--ws-muted);font-size:11px}
+.git-message-preview pre{margin:7px 0 0;max-height:160px;overflow:auto;padding:10px;border:1px solid var(--ws-border);border-radius:4px;background:var(--ws-bg);color:var(--ws-ink);font:12px/1.6 var(--font-mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.git-message-dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+@media(max-width:440px){.git-message-header-fields{grid-template-columns:minmax(0,1fr)}}
+.git-commit textarea{flex:1 0 85px;min-height:85px;resize:none;width:100%;box-sizing:border-box;background:var(--ws-bg);color:var(--ws-ink);border:1px solid var(--ws-border);border-radius:3px;padding:8px;font:12px var(--font-mono)}
 .git-commit textarea:focus{outline:1px solid var(--ws-accent);outline-offset:-1px}
 .git-preview{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .git-preview>strong,.git-preview>p{width:100%;margin:0;font-size:11px}

@@ -2,13 +2,14 @@ import { readOnlyShare } from '../../lib/access'
 import { readViewState, restoredTabs, viewPathKey, workspaceViewKey, writeViewState, type WorkspaceViewState } from './workspaceViewState'
 import { useDialogs } from '../../components/form/BaseDialog'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Check, FileText, LoaderCircle, RefreshCw, Server, X } from 'lucide-react'
+import { Check, History, FileText, LoaderCircle, RefreshCw, Server, X } from 'lucide-react'
 import { readWorkspaceFile, writeWorkspaceFile, type WorkspaceFile, type WorkspaceResponse } from '../../lib/api'
-import type { GitDiff } from '../git/api'
+import type { GitDiff, GitHistoryTarget } from '../git/api'
 import './file-editor.css'
+const GitHistoryPage = lazy(() => import('../git/GitHistoryPage'))
 const GitDiffPane = lazy(() => import('../git/GitDiffPane'))
 
-const FileEditor = lazy(() => import('../../components/editor/FileEditor'))
+const FileEditor = lazy(() => import('../git/GitFileEditor'))
 export type FileOpenRequest = { path: string; pinned: boolean; sequence: number; line?: number; column?: number }
 export type FileSaveStatus = { text: string; failed: boolean }
 type FileTab = { diff?: GitDiff; key: string; path: string; file?: WorkspaceFile; draft: string; preview: boolean; loading: boolean; saving: boolean; error: string; savedAt?: number; deleting?: boolean; line: number; column: number; location?: { line: number; column: number; sequence: number } }
@@ -22,8 +23,11 @@ const textFor = (file: WorkspaceFile) => file.content.replace(/^\uFEFF/, '').rep
 const dirty = (tab: FileTab) => !!tab.file && tab.draft !== textFor(tab.file)
 const nameFor = (path: string) => path.split(/[\\/]/).at(-1) ?? path
 
-export function FileWorkbench({ workspace, openRequest, diffRequest, onOpenFile, onSaveStatusChange, children }: { workspace: WorkspaceResponse | null; openRequest: FileOpenRequest | null; diffRequest?: { diff: GitDiff; sequence: number } | null; onOpenFile?: (path: string) => void; onSaveStatusChange?: (status: FileSaveStatus | null) => void; children: ReactNode }) {
+export function FileWorkbench({ workspace, openRequest, diffRequest, historyRequest, onOpenDiff, onOpenFile, onSaveStatusChange, children }: { workspace: WorkspaceResponse | null; openRequest: FileOpenRequest | null; diffRequest?: { diff: GitDiff; sequence: number } | null; historyRequest?: number; onOpenDiff?: (diff: GitDiff) => void; onOpenFile?: (path: string) => void; onSaveStatusChange?: (status: FileSaveStatus | null) => void; children: ReactNode }) {
   const dialogs = useDialogs()
+  const [historyOpened, setHistoryOpened] = useState(false)
+  const [historyTarget, setHistoryTarget] = useState<GitHistoryTarget | null>(null)
+  useEffect(() => { setHistoryTarget(null) }, [workspace?.revision])
   const confirmations = useRef(new Set<string>())
   const [state, setState] = useState<Workbench>({ tabs: [], active: null })
   const scope = workspaceViewKey(workspace)
@@ -123,9 +127,15 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, onOpenFile,
   }, [openRequest, change, loadFile, dialogs])
 
   useEffect(() => {
+    if (!historyRequest) return
+    setHistoryOpened(true)
+    change(value => ({ ...value, active: 'git-history' }))
+  }, [historyRequest, change])
+
+  useEffect(() => {
     if (!diffRequest) return
     const { diff } = diffRequest
-    const key = `git:${diff.repository}:${diff.path}`
+    const key = `git:${diff.repository}:${diff.historical ? `${diff.commit}:${diff.parent ?? "root"}:` : ""}${diff.path}`
     const existing = live.current.tabs.find(tab => tab.key === key)
     if (existing) { updateTab(key, tab => ({ ...tab, diff })); change(value => ({ ...value, active: key })); return }
     const preview = live.current.tabs.find(tab => tab.preview && !dirty(tab) && !tab.saving && !tab.deleting)
@@ -301,24 +311,30 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, onOpenFile,
       tabs[next]?.click(); tabs[next]?.focus()
     }}>
       <button id="services-tab" role="tab" aria-selected={state.active === null} aria-controls="services-pane" tabIndex={state.active === null ? 0 : -1} className={`file-tab file-services-tab ${state.active === null ? 'is-active' : ''}`} onClick={() => change(value => ({ ...value, active: null }))}><Server size={14} />服务</button>
+      {historyOpened && <div className={`file-tab-group ${state.active === 'git-history' ? 'is-active' : ''}`}>
+        <button id="git-history-tab" className="file-tab" role="tab" aria-selected={state.active === 'git-history'} aria-controls="git-history-pane" tabIndex={state.active === 'git-history' ? 0 : -1} onClick={() => change(value => ({ ...value, active: 'git-history' }))}><History size={14} /><span>Git History</span></button>
+        <button className="file-tab-close" title="关闭历史" aria-label="关闭 Git History" onClick={() => { setHistoryOpened(false); change(value => ({ ...value, active: value.active === 'git-history' ? null : value.active })) }}><X size={13} /></button>
+      </div>}
       {state.tabs.map(tab => <div key={tab.key} className={`file-tab-group ${state.active === tab.key ? 'is-active' : ''}`}>
         <button id={`file-tab-${encodeURIComponent(tab.key)}`} className={`file-tab ${tab.preview ? 'is-preview' : ''}`} role="tab" tabIndex={state.active === tab.key ? 0 : -1} aria-selected={state.active === tab.key} aria-controls={`file-pane-${encodeURIComponent(tab.key)}`} title={`${tab.path}${dirty(tab) ? '\n未保存' : ''}`} onClick={() => change(value => ({ ...value, active: tab.key }))} onDoubleClick={() => updateTab(tab.key, current => ({ ...current, preview: false }))}>
-          {tab.loading || tab.saving ? <LoaderCircle size={14} className="spinning" /> : <FileText size={14} />}<span>{tab.diff ? 'Diff · ' : ''}{nameFor(tab.path)}</span>{dirty(tab) && <i className="file-dirty" aria-label="未保存" />}
+          {tab.loading || tab.saving ? <LoaderCircle size={14} className="spinning" /> : <FileText size={14} />}<span>{tab.diff?.historical ? `${tab.diff.commit?.slice(0, 8)} · ` : tab.diff ? 'Diff · ' : ''}{nameFor(tab.path)}</span>{dirty(tab) && <i className="file-dirty" aria-label="未保存" />}
         </button>
         <button className="file-tab-close" disabled={tab.saving || tab.deleting} aria-label={`关闭 ${nameFor(tab.path)}`} title="关闭文件" onClick={() => closeFile(tab)}><X size={13} /></button>
       </div>)}
     </div>
+    {readOnlyShare && <span className="file-share-status">只读分享</span>}
     <div className="file-tab-actions" hidden={!activeTab}>
       <div ref={setEditorActions} className="file-editor-actions" />
       <button className="ws-icon-button" disabled={!activeTab || activeTab.loading || activeTab.saving || activeTab.deleting || !workspace} aria-label="重新读取文件" title="重新读取磁盘文件" onClick={() => { if (activeTab) void reloadFile(activeTab) }}><RefreshCw size={14} /></button>
     </div>
     </div>
     <div id="services-pane" role="tabpanel" aria-labelledby="services-tab" className="file-services-pane" hidden={state.active !== null}>{children}</div>
+    {historyOpened && <section id="git-history-pane" className="file-pane" role="tabpanel" aria-labelledby="git-history-tab" hidden={state.active !== 'git-history'}><Suspense fallback={<div className="file-loading">正在加载 Git History…</div>}><GitHistoryPage key={`${scope}:${workspace?.revision ?? 0}`} workspace={workspace} target={historyTarget} onOpenDiff={diff => onOpenDiff?.(diff)} /></Suspense></section>}
     {state.tabs.map(tab => <section key={tab.key} id={`file-pane-${encodeURIComponent(tab.key)}`} role="tabpanel" aria-labelledby={`file-tab-${encodeURIComponent(tab.key)}`} hidden={state.active !== tab.key} className="file-pane">
       {tab.diff ? <Suspense fallback={<div className="file-loading">正在加载 Diff…</div>}><GitDiffPane diff={tab.diff} revision={workspace?.revision} onDiffChange={diff => updateTab(tab.key, current => ({ ...current, diff }))} /></Suspense> : <>
       {tab.error && <div className="file-notice is-error" role="alert">{tab.error}<button className="ws-outline-button" disabled={tab.loading || tab.saving || tab.deleting || !workspace} onClick={() => reloadFile(tab)}>重新读取</button></div>}
-      {tab.file?.readonlyReason && <p className="file-notice">{tab.file.readonlyReason}</p>}
-      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor key={tab.path} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
+      {tab.file?.readonlyReason && !(readOnlyShare && tab.file.readonlyReason === '只读分享') && <p className="file-notice">{tab.file.readonlyReason}</p>}
+      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor key={tab.path} revision={workspace?.revision} active={state.active === tab.key} onOpenHistory={target => { setHistoryTarget(target); setHistoryOpened(true); change(value => ({ ...value, active: 'git-history' })) }} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
       {tab.file && <footer className="file-status"><span role="status">{tab.saving ? '保存中…' : dirty(tab) ? '未保存' : tab.savedAt ? <><Check size={12} />已保存</> : tab.preview ? '预览 · 双击标签固定' : '已打开'}</span><span>行 {tab.line}，列 {tab.column}</span><span>UTF-8{tab.file.bom ? ' BOM' : ''} · {tab.file.lineEnding}</span></footer>}
       </>}
     </section>)}

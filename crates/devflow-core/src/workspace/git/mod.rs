@@ -2,7 +2,12 @@
 //! share a selection or an index. HTTP and MCP use these same operations.
 use super::*;
 mod command;
+pub(super) mod cache;
 mod operations;
+mod blame;
+pub use blame::*;
+mod history;
+pub use history::*;
 #[cfg(test)]
 mod tests;
 use command::{checked, literal, run, text};
@@ -11,7 +16,7 @@ pub(super) use operations::CommitPlan;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GitStatusRequest { pub expected_revision: u64 }
+pub struct GitStatusRequest { pub expected_revision: u64, #[serde(default)] pub force: bool }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GitDiffRequest {
@@ -35,7 +40,7 @@ pub struct GitRepository {
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GitStatus { pub revision: u64, pub repositories: Vec<GitRepository>, pub warnings: Vec<String> }
+pub struct GitStatus { pub revision: u64, pub repositories: Vec<GitRepository>, pub warnings: Vec<String>, pub refreshing: bool, pub stale: bool }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitDiff {
@@ -62,6 +67,7 @@ impl WorkspaceService {
                 if root.is_dir() && !roots.contains(&root) { roots.push(root); }
             }
         }
+        self.git_cache.scope(revision, &roots);
         Ok(roots)
     }
 
@@ -72,8 +78,14 @@ impl WorkspaceService {
             return Err(error("outside_workspace", "请将完整仓库根目录加入当前工作区"));
         }
         if !root.join(".git").exists() { return Err(error("invalid_path", "此目录不是已初始化的 Git 仓库根目录")); }
-        let top = PathBuf::from(text(&checked(&root, &["rev-parse", "--show-toplevel"])?)?.trim());
-        if top.canonicalize()? != root { return Err(error("invalid_path", "Git 仓库根目录不匹配")); }
+        if self.git_cache.metadata(&root).is_none() {
+            let bytes = checked(&root, &["rev-parse", "--show-toplevel", "--absolute-git-dir", "--path-format=absolute", "--git-common-dir"])?;
+            let output = text(&bytes)?; let paths: Vec<_> = output.lines().collect();
+            if paths.len() != 3 || PathBuf::from(paths[0]).canonicalize()? != root { return Err(error("invalid_path", "Git 仓库根目录不匹配")); }
+            let git_dir = PathBuf::from(paths[1]).canonicalize()?; let common_dir = PathBuf::from(paths[2]).canonicalize()?;
+            let marker = cache::metadata_marker(&root, &git_dir, &common_dir);
+            self.git_cache.remember_metadata(root.clone(), cache::Metadata { git_dir, common_dir, marker });
+        }
         Ok(root)
     }
 
@@ -101,72 +113,92 @@ impl WorkspaceService {
         Ok(candidate)
     }
 
-    pub fn git_status(&self, request: GitStatusRequest, authenticated: bool) -> Result<GitStatus> {
-        let roots = self.git_roots(request.expected_revision, authenticated)?;
-        let _operations = self.git_operations.lock().map_err(|_| error("unavailable", "Git 操作暂不可用"))?;
-        command::executable()?;
-        let mut status = GitStatus { revision: request.expected_revision, repositories: Vec::new(), warnings: Vec::new() };
-        let mut queue: std::collections::VecDeque<(PathBuf, Option<String>, Option<String>, usize)> = roots.into_iter().map(|root| (root, None, None, 0)).collect();
-        let mut seen = HashSet::new();
-        let started = Instant::now();
-        let mut visited = 0;
+    fn git_catalog(&self, revision: u64, force: bool) -> Result<(Vec<cache::Repository>, Vec<String>)> {
+        let roots = self.git_roots(revision, true)?;
+        let _gate = self.git_cache.topology_gate.lock().map_err(|_| error("unavailable", "Git 目录缓存暂不可用"))?;
+        let generation = self.git_cache.generation();
+        if !force {
+            if let Some(value) = self.git_cache.topology() {
+                if value.0.iter().all(|repo| self.authorize(&repo.root).is_ok_and(|root| root == repo.root) && repo.root.join(".git").exists()) { return Ok(value); }
+            }
+        }
+        let _operations = self.git_operations.read().map_err(|_| error("unavailable", "Git 操作暂不可用"))?;
+        let mut repositories: Vec<cache::Repository> = Vec::new(); let mut warnings = Vec::new();
+        let mut queue: std::collections::VecDeque<_> = roots.into_iter().map(|root| (root, None, None, 0usize)).collect();
+        let mut seen = HashSet::new(); let mut relationships = Vec::new();
+        let started = Instant::now(); let mut visited = 0;
         while let Some((directory, parent, submodule_path, depth)) = queue.pop_front() {
-            if status.repositories.len() >= 64 || visited >= 10000 || started.elapsed() > Duration::from_secs(20) {
-                status.warnings.push("仓库发现已达到预算（64 仓库、10000 目录项或 20 秒），请缩小工作区范围。".into()); break;
+            if repositories.len() >= 64 || visited >= 10000 || started.elapsed() > Duration::from_secs(20) {
+                warnings.push("仓库发现达到预算（64 仓库、10000 目录项或 20 秒），请缩小范围。".into()); break;
             }
             let Ok(directory) = self.authorize(&directory) else { continue; };
             if !seen.insert(directory.clone()) { continue; }
             if directory.join(".git").exists() {
-                match self.git_repository(&display_path(&directory), request.expected_revision).and_then(|root| repository_status(self, &root)) {
-                    Ok(mut repository) => {
-                        repository.parent = parent; repository.submodule_path = submodule_path;
-                        match gitlinks(&directory) {
-                            Ok(links) => for link in links {
-                                if let Ok(child) = self.git_path(&directory, &link) {
-                                    if child.is_dir() && child.join(".git").exists() { queue.push_back((child, Some(repository.root.clone()), Some(link), 0)); }
-                                }
-                            },
-                            Err(err) => status.warnings.push(format!("{}：{}", repository.name, err.message)),
+                match self.git_repository(&display_path(&directory), revision) {
+                    Ok(root) => {
+                        if let Some(metadata) = self.git_cache.metadata(&root) {
+                            match gitlinks(&root) {
+                                Ok(links) => for link in links {
+                                    if let Ok(child) = self.git_path(&root, &link) {
+                                        if child.is_dir() && child.join(".git").exists() {
+                                            relationships.push((child.clone(), display_path(&root), link.clone()));
+                                            queue.push_back((child, Some(display_path(&root)), Some(link), 0));
+                                        }
+                                    }
+                                },
+                                Err(error) => warnings.push(error.message),
+                            }
+                            repositories.push(cache::Repository { name: root.file_name().unwrap_or_default().to_string_lossy().into_owned(), root, parent, submodule_path, metadata });
                         }
-                        status.repositories.push(repository);
-                    }
-                    Err(err) => status.warnings.push(format!("{}：{}", display_path(&directory), err.message)),
+                    },
+                    Err(error) => warnings.push(error.message),
                 }
-                continue; // Never walk repository contents to discover children: use index gitlinks.
+                continue;
             }
             if depth >= 4 { continue; }
-            let Ok(entries) = fs::read_dir(&directory) else { continue; };
-            for entry in entries {
-                visited += 1; if visited >= 10000 { break; }
-                let Ok(entry) = entry else { continue; };
-                if !entry.file_type().is_ok_and(|kind| kind.is_dir() && !kind.is_symlink()) { continue; }
-                if excluded_directory(&entry.file_name().to_string_lossy()) { continue; }
-                queue.push_back((entry.path(), None, None, depth + 1));
-            }
-        }
-        // A submodule may also be an explicit workspace root and be discovered first.
-        let parents: Vec<_> = status.repositories.iter().map(|repo| repo.root.clone()).collect();
-        for parent in parents {
-            if let Ok(links) = gitlinks(Path::new(&parent)) {
-                for link in links {
-                    let candidate = Path::new(&parent).join(&link).canonicalize().ok();
-                    if let Some(child) = status.repositories.iter_mut().find(|repo| candidate.as_ref().is_some_and(|p| comparison_path(p) == comparison_path(Path::new(&repo.root)))) {
-                        child.parent = Some(parent.clone()); child.submodule_path = Some(link);
-                    }
+            if let Ok(entries) = fs::read_dir(&directory) {
+                for entry in entries {
+                    visited += 1; if visited >= 10000 { break; }
+                    let Ok(entry) = entry else { continue; };
+                    if entry.file_type().is_ok_and(|kind| kind.is_dir() && !kind.is_symlink()) && !excluded_directory(&entry.file_name().to_string_lossy()) { queue.push_back((entry.path(), None, None, depth + 1)); }
                 }
             }
         }
-        status.repositories.sort_by(|a, b| a.root.cmp(&b.root));
-        self.git_roots(request.expected_revision, true)?;
-        Ok(status)
+        for (child, parent, path) in relationships {
+            if let Some(repo) = repositories.iter_mut().find(|repo| repo.root == child) { repo.parent = Some(parent); repo.submodule_path = Some(path); }
+        }
+        repositories.sort_by(|a, b| a.root.cmp(&b.root));
+        self.git_roots(revision, true)?;
+        self.git_cache.install(generation, repositories.clone(), warnings.clone());
+        if started.elapsed() >= Duration::from_secs(1) { eprintln!("[git-cache] repository discovery: {}ms, {} repositories", started.elapsed().as_millis(), repositories.len()); }
+        Ok((repositories, warnings))
+    }
+    pub fn git_repositories(&self, request: GitStatusRequest, authenticated: bool) -> Result<GitStatus> {
+        self.git_roots(request.expected_revision, authenticated)?;
+        let (repositories, warnings) = self.git_catalog(request.expected_revision, request.force)?;
+        let value = self.git_cache.result(request.expected_revision, &repositories, warnings, Duration::ZERO)?;
+        self.git_roots(request.expected_revision, true)?; Ok(value)
+    }
+    pub fn git_status(&self, request: GitStatusRequest, authenticated: bool) -> Result<GitStatus> {
+        self.git_roots(request.expected_revision, authenticated)?;
+        let (repositories, warnings) = self.git_catalog(request.expected_revision, request.force)?;
+        let old = self.git_cache.result(request.expected_revision, &repositories, warnings.clone(), Duration::ZERO)?;
+        let cold = old.repositories.iter().any(|repo| repo.version.is_empty());
+        self.git_cache.request(self, request.expected_revision, &repositories, request.force);
+        let wait = if request.force { Duration::from_secs(30) } else if cold { Duration::from_secs(2) } else { Duration::ZERO };
+        let value = self.git_cache.result(request.expected_revision, &repositories, warnings, wait)?;
+        self.git_roots(request.expected_revision, true)?; Ok(value)
     }
 
     pub fn git_diff(&self, request: GitDiffRequest, authenticated: bool) -> Result<GitDiff> {
         self.git_roots(request.expected_revision, authenticated)?;
-        let _operations = self.git_operations.lock().map_err(|_| error("unavailable", "Git 操作暂不可用"))?;
+        let _operations = self.git_operations.read().map_err(|_| error("unavailable", "Git 操作暂不可用"))?;
         let root = self.git_repository(&request.repository, request.expected_revision)?;
         let repo = repository_status(self, &root)?;
-        if repo.version != request.version { return Err(error("conflict", "Git 状态已变化，请刷新后查看差异")); }
+        if repo.version != request.version {
+            self.git_cache.invalidate_repositories(std::slice::from_ref(&root));
+            return Err(error("conflict", "Git 状态已变化，请刷新后查看差异"));
+        }
         let change = repo.changes.iter().find(|change| change.path == request.path).ok_or_else(|| error("not_found", "文件不在当前变更列表中"))?;
         let diff = diff_for(self, &root, &repo, change)?;
         self.git_roots(request.expected_revision, true)?;
@@ -187,10 +219,14 @@ fn gitlinks(root: &Path) -> Result<Vec<String>> {
 }
 
 fn repository_status(service: &WorkspaceService, root: &Path) -> Result<GitRepository> {
+    let bytes = checked(root, &["rev-parse", "--absolute-git-dir"])?;
+    repository_status_display(service, root, Path::new(text(&bytes)?.trim()))
+}
+fn repository_status_display(service: &WorkspaceService, root: &Path, metadata: &Path) -> Result<GitRepository> {
     // Enumerate untracked files separately: ls-files' exclude patterns prune
     // dependency/build directories before descending, rather than filtering a
     // fully enumerated `status --untracked-files=all` result afterwards.
-    let mut args = vec!["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=no", "--ignore-submodules=none", "--", "."];
+    let mut args = vec!["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=no", "--ignore-submodules=dirty", "--", "."];
     for pattern in [":(exclude,icase,glob)**/node_modules/**", ":(exclude,icase,glob)**/target/**", ":(exclude,icase,glob)**/build/**", ":(exclude,icase,glob)**/dist/**"] { args.push(pattern); }
     let mut bytes = checked(root, &args)?;
     let untracked = checked(root, &["ls-files", "--others", "--exclude-standard", "--exclude=node_modules/", "--exclude=target/", "--exclude=build/", "--exclude=dist/", "-z"])?;
@@ -209,8 +245,6 @@ fn repository_status(service: &WorkspaceService, root: &Path) -> Result<GitRepos
             change.selectable = false; change.reason = Some("嵌套仓库或目录，请将其作为独立仓库操作".into());
         }
     }
-    let git_dir = text(&checked(root, &["rev-parse", "--absolute-git-dir"])?)?;
-    let metadata = PathBuf::from(git_dir.trim());
     let blocked = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"].iter().find(|name| metadata.join(name).exists())
         .map(|_| "仓库处于合并、变基或拣选过程中，请先在 Git/IDE 中完成该操作".into());
     let mut version_bytes = bytes;

@@ -477,3 +477,8 @@ body:has(.ws-bottom-panel.is-resizing) * { cursor: row-resize !important; }
 .ws-recent-list strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ws-font-body); font-weight: 500; color: var(--ws-ink); }
 .ws-recent-list small { display: block; color: var(--ws-dim); font-size: var(--ws-font-small); }
 .ws-recent-list span small { margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.ws-tree-segment { border: 0; border-radius: 3px; padding: 1px 2px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.ws-tree-segment:hover, .ws-tree-segment.is-selected { background: var(--ws-hover); color: var(--ws-ink); text-decoration: underline; text-underline-offset: 3px; }
+.ws-tree-separator { color: var(--ws-dim); margin: 0 1px; }
+.ws-explorer-heading .ws-icon-button[aria-pressed='true'] { color: var(--ws-accent); background: var(--ws-hover); }

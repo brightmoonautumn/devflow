@@ -1,11 +1,13 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { basicSetup } from 'codemirror'
-import { Compartment, EditorState } from '@codemirror/state'
-import { EditorView, keymap } from '@codemirror/view'
+import { Compartment, EditorState, Prec } from '@codemirror/state'
+import { EditorView, GutterMarker, gutter, keymap } from '@codemirror/view'
 import { indentWithTab } from '@codemirror/commands'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { loadEditorLanguage } from './editorLanguages'
+import './source-editor.css'
 
 export const colors = syntaxHighlighting(HighlightStyle.define([
   { tag: [tags.keyword, tags.modifier], color: 'var(--tree-purple)' },
@@ -21,13 +23,41 @@ export const colors = syntaxHighlighting(HighlightStyle.define([
   { tag: [tags.variableName, tags.name], color: 'var(--ws-ink)' },
 ]))
 
-export type SourceEditorProps = { path: string; value: string; readonly: boolean; location?: { line: number; column: number; sequence: number }; onChange: (value: string) => void; onSave: () => void; onPosition: (line: number, column: number) => void }
+export type LineAnnotation = { from: number; to: number; label: string; id?: string }
+class AuthorMarker extends GutterMarker {
+  constructor(readonly annotation: LineAnnotation, readonly select: (id: string) => void) { super() }
+  eq(other: AuthorMarker) { return this.annotation.label === other.annotation.label && this.annotation.id === other.annotation.id }
+  toDOM() {
+    const element = document.createElement(this.annotation.id ? 'button' : 'span')
+    element.textContent = this.annotation.label
+    element.className = 'df-line-author'
+    if (element instanceof HTMLButtonElement) {
+      element.type = 'button'
+      element.title = `${this.annotation.label} · 点击查看 Git History 提交详情`
+      element.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); this.select(this.annotation.id!) })
+    }
+    return element
+  }
+}
+export type SourceEditorProps = { annotations?: LineAnnotation[]; annotationLoading?: boolean; onToggleAnnotations?: () => void; onSelectAnnotation?: (id: string) => void; path: string; value: string; readonly: boolean; location?: { line: number; column: number; sequence: number }; onChange: (value: string) => void; onSave: () => void; onPosition: (line: number, column: number) => void }
 
 /** Public editor boundary: feature code never depends on CodeMirror state or DOM APIs. */
-export default function SourceEditor({ path, value, readonly, location, onChange, onSave, onPosition }: SourceEditorProps) {
+export default function SourceEditor({ path, value, readonly, location, onChange, onSave, onPosition, annotations, annotationLoading, onToggleAnnotations, onSelectAnnotation }: SourceEditorProps) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   const editable = useRef(new Compartment())
+  const attribution = useRef(new Compartment())
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  useEffect(() => { if (!onToggleAnnotations) setMenu(null) }, [onToggleAnnotations])
+  const annotationCallbacks = useRef({ onToggleAnnotations, onSelectAnnotation })
+  annotationCallbacks.current = { onToggleAnnotations, onSelectAnnotation }
+  useEffect(() => {
+    if (!menu) return
+    const close = () => setMenu(null)
+    const keyboard = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
+    window.addEventListener('pointerdown', close); window.addEventListener('blur', close); window.addEventListener('resize', close); window.addEventListener('keydown', keyboard)
+    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('blur', close); window.removeEventListener('resize', close); window.removeEventListener('keydown', keyboard) }
+  }, [menu])
   const callbacks = useRef({ onChange, onSave, onPosition })
   callbacks.current = { onChange, onSave, onPosition }
   const initial = useRef(value)
@@ -39,7 +69,8 @@ export default function SourceEditor({ path, value, readonly, location, onChange
       parent: host.current,
       doc: initial.current,
       extensions: [
-        basicSetup, colors, language.of([]),
+        basicSetup, colors, language.of([]), attribution.current.of([]),
+        EditorView.domEventHandlers({ scroll: () => { setMenu(null); return false } }),
         /\.(?:md|markdown)$/i.test(path) ? EditorView.lineWrapping : [],
         EditorState.tabSize.of(2),
         editable.current.of([EditorState.readOnly.of(readonly), EditorView.editable.of(!readonly)]),
@@ -59,6 +90,11 @@ export default function SourceEditor({ path, value, readonly, location, onChange
           '.cm-content': { padding: '12px 0', caretColor: 'var(--ws-ink)' },
           '.cm-gutters': { backgroundColor: 'var(--ws-bg)', color: 'var(--ws-dim)', borderRight: '1px solid var(--ws-subtle-border)' },
           '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'var(--ws-hover)' },
+          '.df-author-gutter': { backgroundColor: 'var(--ws-bg)' },
+          '.df-author-gutter .cm-gutterElement': { padding: '0 7px', maxWidth: '200px', overflow: 'hidden' },
+          '.df-line-author': { font: 'inherit', color: 'var(--ws-dim)', background: 'none', border: '0', padding: '0', whiteSpace: 'pre', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', verticalAlign: 'top' },
+          'button.df-line-author': { cursor: 'pointer' },
+          'button.df-line-author:hover, button.df-line-author:focus-visible': { color: 'var(--ws-ink)', textDecoration: 'underline' },
           '.cm-cursor': { borderLeftColor: 'var(--ws-ink)' },
           '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': { backgroundColor: 'var(--ws-accent-bg) !important' },
           '.cm-panels, .cm-tooltip': { backgroundColor: 'var(--ws-surface)', color: 'var(--ws-ink)', borderColor: 'var(--ws-border)' },
@@ -93,5 +129,35 @@ export default function SourceEditor({ path, value, readonly, location, onChange
     editor.dispatch({ selection: { anchor }, effects: EditorView.scrollIntoView(anchor, { y: 'center' }) })
     editor.focus()
   }, [location])
-  return <div ref={host} className="df-source-editor" />
+  useEffect(() => {
+    const editor = view.current
+    if (!editor) return
+    const snapshot = editor.state.doc
+    const ranges = annotations ?? []
+    const markers = ranges.map(range => new AuthorMarker(range, id => annotationCallbacks.current.onSelectAnnotation?.(id)))
+    editor.dispatch({ effects: attribution.current.reconfigure(annotations ? Prec.high(gutter({
+      class: 'df-author-gutter',
+      lineMarker: (current, line) => {
+        if (!current.state.doc.eq(snapshot)) return null
+        const number = current.state.doc.lineAt(line.from).number
+        let low = 0, high = ranges.length - 1
+        while (low <= high) {
+          const middle = (low + high) >>> 1, range = ranges[middle]
+          if (number < range.from) high = middle - 1
+          else if (number > range.to) low = middle + 1
+          else return markers[middle]
+        }
+        return null
+      },
+      lineMarkerChange: update => update.docChanged,
+    })) : []) })
+  }, [annotations])
+  return <><div ref={host} className="df-source-editor" onContextMenu={event => {
+    if (!annotationCallbacks.current.onToggleAnnotations || !(event.target instanceof Element) || !event.target.closest('.cm-gutters')) return
+    event.preventDefault()
+    setMenu({ x: Math.max(0, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(0, Math.min(event.clientY, window.innerHeight - 50)) })
+  }} />{menu && onToggleAnnotations && createPortal(<div role="menu" aria-label="行提交信息" className="df-source-context-menu" style={{ left: menu.x, top: menu.y }} onPointerDown={event => event.stopPropagation()}>
+    <button autoFocus role="menuitem" onClick={() => { setMenu(null); annotationCallbacks.current.onToggleAnnotations?.() }}>{annotationLoading ? '取消读取行提交信息' : annotations ? '隐藏行提交信息' : '显示行提交信息'}</button>
+  </div>, host.current?.closest('.workspace-shell') ?? document.body)}</>
+
 }

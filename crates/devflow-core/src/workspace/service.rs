@@ -31,7 +31,7 @@ mod replace;
 pub use replace::{ReplacePreviewRequest, ReplaceApplyRequest, ReplacePreview, ReplaceOutcome};
 #[path = "git/mod.rs"]
 mod git;
-pub use git::{GitStatusRequest, GitDiffRequest, GitMutationRequest, GitCommitRequest, GitCommitApplyRequest, GitStatus, GitDiff, GitOutcome, GitCommitPreview};
+pub use git::{GitBlameRequest, GitBlame, BlameCommit, BlameRange, GitHistoryRequest, GitHistoryCommitRequest, GitHistoryDiffRequest, GitHistory, GitHistoryCommit, GitHistoryDiff, HistoryCommit, HistoryFile, GitStatusRequest, GitDiffRequest, GitMutationRequest, GitCommitRequest, GitCommitApplyRequest, GitStatus, GitDiff, GitOutcome, GitCommitPreview};
 #[path = "sharing.rs"]
 mod sharing;
 pub use sharing::{ShareCreateRequest, ShareRevokeRequest, ShareInvitation, ShareCreated, ShareReadRequest};
@@ -192,17 +192,19 @@ struct LocalGrants {
 }
 
 /// One instance is shared by HTTP and MCP; native selections grant session access.
+#[derive(Clone)]
 pub struct WorkspaceService {
     roots: Vec<PathBuf>,
-    local_grants: Mutex<LocalGrants>,
-    picker: Mutex<()>,
-    state: Mutex<State>,
-    discovery: Mutex<HashMap<PathBuf, (Instant, Discovery)>>,
-    recent_path: Mutex<Option<PathBuf>>,
-    replacement: Mutex<Option<replace::ReplacementPlan>>,
-    git_operations: Mutex<()>,
-    git_plan: Mutex<Option<git::CommitPlan>>,
-    shares: Mutex<HashMap<String, sharing::ShareGrant>>,
+    local_grants: std::sync::Arc<Mutex<LocalGrants>>,
+    picker: std::sync::Arc<Mutex<()>>,
+    state: std::sync::Arc<Mutex<State>>,
+    discovery: std::sync::Arc<Mutex<HashMap<PathBuf, (Instant, Discovery)>>>,
+    recent_path: std::sync::Arc<Mutex<Option<PathBuf>>>,
+    replacement: std::sync::Arc<Mutex<Option<replace::ReplacementPlan>>>,
+    git_operations: std::sync::Arc<std::sync::RwLock<()>>,
+    git_cache: std::sync::Arc<git::cache::GitCache>,
+    git_plan: std::sync::Arc<Mutex<Option<git::CommitPlan>>>,
+    shares: std::sync::Arc<Mutex<HashMap<String, sharing::ShareGrant>>>,
 }
 
 impl WorkspaceService {
@@ -219,15 +221,16 @@ impl WorkspaceService {
         }
         let service = Self {
             roots: canonical,
-            local_grants: Mutex::new(LocalGrants::default()),
-            picker: Mutex::new(()),
-            state: Mutex::new(State::default()),
-            discovery: Mutex::new(HashMap::new()),
-            recent_path: Mutex::new(None),
-            replacement: Mutex::new(None),
-            git_operations: Mutex::new(()),
-            git_plan: Mutex::new(None),
-            shares: Mutex::new(HashMap::new()),
+            local_grants: std::sync::Arc::new(Mutex::new(LocalGrants::default())),
+            picker: std::sync::Arc::new(Mutex::new(())),
+            state: std::sync::Arc::new(Mutex::new(State::default())),
+            discovery: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            recent_path: std::sync::Arc::new(Mutex::new(None)),
+            replacement: std::sync::Arc::new(Mutex::new(None)),
+            git_operations: std::sync::Arc::new(std::sync::RwLock::new(())),
+            git_cache: std::sync::Arc::new(git::cache::GitCache::default()),
+            git_plan: std::sync::Arc::new(Mutex::new(None)),
+            shares: std::sync::Arc::new(Mutex::new(HashMap::new())),
         };
         if let Some(path) = initial {
             let session = service.open_session(&path)?;
@@ -768,6 +771,7 @@ impl WorkspaceService {
             }
         }
         state.revision += 1;
+        self.git_cache.clear_scope();
         state.notice = self.persist_recent(&state).err().map(|err| format!("当前位置已打开，但记忆失败，下次重启可能无法恢复：{err}"));
         self.snapshot_of(&state)
     }
@@ -1023,6 +1027,7 @@ impl WorkspaceService {
         if result.is_err() {
             let _ = fs::remove_file(&temp);
         }
+        if result.is_ok() { self.git_cache.invalidate_path(target); }
         result
     }
 }

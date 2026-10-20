@@ -71,6 +71,7 @@ impl WorkspaceService {
             if result.is_err() { let _ = fs::remove_file(&target); }
             result?;
             discovery.clear();
+            self.git_cache.invalidate_path(&target);
             return Ok(WorkspaceFileMutation { path: display_path(&target), revision: state.revision });
         }
         Err(error("already_exists", "副本名称过多，请先重命名或清理已有副本"))
@@ -86,6 +87,7 @@ impl WorkspaceService {
         // Delete only a validated regular file, never a directory tree.
         fs::remove_file(&path)?;
         discovery.clear();
+        self.git_cache.invalidate_path(&path);
         Ok(WorkspaceFileMutation { path: display_path(&path), revision: state.revision })
     }
 
@@ -180,6 +182,7 @@ impl WorkspaceService {
         if result.is_err() { let _ = fs::remove_file(&temp); }
         result?;
         self.discovery.lock().map_err(|_| error("unavailable", "服务发现缓存暂不可用"))?.clear();
+        self.git_cache.invalidate_path(&path);
         self.file_snapshot(&state, &path, content)
     }
 }

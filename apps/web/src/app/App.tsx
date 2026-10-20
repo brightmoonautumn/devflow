@@ -44,6 +44,11 @@ export function App() {
   const [explorerOpen, setExplorerOpen] = useState(() => typeof savedLayout.sidebarOpen === 'boolean' ? savedLayout.sidebarOpen : window.matchMedia('(min-width: 720px)').matches)
   const [sidebarView, setSidebarView] = useState<'explorer' | 'search' | 'git'>(() => savedLayout.sidebarView === 'search' || savedLayout.sidebarView === 'git' ? savedLayout.sidebarView : 'explorer')
   useEffect(() => { writeViewState('devflow.workbench-layout.v1', { sidebarOpen: explorerOpen, sidebarView }) }, [explorerOpen, sidebarView])
+  const [historyRequest, setHistoryRequest] = useState(0)
+  const openHistory = useCallback(() => {
+    setHistoryRequest(value => value + 1)
+    if (window.matchMedia('(max-width: 719px)').matches) setExplorerOpen(false)
+  }, [])
   const [diffRequest, setDiffRequest] = useState<{ diff: GitDiff; sequence: number } | null>(null)
   const openDiff = useCallback((diff: GitDiff) => { setDiffRequest(current => ({ diff, sequence: (current?.sequence ?? 0) + 1 })); if (window.matchMedia('(max-width: 719px)').matches) setExplorerOpen(false) }, [])
   const [fileRequest, setFileRequest] = useState<FileOpenRequest | null>(null)
@@ -284,9 +289,9 @@ export function App() {
         </div>
         <div className="activity-secondary"><button className="activity-button" aria-label="使用说明" title="使用说明" onClick={() => setPanel({ title: '使用说明', description: '点击服务卡片查看运行输出，点击箭头展开目录和启动入口。点击启动直接使用已保存或默认配置，更多操作中的“启动配置”可保存 JVM 参数、程序参数和 Spring Profile；支持停止项目进程树及向运行中的 Java 应用附加 Arthas。底部面板可拖拽调整高度。Node.js 服务支持 npm/pnpm/yarn 启动、停止和运行输出。' })}><CircleHelp size={19} /></button>{!readOnlyShare && <button className="activity-button" aria-label="设置" title="设置" onClick={explainWorkspace}><Settings2 size={19} /></button>}</div>
       </nav>
-      <WorkspaceTree key={shareError ? 'expired' : 'workspace'} open={explorerOpen} view={sidebarView} onOpenFile={openFile} onOpenDiff={openDiff} data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} />
+      <WorkspaceTree key={shareError ? 'expired' : 'workspace'} open={explorerOpen} view={sidebarView} onOpenFile={openFile} onOpenDiff={openDiff} onOpenHistory={openHistory} data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} />
       <div className="editor-area">
-        <FileWorkbench key={shareError ? 'expired' : 'workspace'} workspace={data} openRequest={fileRequest} diffRequest={diffRequest} onSaveStatusChange={setEditorSaveStatus} onOpenFile={path => openFile(path, true)}>
+        <FileWorkbench key={shareError ? 'expired' : 'workspace'} workspace={data} openRequest={fileRequest} diffRequest={diffRequest} historyRequest={historyRequest} onOpenDiff={openDiff} onSaveStatusChange={setEditorSaveStatus} onOpenFile={path => openFile(path, true)}>
           <main id="projects" className="main-content">
             <WorkspacePage key={data?.folders.map(folder => folder.path).join('|') ?? 'empty'} query={query} onQueryChange={setQuery} data={data} loading={loading} monitoringEnabled={connected} outputProjectKey={panel?.runtimeProject ? projectKey(panel.runtimeProject) : undefined} onRefresh={() => void load()} onConfigure={() => manage(hasWorkspace ? 'add_folder' : 'open')} onAction={projectAction} />
           </main>

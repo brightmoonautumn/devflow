@@ -83,7 +83,8 @@ impl WorkspaceService {
     pub fn git_mutate(&self, request: GitMutationRequest, authenticated: bool) -> Result<GitOutcome> {
         self.git_roots(request.expected_revision, authenticated)?;
         validate_selections(&request.selections)?;
-        let _operations = self.git_operations.lock().map_err(|_| error("unavailable", "Git 操作暂不可用"))?;
+        let _operations = self.git_operations.write().map_err(|_| error("unavailable", "Git 操作暂不可用"))?;
+        let _invalidate = cache::Invalidate { cache: &self.git_cache, roots: request.selections.iter().map(|item| PathBuf::from(&item.repository)).collect() };
         let mut prepared = Vec::new();
         for selection in &request.selections {
             let repo = selected(self, selection, request.expected_revision)?;
@@ -143,7 +144,7 @@ impl WorkspaceService {
         self.git_roots(request.expected_revision, authenticated)?;
         validate_selections(&request.selections)?;
         if request.message.trim().is_empty() || request.message.len() > 32 * 1024 || request.message.contains('\0') { return Err(error("invalid_query", "请输入不超过 32 KiB 的提交信息")); }
-        let _operations = self.git_operations.lock().map_err(|_| error("unavailable", "Git 操作暂不可用"))?;
+        let _operations = self.git_operations.write().map_err(|_| error("unavailable", "Git 操作暂不可用"))?;
         let mut repos = Vec::new(); let mut previews = Vec::new(); let mut bytes = 0;
         for selection in &request.selections {
             let repo = selected(self, selection, request.expected_revision)?;
@@ -177,12 +178,13 @@ impl WorkspaceService {
 
     pub fn git_commit_apply(&self, request: GitCommitApplyRequest, authenticated: bool) -> Result<GitOutcome> {
         self.git_roots(request.expected_revision, authenticated)?;
-        let _operations = self.git_operations.lock().map_err(|_| error("unavailable", "Git 操作暂不可用"))?;
+        let _operations = self.git_operations.write().map_err(|_| error("unavailable", "Git 操作暂不可用"))?;
         let mut stored = self.git_plan.lock().map_err(|_| error("unavailable", "提交计划暂不可用"))?;
         let plan = stored.as_ref().ok_or_else(|| error("conflict", "提交预览已失效，请重新预览"))?;
         if plan.id != request.plan_id || plan.revision != request.expected_revision || plan.created.elapsed() > Duration::from_secs(300) { return Err(error("conflict", "提交预览过期或工作区已改变")); }
         for repo in &plan.repos { preflight(self, repo, request.expected_revision)?; }
         let plan = stored.take().ok_or_else(|| error("conflict", "提交预览已失效"))?;
+        let _invalidate = cache::Invalidate { cache: &self.git_cache, roots: plan.repos.iter().map(|repo| repo.root.clone()).collect() };
         let mut results = Vec::new();
         for repo in plan.repos {
             let paths = selection_paths(&repo);

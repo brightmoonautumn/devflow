@@ -31,6 +31,10 @@ pub(crate) fn response<T: serde::Serialize>(result: Result<T, WorkspaceError>) -
 pub async fn health() -> Json<Value> {
     Json(json!({"status":"ok","name":"devflow","version":env!("CARGO_PKG_VERSION")}))
 }
+pub async fn git_repositories(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitStatusRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_repositories(request, authenticated)).await)
+}
 pub async fn git_status(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitStatusRequest>) -> ApiResult {
     let authenticated = security::authenticated(&headers, &state);
     response(call_core(state, move |engine| engine.workspace.git_status(request, authenticated)).await)
@@ -38,6 +42,22 @@ pub async fn git_status(State(state): State<Arc<AppState>>, headers: HeaderMap, 
 pub async fn git_diff(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitDiffRequest>) -> ApiResult {
     let authenticated = security::authenticated(&headers, &state);
     response(call_core(state, move |engine| engine.workspace.git_diff(request, authenticated)).await)
+}
+pub async fn git_blame(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitBlameRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_blame(request, authenticated)).await)
+}
+pub async fn git_history(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitHistoryRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_history(request, authenticated)).await)
+}
+pub async fn git_history_commit(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitHistoryCommitRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_history_commit(request, authenticated)).await)
+}
+pub async fn git_history_diff(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitHistoryDiffRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_history_diff(request, authenticated)).await)
 }
 pub async fn git_mutate(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitMutationRequest>) -> ApiResult {
     let authenticated = security::authenticated(&headers, &state);

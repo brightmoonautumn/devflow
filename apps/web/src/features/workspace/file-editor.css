@@ -2,6 +2,7 @@
 .file-workbench [hidden] { display: none !important; }
 .file-tabbar { display: flex; flex-shrink: 0; min-width: 0; min-height: 36px; background: var(--ws-surface); border-bottom: 1px solid var(--ws-border); }
 .file-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; }
+.file-share-status { display: inline-flex; align-items: center; flex-shrink: 0; padding: 0 10px; color: var(--ws-muted); font-size: var(--ws-font-small); white-space: nowrap; }
 .file-tab-actions, .file-editor-actions { display: flex; align-items: center; flex-shrink: 0; gap: 5px; }
 .file-tab-actions { padding: 0 8px; border-left: 1px solid var(--ws-subtle-border); }
 .file-tab-group { display: flex; flex-shrink: 0; align-items: center; max-width: 250px; border-right: 1px solid var(--ws-subtle-border); border-top: 2px solid transparent; }

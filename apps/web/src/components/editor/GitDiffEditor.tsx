@@ -13,7 +13,7 @@ const diffConfig = { scanLimit: 500, timeout: 100 }
 const collapseUnchanged = { margin: 3, minSize: 12 }
 export type DiffSnapshot = { path: string; before: string; after: string }
 
-export default function GitDiffEditor({ path, before, after, onRevert, reverting = false }: { path: string; before: string; after: string; onRevert?: (content: string, snapshot: DiffSnapshot) => void; reverting?: boolean }) {
+export default function GitDiffEditor({ path, before, after, beforeLabel = 'HEAD · 原始内容', afterLabel = '工作区 · 当前内容', onRevert, reverting = false }: { path: string; before: string; after: string; beforeLabel?: string; afterLabel?: string; onRevert?: (content: string, snapshot: DiffSnapshot) => void; reverting?: boolean }) {
   const host = useRef<HTMLDivElement>(null)
   const instance = useRef<MergeView | EditorView | null>(null)
   const [wide, setWide] = useState<boolean | null>(null)
@@ -134,7 +134,7 @@ export default function GitDiffEditor({ path, before, after, onRevert, reverting
         <button type="button" title="下一处变化" aria-label="下一处变化" disabled={!position.total} onClick={() => navigate.current(1)}><ArrowDown size={14} /></button>
       </div>
     </div>
-    {split && <div className="git-diff-labels"><span>HEAD · 原始内容</span><span>工作区 · 当前内容</span></div>}
+    {split && <div className="git-diff-labels"><span>{beforeLabel}</span><span>{afterLabel}</span></div>}
     <div ref={host} className="git-diff-surface" />
   </div>
 }
