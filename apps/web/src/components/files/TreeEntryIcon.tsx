@@ -1,3 +1,4 @@
+import './tree-entry-icon.css'
 import { Braces, Coffee, Database, File, FileCode2, FileImage, FileJson2, FileText, Folder, FolderCode, FolderCog, FolderOpen, GitBranch, Package, Settings2, Terminal, type LucideIcon } from 'lucide-react'
 
 type IconStyle = { icon: LucideIcon; tone: string }

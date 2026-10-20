@@ -1,0 +1,8 @@
+.ws-tree-icon { flex-shrink: 0; color: var(--ws-dim); }
+.ws-tree-icon--blue { color: var(--tree-blue); }
+.ws-tree-icon--gold { color: var(--tree-gold); }
+.ws-tree-icon--orange { color: var(--tree-orange); }
+.ws-tree-icon--green { color: var(--tree-green); }
+.ws-tree-icon--teal { color: var(--tree-teal); }
+.ws-tree-icon--purple { color: var(--tree-purple); }
+.ws-tree-icon.is-folder { fill: currentColor; fill-opacity: .22; }

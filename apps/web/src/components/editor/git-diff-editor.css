@@ -1,0 +1,27 @@
+.git-diff-labels{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);flex-shrink:0;border-bottom:1px solid var(--ws-border);font-size:11px;color:var(--ws-muted);background:var(--ws-surface)}
+.git-diff-labels>span{padding:5px 12px}
+.git-diff-labels>span+span{border-left:1px solid var(--ws-border)}
+.git-diff-editor{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden}
+.git-diff-controls{display:flex;align-items:center;gap:8px;flex-shrink:0;padding:3px 8px;border-bottom:1px solid var(--ws-subtle-border);font-size:var(--ws-font-caption);color:var(--ws-muted)}
+.git-diff-controls>div{display:flex;gap:2px}
+.git-diff-controls>span{margin-left:auto;font-variant-numeric:tabular-nums}
+.git-diff-controls button{display:grid;place-items:center;width:26px;height:25px;padding:0;background:transparent;color:var(--ws-muted);border-radius:4px}
+.git-diff-controls button:hover:not(:disabled){background:var(--ws-hover);color:var(--ws-ink)}
+.git-diff-controls button[aria-pressed='true']{background:var(--ws-accent-bg);color:var(--ws-accent)}
+.git-diff-surface{position:relative;flex:1;min-width:0;min-height:0;overflow:hidden}
+/* MergeView uses ONE outer vertical viewport to align and virtualize both sides.
+   Its editors must grow naturally; clipping or fixing their height breaks scroll. */
+.git-diff-surface>.cm-mergeView{position:absolute;inset:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.git-diff-surface .cm-mergeViewEditors{display:flex;align-items:stretch;min-height:100%}
+.git-diff-surface .cm-mergeViewEditor{min-width:0}
+.git-diff-surface .cm-mergeViewEditor+.cm-mergeViewEditor{border-left:1px solid var(--ws-border)}
+.git-diff-surface .cm-merge-revert{width:28px;background:var(--ws-surface);border-inline:1px solid var(--ws-subtle-border)}
+.git-diff-surface .cm-merge-revert button{height:24px;padding:0;color:var(--ws-accent);font:16px var(--font-ui);border-radius:3px}
+.git-diff-surface .cm-merge-revert button:hover:not(:disabled){background:var(--ws-accent-bg)}
+.git-diff-surface>.cm-editor{position:absolute;inset:0;height:100%}
+.git-diff-surface .cm-scroller{overscroll-behavior:contain}
+.git-diff-surface .cm-merge-a .cm-changedLine,.git-diff-surface .cm-deletedChunk{background:color-mix(in srgb,var(--ws-error) 12%,transparent)}
+.git-diff-surface .cm-merge-b .cm-changedLine,.git-diff-surface .cm-inlineChangedLine{background:color-mix(in srgb,var(--tree-green) 12%,transparent)}
+.git-diff-surface .cm-merge-a .cm-changedText,.git-diff-surface .cm-deletedText{background:color-mix(in srgb,var(--ws-error) 22%,transparent)}
+.git-diff-surface .cm-merge-b .cm-changedText,.git-diff-surface .cm-insertedText{background:color-mix(in srgb,var(--tree-green) 22%,transparent)}
+.git-diff-surface .cm-collapsedLines{color:var(--ws-muted);background:var(--ws-hover);border-color:var(--ws-border);font-family:var(--font-ui)}

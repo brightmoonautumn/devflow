@@ -84,6 +84,7 @@ export default function TaskRows({
   className,
   onToggleRow,
   onActivateRow,
+  activeRowKey,
   renderActions,
 }: {
   variant?: string;
@@ -92,6 +93,7 @@ export default function TaskRows({
   className?: string;
   onToggleRow?: (key: string, open: boolean) => void;
   onActivateRow?: (row: TaskRow) => void;
+  activeRowKey?: string;
   renderActions?: (row: TaskRow) => ReactNode;
 }) {
   const [manualOpen, setManualOpen] = useState<Record<string, boolean>>({});
@@ -124,6 +126,7 @@ export default function TaskRows({
           <div
             key={row.key}
             data-status={row.status}
+            data-active={row.key === activeRowKey ? 'true' : undefined}
             onClick={onActivateRow ? event => { if (!(event.target as Element).closest('button, a, input, select, textarea')) onActivateRow(row); } : undefined}
             className={`bui-task-row self-stretch transition-[border-radius,background-color] duration-300 hover:bg-inset ${
               list ? "border-b border-line last:border-0" : "bg-surface shadow-card"
@@ -139,6 +142,7 @@ export default function TaskRows({
               aria-expanded={onActivateRow ? undefined : open}
               aria-controls={onActivateRow ? undefined : detailsId}
               aria-label={`${row.label} ${onActivateRow ? '查看运行输出' : '项目详情'}`}
+              aria-current={row.key === activeRowKey ? 'true' : undefined}
               onClick={() => {
                 if (onActivateRow) { onActivateRow(row); return; }
                 setManualOpen((current) => ({ ...current, [row.key]: !open }));

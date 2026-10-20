@@ -17,12 +17,13 @@ type Props = {
   data: WorkspaceResponse | null
   loading: boolean
   monitoringEnabled: boolean
+  outputProjectKey?: string
   onRefresh: () => void
   onConfigure: () => void
   onAction: (project: Project, title: string) => Promise<void>
 }
 
-export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, monitoringEnabled, onRefresh, onConfigure, onAction }: Props) {
+export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, monitoringEnabled, outputProjectKey, onRefresh, onConfigure, onAction }: Props) {
   const [filter, setFilter] = useState<Filter>('all')
   const [menu, setMenu] = useState<string | null>(null)
   const [pendingActions, setPendingActions] = useState<Record<string, PendingAction>>({})
@@ -133,7 +134,7 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
       <div className="ws-filters" role="group" aria-label="项目类型">{(['all', 'maven', 'node'] as const).map(kind => <button key={kind} aria-pressed={filter === kind} onClick={() => setFilter(kind)}>{kind === 'all' ? '全部' : kind === 'maven' ? 'Maven' : 'Node.js'}</button>)}</div>
     </div>
     <div className="ws-project-list" aria-busy={loading}>
-      {rows.length > 0 && <TaskRows variant="Cards" className="ws-service-cards" rows={rows} labels={{ completed: '已完成', failed: '失败' }} renderActions={renderProjectActions} onActivateRow={row => { const project = projectsByPath.get(row.key); if (project) onAction(project, '运行输出') }} />}
+      {rows.length > 0 && <TaskRows variant="Cards" className="ws-service-cards" rows={rows} activeRowKey={outputProjectKey} labels={{ completed: '已完成', failed: '失败' }} renderActions={renderProjectActions} onActivateRow={row => { const project = projectsByPath.get(row.key); if (project) onAction(project, '运行输出') }} />}
       {filtered.length === 0 && <div className="ws-empty"><div className="ws-empty-icon">{projects.length ? <Search size={24} strokeWidth={1.4} /> : <FolderOpen size={26} strokeWidth={1.4} />}</div><h2>{projects.length ? '没有匹配的服务' : loading ? '正在读取工作区…' : data?.workspaceFile && !data.folders.length ? '工作区还没有文件夹' : data?.workspaceRoot ? '还没有发现可启动服务' : '从一个工作区开始'}</h2><p>{projects.length ? '试试其他名称，或调整项目类型。' : data?.workspaceFile && !data.folders.length ? '添加本地文件夹到工作区，保存后也可以在 VS Code 中打开。' : data?.workspaceRoot ? '只列出具有真实 Java 启动入口或 Node.js 启动脚本的工程。' : '配置本地项目目录，让项目井然有序。'}</p>{projects.length ? <button className="ws-outline-button" onClick={() => { setQuery(''); setFilter('all') }}><X size={13} />清除筛选</button> : !loading && !readOnlyShare && <button className="ws-outline-button" onClick={onConfigure}><FolderOpen size={14} />{data?.workspaceFile && !data.folders.length ? '添加文件夹' : '配置工作区'}</button>}</div>}
     </div>
   </section>
