@@ -48,6 +48,11 @@ export function readWorkspaceFile(path: string, expectedRevision: number, signal
 export function writeWorkspaceFile(path: string, expectedRevision: number, expectedContent: string, content: string) {
   return request<WorkspaceFile>('/api/workspace/file', { method: 'PUT', body: JSON.stringify({ path, expectedRevision, expectedContent, content }) })
 }
+export function mutateWorkspaceFile(path: string, expectedRevision: number, operation: 'copy' | 'delete') {
+  return request<{ path: string; revision: number }>(operation === 'copy' ? '/api/workspace/file/copy' : '/api/workspace/file', {
+    method: operation === 'copy' ? 'POST' : 'DELETE', body: JSON.stringify({ path, expectedRevision }),
+  })
+}
 export type WorkspaceOperation = { type: 'open' | 'open_recent' | 'create' | 'remove_folder'; path: string } | { type: 'create_from_folder'; path: string; folder: string } | { type: 'close' } | { type: 'add_folder'; path: string; name?: string } | { type: 'save'; path?: string }
 
 export class ApiError extends Error {
@@ -77,13 +82,14 @@ function getToken() {
     }).catch(error => { session = null; throw error })
   return session
 }
-async function request<T>(url: string, options: RequestInit = {}, retry = true): Promise<T> {
+export async function request<T>(url: string, options: RequestInit = {}, retry = true): Promise<T> {
   const token = await getToken()
   const headers = new Headers(options.headers)
   headers.set('Authorization', `Bearer ${token}`)
   if (options.body) headers.set('Content-Type', 'application/json')
   const response = await fetch(url, { ...options, signal: options.signal ?? AbortSignal.timeout(15000), headers, cache: 'no-store' })
   if (response.status === 401 && retry) { session = null; return request<T>(url, options, false) }
+  if (url.startsWith('/api/workspace/git/') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) throw new ApiError('backend_outdated', '当前后端尚不支持 Git 管理，请更新并重启后端。')
   if (url.startsWith('/api/workspace/replace/') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) {
     throw new ApiError('backend_outdated', '当前后端尚不支持搜索替换，请更新并重启后端后重试。')
   }
@@ -91,7 +97,7 @@ async function request<T>(url: string, options: RequestInit = {}, retry = true):
     throw new ApiError('backend_outdated', '当前后端尚不支持文件搜索，请更新并重启后端后重试。')
   }
   if (url.startsWith('/api/workspace/file') && (response.ok || response.status === 404 || response.status === 405) && !response.headers.get('content-type')?.includes('application/json')) {
-    throw new ApiError('backend_outdated', '当前后端尚不支持文件编辑，请通过 DevFlow-Restart.cmd 更新并重启后重试。')
+    throw new ApiError('backend_outdated', '当前后端尚不支持此文件操作，请通过 DevFlow-Restart.cmd 更新并重启后重试。')
   }
   if (!response.ok) {
     if (response.status === 404 && url === '/api/workspace/pick') {

@@ -1,37 +1,24 @@
 import { useEffect, useRef } from 'react'
 import { basicSetup } from 'codemirror'
-import { Compartment, EditorState, type Extension } from '@codemirror/state'
+import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { indentWithTab } from '@codemirror/commands'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
-import { javascript } from '@codemirror/lang-javascript'
-import { json } from '@codemirror/lang-json'
-import { html } from '@codemirror/lang-html'
-import { css } from '@codemirror/lang-css'
-import { java } from '@codemirror/lang-java'
-import { markdown } from '@codemirror/lang-markdown'
-import { xml } from '@codemirror/lang-xml'
+import { loadEditorLanguage } from './editorLanguages'
 
-function language(path: string): Extension {
-  const ext = path.split('.').at(-1)?.toLowerCase()
-  if (['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'].includes(ext ?? '')) return javascript({ typescript: ext === 'ts' || ext === 'tsx', jsx: ext === 'jsx' || ext === 'tsx' })
-  if (ext === 'json' || ext === 'code-workspace') return json()
-  if (ext === 'vue' || ext === 'html' || ext === 'htm') return html()
-  if (ext === 'css') return css()
-  if (ext === 'java') return java()
-  if (ext === 'md' || ext === 'markdown') return markdown()
-  if (ext === 'xml' || ext === 'svg') return xml()
-  return []
-}
-
-const colors = syntaxHighlighting(HighlightStyle.define([
+export const colors = syntaxHighlighting(HighlightStyle.define([
   { tag: [tags.keyword, tags.modifier], color: 'var(--tree-purple)' },
   { tag: [tags.string, tags.attributeValue], color: 'var(--tree-green)' },
   { tag: [tags.number, tags.bool, tags.null], color: 'var(--tree-orange)' },
   { tag: [tags.comment, tags.meta], color: 'var(--ws-dim)' },
   { tag: [tags.typeName, tags.className, tags.tagName], color: 'var(--tree-blue)' },
   { tag: [tags.attributeName, tags.propertyName], color: 'var(--tree-teal)' },
+  { tag: tags.invalid, color: 'var(--ws-error)' },
+  { tag: tags.annotation, color: 'var(--tree-orange)' },
+  { tag: [tags.labelName, tags.url], color: 'var(--tree-blue)' },
+  { tag: [tags.operator, tags.punctuation], color: 'var(--ws-muted)' },
+  { tag: [tags.variableName, tags.name], color: 'var(--ws-ink)' },
 ]))
 
 type Props = { path: string; value: string; readonly: boolean; location?: { line: number; column: number; sequence: number }; onChange: (value: string) => void; onSave: () => void; onPosition: (line: number, column: number) => void }
@@ -46,11 +33,13 @@ export default function SourceEditor({ path, value, readonly, location, onChange
   const initial = useRef(value)
   useEffect(() => {
     if (!host.current) return
+    const language = new Compartment()
+    let disposed = false
     const editor = new EditorView({
       parent: host.current,
       doc: initial.current,
       extensions: [
-        basicSetup, colors, language(path),
+        basicSetup, colors, language.of([]),
         EditorState.tabSize.of(2),
         editable.current.of([EditorState.readOnly.of(readonly), EditorView.editable.of(!readonly)]),
         EditorView.contentAttributes.of({ 'aria-label': `编辑 ${path}`, spellcheck: 'false' }),
@@ -77,7 +66,10 @@ export default function SourceEditor({ path, value, readonly, location, onChange
       ],
     })
     view.current = editor
-    return () => { view.current = null; editor.destroy() }
+    void loadEditorLanguage(path).then(extension => {
+      if (!disposed) editor.dispatch({ effects: language.reconfigure(extension) })
+    }).catch(() => { /* Keep plain text editing available if a language chunk cannot load. */ })
+    return () => { disposed = true; view.current = null; editor.destroy() }
     // Each tab keeps its editor instance, undo stack and scroll position until closed.
   }, [path])
   useEffect(() => {

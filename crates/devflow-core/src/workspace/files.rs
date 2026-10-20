@@ -10,6 +10,13 @@ pub struct WorkspaceFileReadRequest {
     pub expected_revision: u64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileMutation {
+    pub path: String,
+    pub revision: u64,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspaceFileWriteRequest {
@@ -33,6 +40,55 @@ pub struct WorkspaceFile {
 }
 
 impl WorkspaceService {
+    pub fn copy_file(&self, request: WorkspaceFileReadRequest, authenticated: bool) -> Result<WorkspaceFileMutation> {
+        if !authenticated { return Err(error("unauthorized", "需要有效的访问令牌")); }
+        let state = self.lock()?;
+        let path = self.file_path(&state, &request.path, request.expected_revision)?;
+        let mut discovery = self.discovery.lock().map_err(|_| error("unavailable", "服务发现缓存暂不可用"))?;
+        let directory = parent(&path)?;
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        let extension = path.extension().map(|value| format!(".{}", value.to_string_lossy())).unwrap_or_default();
+        for index in 1..=1000 {
+            let suffix = if index == 1 { " 副本".to_owned() } else { format!(" 副本 ({index})") };
+            let target = directory.join(format!("{stem}{suffix}{extension}"));
+            // Authorize the existing parent; create_new refuses every existing target, including links.
+            if self.authorize(directory)?.as_path() != directory { return Err(error("invalid_path", "文件夹路径已改变")); }
+            let mut output = match fs::OpenOptions::new().write(true).create_new(true).open(&target) {
+                Ok(file) => file,
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(err) => return Err(err.into()),
+            };
+            let result = (|| -> Result<()> {
+                let checked = self.file_path(&state, &request.path, request.expected_revision)?;
+                if checked != path { return Err(error("file_conflict", "源文件路径已改变")); }
+                let mut input = fs::File::open(&path)?;
+                if !input.metadata()?.is_file() { return Err(error("invalid_path", "只能复制普通文件")); }
+                std::io::copy(&mut input, &mut output)?;
+                output.sync_all()?;
+                Ok(())
+            })();
+            drop(output);
+            if result.is_err() { let _ = fs::remove_file(&target); }
+            result?;
+            discovery.clear();
+            return Ok(WorkspaceFileMutation { path: display_path(&target), revision: state.revision });
+        }
+        Err(error("already_exists", "副本名称过多，请先重命名或清理已有副本"))
+    }
+
+    pub fn delete_file(&self, request: WorkspaceFileReadRequest, authenticated: bool) -> Result<WorkspaceFileMutation> {
+        if !authenticated { return Err(error("unauthorized", "需要有效的访问令牌")); }
+        let state = self.lock()?;
+        let path = self.file_path(&state, &request.path, request.expected_revision)?;
+        let snapshot = self.file_snapshot(&state, &path, String::new())?;
+        if snapshot.readonly { return Err(error("permission_denied", snapshot.readonly_reason.unwrap_or_default())); }
+        let mut discovery = self.discovery.lock().map_err(|_| error("unavailable", "服务发现缓存暂不可用"))?;
+        // Delete only a validated regular file, never a directory tree.
+        fs::remove_file(&path)?;
+        discovery.clear();
+        Ok(WorkspaceFileMutation { path: display_path(&path), revision: state.revision })
+    }
+
     fn file_path(&self, state: &State, requested: &str, revision: u64) -> Result<PathBuf> {
         if state.revision != revision {
             return Err(error("conflict", "工作区已改变，请重新打开文件"));
@@ -183,6 +239,63 @@ mod tests {
                 let _ = fs::remove_dir_all(&self.0);
             }
         }
+    }
+
+    #[test]
+    fn copies_binary_chinese_files_without_overwriting_and_deletes_only_the_copy() {
+        let fixture = Fixture::new();
+        let source = fixture.0.join("中文 文件.bin");
+        let bytes = [0, 0xff, 0xfe, 42];
+        fs::write(&source, bytes).unwrap();
+        let service = fixture.service();
+        let revision = service.lock().unwrap().revision;
+        let request = || WorkspaceFileReadRequest { path: display_path(&source), expected_revision: revision };
+        let first = service.copy_file(request(), true).unwrap();
+        let second = service.copy_file(request(), true).unwrap();
+        assert_eq!(first.path, display_path(&fixture.0.join("中文 文件 副本.bin")));
+        assert_eq!(second.path, display_path(&fixture.0.join("中文 文件 副本 (2).bin")));
+        assert_eq!(fs::read(&first.path).unwrap(), bytes);
+        assert_eq!(fs::read(&second.path).unwrap(), bytes);
+        service.delete_file(WorkspaceFileReadRequest { path: first.path.clone(), expected_revision: revision }, true).unwrap();
+        assert!(!Path::new(&first.path).exists());
+        assert_eq!(fs::read(source).unwrap(), bytes);
+        assert_eq!(service.lock().unwrap().revision, revision);
+    }
+
+    #[test]
+    fn file_mutations_require_auth_revision_membership_and_regular_files() {
+        let fixture = Fixture::new();
+        let outside = Fixture::new();
+        fs::write(fixture.0.join("source.txt"), "original").unwrap();
+        fs::write(outside.0.join("private.txt"), "private").unwrap();
+        fs::create_dir(fixture.0.join("node_modules")).unwrap();
+        fs::write(fixture.0.join("node_modules/file.txt"), "dependency").unwrap();
+        let service = WorkspaceService::new(vec![fixture.0.clone(), outside.0.clone()], Some(fixture.0.clone())).unwrap();
+        let revision = service.lock().unwrap().revision;
+        for copy in [true, false] {
+            let mutate = |path: &Path, expected_revision, authenticated| {
+                let request = WorkspaceFileReadRequest { path: display_path(path), expected_revision };
+                if copy { service.copy_file(request, authenticated) } else { service.delete_file(request, authenticated) }
+            };
+            assert_eq!(mutate(&fixture.0.join("source.txt"), revision, false).unwrap_err().code, "unauthorized");
+            assert_eq!(mutate(&fixture.0.join("source.txt"), revision + 1, true).unwrap_err().code, "conflict");
+            assert_eq!(mutate(&outside.0.join("private.txt"), revision, true).unwrap_err().code, "outside_workspace");
+            assert_eq!(mutate(&fixture.0, revision, true).unwrap_err().code, "invalid_path");
+            assert_eq!(mutate(&fixture.0.join("node_modules/file.txt"), revision, true).unwrap_err().code, "excluded_directory");
+        }
+        assert_eq!(fs::read_to_string(fixture.0.join("source.txt")).unwrap(), "original");
+    }
+
+    #[test]
+    fn deleting_active_workspace_configuration_is_forbidden() {
+        let fixture = Fixture::new();
+        let config = fixture.0.join("active.code-workspace");
+        fs::write(&config, r#"{"folders":[{"path":"."}]}"#).unwrap();
+        let service = WorkspaceService::new(vec![fixture.0.clone()], Some(config.clone())).unwrap();
+        let revision = service.lock().unwrap().revision;
+        let result = service.delete_file(WorkspaceFileReadRequest { path: display_path(&config), expected_revision: revision }, true);
+        assert_eq!(result.unwrap_err().code, "permission_denied");
+        assert!(config.is_file());
     }
 
     #[test]

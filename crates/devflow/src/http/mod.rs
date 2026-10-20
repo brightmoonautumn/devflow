@@ -31,6 +31,26 @@ fn response<T: serde::Serialize>(result: Result<T, WorkspaceError>) -> ApiResult
 pub async fn health() -> Json<Value> {
     Json(json!({"status":"ok","name":"devflow","version":env!("CARGO_PKG_VERSION")}))
 }
+pub async fn git_status(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitStatusRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_status(request, authenticated)).await)
+}
+pub async fn git_diff(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitDiffRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_diff(request, authenticated)).await)
+}
+pub async fn git_mutate(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitMutationRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_mutate(request, authenticated)).await)
+}
+pub async fn git_commit_preview(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitCommitRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_commit_preview(request, authenticated)).await)
+}
+pub async fn git_commit_apply(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitCommitApplyRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_commit_apply(request, authenticated)).await)
+}
 pub async fn session(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({"token": state.api_token}))
 }
@@ -94,6 +114,20 @@ pub async fn workspace_file_write(
 ) -> ApiResult {
     let authenticated = security::authenticated(&headers, &state);
     response(call_core(state, move |engine| engine.workspace.write_file(request, authenticated)).await)
+}
+pub async fn workspace_file_copy(
+    State(state): State<Arc<AppState>>, headers: HeaderMap,
+    Json(request): Json<devflow_core::workspace::WorkspaceFileReadRequest>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.copy_file(request, authenticated)).await)
+}
+pub async fn workspace_file_delete(
+    State(state): State<Arc<AppState>>, headers: HeaderMap,
+    Json(request): Json<devflow_core::workspace::WorkspaceFileReadRequest>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.delete_file(request, authenticated)).await)
 }
 pub async fn workspace_replace_preview(
     State(state): State<Arc<AppState>>, headers: HeaderMap,

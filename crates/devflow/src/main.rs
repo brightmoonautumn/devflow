@@ -85,12 +85,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/workspace/search", post(http::workspace_search))
         .route("/api/workspace/replace/preview", post(http::workspace_replace_preview))
         .route("/api/workspace/replace/apply", post(http::workspace_replace_apply))
+        .route("/api/workspace/git/status", post(http::git_status))
+        .route("/api/workspace/git/diff", post(http::git_diff))
+        .route("/api/workspace/git/mutate", post(http::git_mutate))
+        .route("/api/workspace/git/commit/preview", post(http::git_commit_preview))
+        .route("/api/workspace/git/commit/apply", post(http::git_commit_apply))
         .route(
             "/api/workspace/file",
             get(http::workspace_file_read)
                 .put(http::workspace_file_write)
+                .delete(http::workspace_file_delete)
                 .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
+        .route("/api/workspace/file/copy", post(http::workspace_file_copy))
         .route("/api/runtime/projects", get(http::runtime_projects))
         .route("/api/runtime/self", get(http::devflow_metrics))
         .route("/api/runtime/java", post(http::java_execute))

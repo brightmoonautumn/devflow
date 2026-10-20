@@ -10,6 +10,7 @@
     "typecheck": "tsc -b"
   },
   "dependencies": {
+    "@codemirror/merge": "6.12.2",
     "@codemirror/commands": "^6.8.0",
     "@codemirror/lang-css": "^6.3.0",
     "@codemirror/lang-html": "^6.4.0",
@@ -19,6 +20,7 @@
     "@codemirror/lang-markdown": "^6.3.0",
     "@codemirror/lang-xml": "^6.1.0",
     "@codemirror/language": "^6.11.0",
+    "@codemirror/language-data": "^6.5.2",
     "@codemirror/state": "^6.5.0",
     "@codemirror/view": "^6.36.0",
     "@lezer/highlight": "^1.2.0",

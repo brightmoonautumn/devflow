@@ -22,13 +22,16 @@ const MAX_FOLDERS: usize = 512;
 
 #[path = "files.rs"]
 mod files;
-pub use files::{WorkspaceFile, WorkspaceFileReadRequest, WorkspaceFileWriteRequest};
+pub use files::{WorkspaceFile, WorkspaceFileMutation, WorkspaceFileReadRequest, WorkspaceFileWriteRequest};
 #[path = "search.rs"]
 mod search;
 pub use search::{WorkspaceSearchRequest, WorkspaceSearch};
 #[path = "replace.rs"]
 mod replace;
 pub use replace::{ReplacePreviewRequest, ReplaceApplyRequest, ReplacePreview, ReplaceOutcome};
+#[path = "git/mod.rs"]
+mod git;
+pub use git::{GitStatusRequest, GitDiffRequest, GitMutationRequest, GitCommitRequest, GitCommitApplyRequest, GitStatus, GitDiff, GitOutcome, GitCommitPreview};
 #[path = "recent.rs"]
 mod recent;
 pub use recent::RecentWorkspaceEntry;
@@ -193,6 +196,8 @@ pub struct WorkspaceService {
     discovery: Mutex<HashMap<PathBuf, (Instant, Discovery)>>,
     recent_path: Mutex<Option<PathBuf>>,
     replacement: Mutex<Option<replace::ReplacementPlan>>,
+    git_operations: Mutex<()>,
+    git_plan: Mutex<Option<git::CommitPlan>>,
 }
 
 impl WorkspaceService {
@@ -215,6 +220,8 @@ impl WorkspaceService {
             discovery: Mutex::new(HashMap::new()),
             recent_path: Mutex::new(None),
             replacement: Mutex::new(None),
+            git_operations: Mutex::new(()),
+            git_plan: Mutex::new(None),
         };
         if let Some(path) = initial {
             let session = service.open_session(&path)?;

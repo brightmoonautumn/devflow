@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import './theme-transition.css'
-import { ChevronDown, CircleHelp, Clock3, FolderOpen, FolderTree, Moon, PanelBottom, Plus, Save, Search, Settings2, Sun, X } from 'lucide-react'
+import { ChevronDown, CircleHelp, Clock3, FolderOpen, FolderTree, GitBranch, Moon, PanelBottom, Plus, Save, Search, Settings2, Sun, X } from 'lucide-react'
 import { ResizableBottomPanel } from './ResizableBottomPanel'
 import { executeWorkspace, getWorkspaceCatalog, type RecentWorkspace, executeNode, getNodeOptions, getNodeOutput, projectKey, metricsKey, executeJava, getJavaOptions, getJavaOutput, getRuntime, getWorkspace, type Project, type WorkspaceResponse } from '../lib/api'
 import { javaStartOperation, readJavaLaunchConfig } from '../features/runtime/javaLaunchConfig'
@@ -12,6 +12,7 @@ import { RuntimeConsole } from '../features/runtime/RuntimeConsole'
 import { WorkspacePage } from '../features/workspace/WorkspacePage'
 import { WorkspaceManager, type WorkspaceManagerMode } from '../features/workspace/WorkspaceManager'
 import { FileWorkbench, type FileOpenRequest } from '../features/workspace/FileWorkbench'
+import type { GitDiff } from '../features/git/api'
 import { WorkspaceTree } from '../features/workspace/WorkspaceTree'
 import { DevFlowStatus } from '../features/runtime/DevFlowStatus'
 import extremePlusLogo from '../assets/extreme-plus-logo.svg'
@@ -32,7 +33,9 @@ export function App() {
   const [openingRecent, setOpeningRecent] = useState(false)
   const [query, setQuery] = useState('')
   const [explorerOpen, setExplorerOpen] = useState(() => window.matchMedia('(min-width: 720px)').matches)
-  const [sidebarView, setSidebarView] = useState<'explorer' | 'search'>('explorer')
+  const [sidebarView, setSidebarView] = useState<'explorer' | 'search' | 'git'>('explorer')
+  const [diffRequest, setDiffRequest] = useState<{ diff: GitDiff; sequence: number } | null>(null)
+  const openDiff = useCallback((diff: GitDiff) => { setDiffRequest(current => ({ diff, sequence: (current?.sequence ?? 0) + 1 })); if (window.matchMedia('(max-width: 719px)').matches) setExplorerOpen(false) }, [])
   const [fileRequest, setFileRequest] = useState<FileOpenRequest | null>(null)
   const openFile = useCallback((path: string, pinned = false, line?: number, column?: number) => {
     setFileRequest(current => ({ path, pinned, line, column, sequence: (current?.sequence ?? 0) + 1 }))
@@ -254,12 +257,13 @@ export function App() {
         <div className="activity-primary">
           <button className={`activity-button ${explorerOpen && sidebarView === 'explorer' ? 'active' : ''}`} aria-label="资源管理器" title="资源管理器" aria-pressed={explorerOpen && sidebarView === 'explorer'} aria-controls="workspace-sidebar" onClick={() => { setExplorerOpen(sidebarView !== 'explorer' || !explorerOpen); setSidebarView('explorer') }}><FolderTree size={20} strokeWidth={1.65} /></button>
           <button className={`activity-button ${explorerOpen && sidebarView === 'search' ? 'active' : ''}`} aria-label="搜索文件" title="搜索 · Ctrl+Shift+F" aria-pressed={explorerOpen && sidebarView === 'search'} aria-controls="workspace-sidebar" onClick={() => { setExplorerOpen(sidebarView !== 'search' || !explorerOpen); setSidebarView('search') }}><Search size={20} strokeWidth={1.65} /></button>
+          <button className={`activity-button ${explorerOpen && sidebarView === 'git' ? 'active' : ''}`} aria-label="Git 管理" title="Git 管理" aria-pressed={explorerOpen && sidebarView === 'git'} aria-controls="workspace-sidebar" onClick={() => { setExplorerOpen(sidebarView !== 'git' || !explorerOpen); setSidebarView('git') }}><GitBranch size={20} strokeWidth={1.65} /></button>
         </div>
         <div className="activity-secondary"><button className="activity-button" aria-label="使用说明" title="使用说明" onClick={() => setPanel({ title: '使用说明', description: '点击服务卡片查看运行输出，点击箭头展开目录和启动入口。点击启动直接使用已保存或默认配置，更多操作中的“启动配置”可保存 JVM 参数、程序参数和 Spring Profile；支持停止项目进程树及向运行中的 Java 应用附加 Arthas。底部面板可拖拽调整高度。Node.js 服务支持 npm/pnpm/yarn 启动、停止和运行输出。' })}><CircleHelp size={19} /></button><button className="activity-button" aria-label="设置" title="设置" onClick={explainWorkspace}><Settings2 size={19} /></button></div>
       </nav>
-      <WorkspaceTree open={explorerOpen} view={sidebarView} onOpenFile={openFile} data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} />
+      <WorkspaceTree open={explorerOpen} view={sidebarView} onOpenFile={openFile} onOpenDiff={openDiff} data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} />
       <div className="editor-area">
-        <FileWorkbench workspace={data} openRequest={fileRequest}>
+        <FileWorkbench workspace={data} openRequest={fileRequest} diffRequest={diffRequest}>
           <main id="projects" className="main-content">
             <WorkspacePage key={data?.folders.map(folder => folder.path).join('|') ?? 'empty'} query={query} onQueryChange={setQuery} data={data} loading={loading} monitoringEnabled={connected} onRefresh={() => void load()} onConfigure={() => manage(hasWorkspace ? 'add_folder' : 'open')} onAction={projectAction} />
           </main>

@@ -18,6 +18,7 @@
 .file-toolbar { display: flex; flex-shrink: 0; align-items: center; gap: 7px; padding: 6px 12px; border-bottom: 1px solid var(--ws-subtle-border); }
 .file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-muted); font-size: var(--ws-font-small); }
 .file-toolbar .ws-outline-button { flex-shrink: 0; }
+.file-save-time { flex-shrink: 0; color: var(--ws-muted); font-size: var(--ws-font-small); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .df-source-editor { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .file-notice { display: flex; align-items: center; flex-shrink: 0; gap: 10px; flex-wrap: wrap; margin: 0; padding: 8px 12px; color: var(--ws-muted); background: var(--ws-hover); font-size: var(--ws-font-small); overflow-wrap: anywhere; }
 .file-notice.is-error { color: var(--ws-error); background: var(--ws-error-bg); }

@@ -2,7 +2,7 @@
 pub mod java;
 pub mod node;
 mod ports;
-mod process;
+pub(crate) mod process;
 use crate::workspace::{DetectedProject, ProjectKind, detect_projects};
 use serde::Serialize;
 use std::{

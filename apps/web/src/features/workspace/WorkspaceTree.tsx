@@ -1,8 +1,10 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement } from 'react'
-import { AlertCircle, Check, ChevronRight, ChevronsDownUp, Copy, FolderMinus, FolderPlus, LoaderCircle, MoreHorizontal, RefreshCw, Save, X } from 'lucide-react'
+import { AlertCircle, Check, ChevronRight, ChevronsDownUp, Copy, FolderMinus, FolderPlus, LoaderCircle, MoreHorizontal, RefreshCw, Save, Trash2, X } from 'lucide-react'
 import { TreeEntryIcon } from './TreeEntryIcon'
+import { GitPanel } from '../git/GitPanel'
+import type { GitDiff } from '../git/api'
 import { WorkspaceSearch } from './WorkspaceSearch'
-import { ApiError, executeWorkspace, getWorkspaceChildren, type WorkspaceChildren, type WorkspaceResponse, type WorkspaceTreeEntry } from '../../lib/api'
+import { ApiError, executeWorkspace, getWorkspaceChildren, mutateWorkspaceFile, type WorkspaceChildren, type WorkspaceResponse, type WorkspaceTreeEntry } from '../../lib/api'
 
 type NodeEntry = WorkspaceTreeEntry & { status?: string; message?: string | null }
 type TreeRoot = { name: string; path: string }
@@ -26,6 +28,15 @@ function TreeNode({ entry, root, level, revision, selected, copiedPath, onCopy, 
   const [error, setError] = useState('')
   const pending = useRef<AbortController | null>(null)
   useEffect(() => () => pending.current?.abort(), [])
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const path = (event as CustomEvent<string>).detail.replace(/\\/g, '/')
+      const directory = entry.path.replace(/\\/g, '/').replace(/\/+$/, '')
+      if (expanded && path.slice(0, path.lastIndexOf('/')).toLowerCase() === directory.toLowerCase()) void readChildren()
+    }
+    window.addEventListener('devflow-tree-file-changed', changed)
+    return () => window.removeEventListener('devflow-tree-file-changed', changed)
+  }, [expanded, entry.path, revision])
   async function readChildren() {
     if (pending.current) return
     const controller = new AbortController()
@@ -88,7 +99,7 @@ function TreeNode({ entry, root, level, revision, selected, copiedPath, onCopy, 
       <button className={`ws-tree-copy ${copiedPath === entry.path ? 'is-copied' : ''}`} aria-label={`复制 ${entry.name} 的绝对路径`} title={copiedPath === entry.path ? '路径已复制' : '复制绝对路径 · 悬停时按 C'} onClick={event => { event.stopPropagation(); void onCopy(entry.path) }}>
         {copiedPath === entry.path ? <Check size={14} /> : <Copy size={14} />}
       </button>
-      {level === 1 && <button className="ws-tree-more" aria-label={`${entry.name} 文件夹操作`} title="文件夹操作" onClick={event => {
+      {(level === 1 || !directory) && <button className="ws-tree-more" aria-label={`${entry.name} 操作`} title="更多操作" onClick={event => {
         event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onSelect(entry.path)
         onNodeMenu({ entry, root, level, revision, x: rect.left, y: rect.bottom, target: event.currentTarget })
       }}><MoreHorizontal size={14} /></button>}
@@ -107,11 +118,12 @@ const MemoTreeNode = memo(TreeNode)
 function maxSidebarWidth() { return window.innerWidth < 720 ? Math.max(200, Math.min(360, window.innerWidth - (window.innerWidth <= 550 ? 45 : 51) - 28)) : Math.max(200, Math.min(520, window.innerWidth - 420)) }
 function clampWidth(width: number) { return Math.round(Math.max(200, Math.min(maxSidebarWidth(), width))) }
 
-export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigure, onAddFolder, onSave, onClose, onOpenFile }: { data: WorkspaceResponse | null; open: boolean; view: 'explorer' | 'search'; onChange: (data: WorkspaceResponse) => void; onRefresh: () => void; onConfigure: () => void; onAddFolder: () => void; onSave: () => void; onClose: () => void; onOpenFile: (path: string, pinned?: boolean, line?: number, column?: number) => void }) {
+export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigure, onAddFolder, onSave, onClose, onOpenFile, onOpenDiff }: { data: WorkspaceResponse | null; open: boolean; view: 'explorer' | 'search' | 'git'; onOpenDiff: (diff: GitDiff) => void; onChange: (data: WorkspaceResponse) => void; onRefresh: () => void; onConfigure: () => void; onAddFolder: () => void; onSave: () => void; onClose: () => void; onOpenFile: (path: string, pinned?: boolean, line?: number, column?: number) => void }) {
   const [generation, setGeneration] = useState(0)
   const [selected, setSelected] = useState<string | null>(null)
   const [menu, setMenu] = useState<NodeMenu | null>(null)
   const [removing, setRemoving] = useState(false)
+  const mutating = useRef(false)
   const [operationError, setOperationError] = useState('')
   const [copyNotice, setCopyNotice] = useState<{ message: string; error: boolean; path?: string } | null>(null)
   const copyScope = useRef(0)
@@ -192,7 +204,32 @@ export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigu
     catch (err) { setOperationError(err instanceof Error ? err.message : String(err)); if (err instanceof ApiError && err.code === 'conflict') onRefresh() }
     finally { setRemoving(false) }
   }
-  return <aside ref={sidebarRef} hidden={!open} className={`workspace-sidebar ${resizing ? 'is-resizing' : ''}`} style={{ '--explorer-width': `${width}px` } as CSSProperties} id="workspace-sidebar" aria-label={view === 'search' ? '工作区搜索' : '工作区资源管理器'}>
+  async function mutateFile(operation: 'copy' | 'delete') {
+    if (!menu || menu.entry.kind !== 'file' || mutating.current) return
+    const { entry, revision } = menu
+    if (operation === 'delete') {
+      if (!window.confirm(`确定永久删除“${entry.name}”？文件和此文件未保存的修改都将删除，无法撤销。`)) return
+      if (!window.dispatchEvent(new CustomEvent('devflow-before-file-delete', { detail: entry.path, cancelable: true }))) {
+        setOperationError('文件正在读取、保存或删除，请稍后重试。'); return
+      }
+    }
+    mutating.current = true; setRemoving(true); setOperationError('')
+    let deleted = false
+    try {
+      await mutateWorkspaceFile(entry.path, revision, operation)
+      deleted = operation === 'delete'
+      setMenu(null)
+      if (deleted) setSelected(current => current === entry.path ? null : current)
+      window.dispatchEvent(new CustomEvent('devflow-tree-file-changed', { detail: entry.path }))
+    } catch (err) {
+      setOperationError(err instanceof Error ? err.message : String(err))
+      if (err instanceof ApiError && err.code === 'conflict') onRefresh()
+    } finally {
+      if (operation === 'delete') window.dispatchEvent(new CustomEvent('devflow-file-delete-finished', { detail: { path: entry.path, deleted } }))
+      mutating.current = false; setRemoving(false)
+    }
+  }
+  return <aside ref={sidebarRef} hidden={!open} className={`workspace-sidebar ${resizing ? 'is-resizing' : ''}`} style={{ '--explorer-width': `${width}px` } as CSSProperties} id="workspace-sidebar" aria-label={view === 'git' ? '工作区 Git 管理' : view === 'search' ? '工作区搜索' : '工作区资源管理器'}>
     <div className="ws-explorer-view" hidden={view !== 'explorer'}>
     <div className="ws-explorer-heading"><h2 className="ws-explorer-title" title={data?.workspaceFile ?? data?.workspaceRoot ?? ''}><span className="ws-explorer-name">{data?.name ?? '未选择工作区'}</span>{data?.dirty && <small className="ws-explorer-unsaved">未保存</small>}</h2><div>
       <button className="ws-icon-button" disabled={!hasWorkspace} aria-label="添加文件夹到工作区" title="添加文件夹到工作区" onClick={onAddFolder}><FolderPlus size={15} /></button>
@@ -212,6 +249,7 @@ export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigu
     <div className={`ws-tree-footer ${copyNotice?.error ? 'is-error' : ''}`} title={copyNotice?.message ?? selected ?? data?.workspaceFile ?? ''}><span role="status" aria-live="polite" aria-atomic="true">{copyNotice?.message}</span>{!copyNotice && (selected ?? data?.workspaceFile ?? '悬停文件或文件夹，按 C 复制绝对路径')}</div>
     </div>
     <div className="ws-search-view" hidden={view !== 'search'}><WorkspaceSearch key={data?.revision ?? 0} workspace={data} active={open && view === 'search'} onOpenFile={onOpenFile} onClose={onClose} /></div>
+    <div className="ws-search-view" hidden={view !== 'git'}><GitPanel key={data?.revision ?? 0} workspace={data} active={open && view === 'git'} onOpenDiff={onOpenDiff} onClose={onClose} /></div>
     <div ref={resizeHandle} className="ws-sidebar-resizer" role="separator" aria-label="调整资源管理器宽度" aria-orientation="vertical" aria-valuemin={200} aria-valuemax={maxSidebarWidth()} aria-valuenow={width} tabIndex={0} title="拖拽调整宽度 · 双击恢复默认" onPointerDown={event => {
       if (event.button !== 0) return
       event.preventDefault(); event.stopPropagation(); event.currentTarget.focus()
@@ -232,7 +270,7 @@ export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigu
       event.preventDefault()
       resize(event.key === 'Home' ? 200 : event.key === 'End' ? maxSidebarWidth() : width + (event.key === 'ArrowLeft' ? -1 : 1) * (event.shiftKey ? 40 : 10), true)
     }}><span className="ws-resize-grip" aria-hidden="true" /></div>
-    {menu && <div ref={menuRef} className="ws-tree-context" role="menu" aria-label={`${menu.entry.name} 路径与文件夹操作`} style={{ left: Math.max(8, Math.min(menu.x, window.innerWidth - 250)), top: Math.max(8, Math.min(menu.y, window.innerHeight - (menu.level === 1 ? 240 : 180))) }} onKeyDown={event => {
+    {menu && <div ref={menuRef} className="ws-tree-context" role="menu" aria-label={`${menu.entry.name} 操作`} style={{ left: Math.max(8, Math.min(menu.x, window.innerWidth - 250)), top: Math.max(8, Math.min(menu.y, window.innerHeight - 270)) }} onKeyDown={event => {
       if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
       event.preventDefault(); event.stopPropagation()
       const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
@@ -247,6 +285,10 @@ export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigu
         if (relative === null) return
         void copyPath(menu.entry.path, relative); menu.target.focus(); setMenu(null)
       }}><Copy size={15} /><span>复制相对路径<small className="ws-context-relative">相对 {menu.root.name}</small></span></button>
+      {menu.entry.kind === 'file' && <>
+        <button role="menuitem" disabled={removing} title="将磁盘文件复制为同目录副本" onClick={() => void mutateFile('copy')}><Copy size={15} />复制文件</button>
+        <button className="ws-context-remove" role="menuitem" disabled={removing} onClick={() => void mutateFile('delete')}><Trash2 size={15} />删除文件</button>
+      </>}
       {menu.level === 1 && <><button className="ws-context-remove" role="menuitem" disabled={removing} onClick={() => void removeRoot()}><FolderMinus size={15} />{removing ? '正在移除…' : '从工作区移除'}</button>
       <small>仅移除引用，不删除文件；保存后持久化。</small></>}
     </div>}
