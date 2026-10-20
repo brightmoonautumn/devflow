@@ -32,6 +32,9 @@ pub use replace::{ReplacePreviewRequest, ReplaceApplyRequest, ReplacePreview, Re
 #[path = "git/mod.rs"]
 mod git;
 pub use git::{GitStatusRequest, GitDiffRequest, GitMutationRequest, GitCommitRequest, GitCommitApplyRequest, GitStatus, GitDiff, GitOutcome, GitCommitPreview};
+#[path = "sharing.rs"]
+mod sharing;
+pub use sharing::{ShareCreateRequest, ShareRevokeRequest, ShareInvitation, ShareCreated, ShareReadRequest};
 #[path = "recent.rs"]
 mod recent;
 pub use recent::RecentWorkspaceEntry;
@@ -151,6 +154,7 @@ pub enum WorkspaceOperation {
     Save { path: Option<String> },
 }
 
+#[derive(Clone)]
 struct Session {
     file: Option<PathBuf>,
     base: PathBuf,
@@ -198,6 +202,7 @@ pub struct WorkspaceService {
     replacement: Mutex<Option<replace::ReplacementPlan>>,
     git_operations: Mutex<()>,
     git_plan: Mutex<Option<git::CommitPlan>>,
+    shares: Mutex<HashMap<String, sharing::ShareGrant>>,
 }
 
 impl WorkspaceService {
@@ -222,6 +227,7 @@ impl WorkspaceService {
             replacement: Mutex::new(None),
             git_operations: Mutex::new(()),
             git_plan: Mutex::new(None),
+            shares: Mutex::new(HashMap::new()),
         };
         if let Some(path) = initial {
             let session = service.open_session(&path)?;

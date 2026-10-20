@@ -1,3 +1,4 @@
+import { readOnlyShare } from '../../lib/access'
 import { useEffect, useRef, useState } from 'react'
 import { Activity, Box, Circle, Coffee, FolderOpen, LoaderCircle, MoreHorizontal, Network, Play, PlugZap, RefreshCw, Search, Settings2, Terminal, X } from 'lucide-react'
 import { projectKey, metricsKey, type Project, type WorkspaceResponse } from '../../lib/api'
@@ -113,16 +114,16 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
     const buttonTone = ready ? stopping || (running && !starting) ? 'is-stop' : 'is-start' : ''
     const actionTitle = stopping ? '正在停止项目进程树' : starting ? pending ? '正在提交启动请求' : '构建 / 启动中，点击取消启动' : !ready ? '等待有效运行状态' : running ? '停止项目进程树' : '使用已保存配置或默认配置启动'
     return (<div className="ws-row-actions">
-      <button className={`ws-launch ${transitioning ? 'is-pending' : ''} ${buttonTone}`} disabled={!ready || !!pending} aria-busy={transitioning} aria-label={`${project.name} ${action}${starting && !pending ? '，点击取消启动' : ''}`} title={actionTitle} onClick={() => void changeProjectState(project, running || starting ? 'stop' : 'start')}>
+      {!readOnlyShare && <button className={`ws-launch ${transitioning ? 'is-pending' : ''} ${buttonTone}`} disabled={!ready || !!pending} aria-busy={transitioning} aria-label={`${project.name} ${action}${starting && !pending ? '，点击取消启动' : ''}`} title={actionTitle} onClick={() => void changeProjectState(project, running || starting ? 'stop' : 'start')}>
         {transitioning ? <LoaderCircle size={13} className="spinning" aria-hidden="true" /> : running ? <Circle size={10} fill="currentColor" aria-hidden="true" /> : <Play size={12} fill="currentColor" aria-hidden="true" />}
         <span>{action}</span>
-      </button><div className="ws-menu-anchor">
+      </button>}<div className="ws-menu-anchor">
           <button className="ws-icon-button" aria-label={`${project.name} 更多操作`} title="更多操作" aria-expanded={menu === projectKey(project)} aria-controls={menu === projectKey(project) ? 'workspace-project-actions' : undefined} onClick={event => { menuTrigger.current = event.currentTarget; setMenu(menu === projectKey(project) ? null : projectKey(project)) }}><MoreHorizontal size={17} /></button>
           {menu === projectKey(project) && <div id="workspace-project-actions" className="ws-menu" aria-label={`${project.name} 操作`} onKeyDown={event => { if (event.key === 'Escape') { setMenu(null); menuTrigger.current?.focus(); event.stopPropagation() } }}>
             <button autoFocus onClick={() => { setMenu(null); onAction(project, '运行输出') }}><Terminal size={14} />查看运行输出</button>
-            <button onClick={() => { setMenu(null); onAction(project, '启动配置') }}><Settings2 size={14} />启动配置</button>
-            {project.kind !== 'node' && <button onClick={() => { setMenu(null); onAction(project, 'JVM 诊断') }}><Activity size={14} />JVM 诊断</button>}
-            {project.kind !== 'node' && <button disabled={!running || !ready} onClick={() => { setMenu(null); onAction(project, 'Arthas 挂载') }}><PlugZap size={14} />快速挂载 Arthas</button>}
+            {!readOnlyShare && <button onClick={() => { setMenu(null); onAction(project, '启动配置') }}><Settings2 size={14} />启动配置</button>}
+            {!readOnlyShare && project.kind !== 'node' && <button onClick={() => { setMenu(null); onAction(project, 'JVM 诊断') }}><Activity size={14} />JVM 诊断</button>}
+            {!readOnlyShare && project.kind !== 'node' && <button disabled={!running || !ready} onClick={() => { setMenu(null); onAction(project, 'Arthas 挂载') }}><PlugZap size={14} />快速挂载 Arthas</button>}
           </div>}
         </div></div>)
   }
@@ -133,7 +134,7 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
     </div>
     <div className="ws-project-list" aria-busy={loading}>
       {rows.length > 0 && <TaskRows variant="Cards" className="ws-service-cards" rows={rows} labels={{ completed: '已完成', failed: '失败' }} renderActions={renderProjectActions} onActivateRow={row => { const project = projectsByPath.get(row.key); if (project) onAction(project, '运行输出') }} />}
-      {filtered.length === 0 && <div className="ws-empty"><div className="ws-empty-icon">{projects.length ? <Search size={24} strokeWidth={1.4} /> : <FolderOpen size={26} strokeWidth={1.4} />}</div><h2>{projects.length ? '没有匹配的服务' : loading ? '正在读取工作区…' : data?.workspaceFile && !data.folders.length ? '工作区还没有文件夹' : data?.workspaceRoot ? '还没有发现可启动服务' : '从一个工作区开始'}</h2><p>{projects.length ? '试试其他名称，或调整项目类型。' : data?.workspaceFile && !data.folders.length ? '添加本地文件夹到工作区，保存后也可以在 VS Code 中打开。' : data?.workspaceRoot ? '只列出具有真实 Java 启动入口或 Node.js 启动脚本的工程。' : '配置本地项目目录，让项目井然有序。'}</p>{projects.length ? <button className="ws-outline-button" onClick={() => { setQuery(''); setFilter('all') }}><X size={13} />清除筛选</button> : !loading && <button className="ws-outline-button" onClick={onConfigure}><FolderOpen size={14} />{data?.workspaceFile && !data.folders.length ? '添加文件夹' : '配置工作区'}</button>}</div>}
+      {filtered.length === 0 && <div className="ws-empty"><div className="ws-empty-icon">{projects.length ? <Search size={24} strokeWidth={1.4} /> : <FolderOpen size={26} strokeWidth={1.4} />}</div><h2>{projects.length ? '没有匹配的服务' : loading ? '正在读取工作区…' : data?.workspaceFile && !data.folders.length ? '工作区还没有文件夹' : data?.workspaceRoot ? '还没有发现可启动服务' : '从一个工作区开始'}</h2><p>{projects.length ? '试试其他名称，或调整项目类型。' : data?.workspaceFile && !data.folders.length ? '添加本地文件夹到工作区，保存后也可以在 VS Code 中打开。' : data?.workspaceRoot ? '只列出具有真实 Java 启动入口或 Node.js 启动脚本的工程。' : '配置本地项目目录，让项目井然有序。'}</p>{projects.length ? <button className="ws-outline-button" onClick={() => { setQuery(''); setFilter('all') }}><X size={13} />清除筛选</button> : !loading && !readOnlyShare && <button className="ws-outline-button" onClick={onConfigure}><FolderOpen size={14} />{data?.workspaceFile && !data.folders.length ? '添加文件夹' : '配置工作区'}</button>}</div>}
     </div>
   </section>
 }

@@ -1,0 +1,22 @@
+/* Share-specific layout only; controls are owned by components/form. */
+.share-dialog { width: min(560px, calc(100vw - 28px)); }
+.share-dialog > form { display: flex; flex-direction: column; min-height: 0; }
+.share-dialog .share-dialog-close { min-width: 32px; min-height: 32px; padding: 6px; margin-left: auto; }
+.share-dialog-body { display: flex; flex-direction: column; gap: 20px; }
+.share-dialog-body p { margin: 0; line-height: 1.75; overflow-wrap: anywhere; font-size: var(--ws-font-small); }
+.share-dialog-body h3 { margin: 0; color: var(--ws-ink); font-size: var(--ws-font-body); font-weight: 500; }
+.share-scope { display: flex; flex-direction: column; gap: 9px; }
+.share-scope ul { margin: 0; padding: 9px 12px 9px 28px; max-height: 120px; overflow: auto; border: 1px solid var(--ws-subtle-border); border-radius: 7px; color: var(--ws-muted); background: var(--ws-bg); font: var(--ws-font-small)/1.8 var(--font-mono); overflow-wrap: anywhere; }
+.share-muted { color: var(--ws-muted); }
+.share-dialog-fields { display: flex; flex-direction: column; gap: 16px; }
+.share-link-row { display: flex; align-items: stretch; gap: 8px; min-width: 0; }
+.share-link-row > .df-control { flex: 1; }
+.share-link-row > .df-button { flex-shrink: 0; }
+.share-invitations { display: flex; flex-direction: column; gap: 10px; }
+.share-invitation { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 0; border-top: 1px solid var(--ws-subtle-border); font-size: var(--ws-font-body); }
+.share-invitation > span { min-width: 0; overflow-wrap: anywhere; }
+.share-invitation small { display: block; color: var(--ws-muted); margin-top: 4px; font-size: var(--ws-font-caption); }
+.share-invitation > .df-button { flex-shrink: 0; }
+.share-notice { padding: 10px 12px; border-radius: 7px; color: var(--ws-muted); background: var(--ws-hover); }
+.share-notice.is-error { color: var(--ws-error); background: var(--ws-error-bg); }
+@media (max-width: 550px) { .share-link-row { flex-wrap: wrap; } .share-link-row > .df-control { flex-basis: 100%; } .share-link-row > .df-button { margin-left: auto; } }

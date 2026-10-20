@@ -8,8 +8,8 @@ use devflow_core::workspace::{WorkspaceChildrenRequest, WorkspaceError, Workspac
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-type ApiResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
-fn response<T: serde::Serialize>(result: Result<T, WorkspaceError>) -> ApiResult {
+pub(crate) type ApiResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
+pub(crate) fn response<T: serde::Serialize>(result: Result<T, WorkspaceError>) -> ApiResult {
     match result {
         Ok(value) => Ok(Json(json!(value))),
         Err(err) => {

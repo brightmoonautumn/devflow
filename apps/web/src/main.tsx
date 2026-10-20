@@ -1,6 +1,7 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './app/App'
+import { BaseDialogProvider } from './components/form/BaseDialog'
 import './styles/tokens.css'
 
-createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
+createRoot(document.getElementById('root')!).render(<React.StrictMode><BaseDialogProvider><App /></BaseDialogProvider></React.StrictMode>)

@@ -1,7 +1,10 @@
+import { readViewState, writeViewState } from '../features/workspace/workspaceViewState'
+import { readOnlyShare } from '../lib/access'
+import { useDialogs } from '../components/form/BaseDialog'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import './theme-transition.css'
-import { ChevronDown, CircleHelp, Clock3, FolderOpen, FolderTree, GitBranch, Moon, PanelBottom, Plus, Save, Search, Settings2, Sun, X } from 'lucide-react'
+import { ChevronDown, CircleHelp, Clock3, FolderOpen, FolderTree, GitBranch, Moon, PanelBottom, Plus, Save, Search, Share2, Settings2, Sun, X } from 'lucide-react'
 import { ResizableBottomPanel } from './ResizableBottomPanel'
 import { executeWorkspace, getWorkspaceCatalog, type RecentWorkspace, executeNode, getNodeOptions, getNodeOutput, projectKey, metricsKey, executeJava, getJavaOptions, getJavaOutput, getRuntime, getWorkspace, type Project, type WorkspaceResponse } from '../lib/api'
 import { javaStartOperation, readJavaLaunchConfig } from '../features/runtime/javaLaunchConfig'
@@ -11,8 +14,9 @@ import { JavaLaunchDialog } from '../features/runtime/JavaLaunchDialog'
 import { RuntimeConsole } from '../features/runtime/RuntimeConsole'
 import { WorkspacePage } from '../features/workspace/WorkspacePage'
 import { WorkspaceManager, type WorkspaceManagerMode } from '../features/workspace/WorkspaceManager'
-import { FileWorkbench, type FileOpenRequest } from '../features/workspace/FileWorkbench'
+import { FileWorkbench, type FileOpenRequest, type FileSaveStatus } from '../features/workspace/FileWorkbench'
 import type { GitDiff } from '../features/git/api'
+import { ShareDialog } from '../features/sharing/ShareDialog'
 import { WorkspaceTree } from '../features/workspace/WorkspaceTree'
 import { DevFlowStatus } from '../features/runtime/DevFlowStatus'
 import extremePlusLogo from '../assets/extreme-plus-logo.svg'
@@ -20,6 +24,10 @@ import extremePlusLogoDark from '../assets/extreme-plus-logo-dark.svg'
 
 type Panel = { title: string, project?: string, description: string, runtimeProject?: Project }
 export function App() {
+  const dialogs = useDialogs()
+  const [editorSaveStatus, setEditorSaveStatus] = useState<FileSaveStatus | null>(null)
+  const [shareError, setShareError] = useState('')
+  const [sharing, setSharing] = useState(false)
   const [data, setData] = useState<WorkspaceResponse | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -32,8 +40,10 @@ export function App() {
   const [recentError, setRecentError] = useState('')
   const [openingRecent, setOpeningRecent] = useState(false)
   const [query, setQuery] = useState('')
-  const [explorerOpen, setExplorerOpen] = useState(() => window.matchMedia('(min-width: 720px)').matches)
-  const [sidebarView, setSidebarView] = useState<'explorer' | 'search' | 'git'>('explorer')
+  const [savedLayout] = useState(() => readViewState('devflow.workbench-layout.v1'))
+  const [explorerOpen, setExplorerOpen] = useState(() => typeof savedLayout.sidebarOpen === 'boolean' ? savedLayout.sidebarOpen : window.matchMedia('(min-width: 720px)').matches)
+  const [sidebarView, setSidebarView] = useState<'explorer' | 'search' | 'git'>(() => savedLayout.sidebarView === 'search' || savedLayout.sidebarView === 'git' ? savedLayout.sidebarView : 'explorer')
+  useEffect(() => { writeViewState('devflow.workbench-layout.v1', { sidebarOpen: explorerOpen, sidebarView }) }, [explorerOpen, sidebarView])
   const [diffRequest, setDiffRequest] = useState<{ diff: GitDiff; sequence: number } | null>(null)
   const openDiff = useCallback((diff: GitDiff) => { setDiffRequest(current => ({ diff, sequence: (current?.sequence ?? 0) + 1 })); if (window.matchMedia('(max-width: 719px)').matches) setExplorerOpen(false) }, [])
   const [fileRequest, setFileRequest] = useState<FileOpenRequest | null>(null)
@@ -53,6 +63,12 @@ export function App() {
     }
     window.addEventListener('keydown', search)
     return () => { window.removeEventListener('keydown', search); clearTimeout(timer) }
+  }, [])
+  useEffect(() => {
+    if (!readOnlyShare) return
+    const expired = (event: Event) => { setShareError((event as CustomEvent<string>).detail); setData(null); setFileRequest(null); setDiffRequest(null); setPanel(null) }
+    window.addEventListener('devflow-share-expired', expired)
+    return () => window.removeEventListener('devflow-share-expired', expired)
   }, [])
   const workspaceActions = useRef<HTMLDivElement>(null)
   const workspaceTrigger = useRef<HTMLButtonElement>(null)
@@ -135,7 +151,7 @@ export function App() {
     return () => window.removeEventListener('keydown', dismiss)
   }, [])
   useEffect(() => {
-    if (!workspaceMenu) return
+    if (!workspaceMenu || readOnlyShare) return
     function dismiss(event: PointerEvent) {
       if (!workspaceActions.current?.contains(event.target as Node)) setWorkspaceMenu(false)
     }
@@ -144,7 +160,7 @@ export function App() {
   }, [workspaceMenu])
 
   useEffect(() => {
-    if (!workspaceMenu) return
+    if (!workspaceMenu || readOnlyShare) return
     const controller = new AbortController()
     setRecentError('')
     getWorkspaceCatalog(controller.signal).then(catalog => {
@@ -157,7 +173,7 @@ export function App() {
   }, [workspaceMenu])
   async function openRecent(path: string) {
     if (!data || openingRecent) return
-    const discard = data.dirty && window.confirm('当前工作区配置有未保存更改，是否放弃更改并打开最近工作区？')
+    const discard = data.dirty && await dialogs.confirm({ title: '放弃工作区配置更改？', description: '当前工作区配置尚未保存。打开最近工作区将放弃这些更改。', confirmText: '放弃并打开', cancelText: '留在当前工作区', tone: 'danger' })
     if (data.dirty && !discard) return
     setOpeningRecent(true); setRecentError('')
     try {
@@ -171,11 +187,13 @@ export function App() {
   const workspaceName = `${data?.name ?? '未选择工作区'}${data?.dirty ? ' · 未保存' : ''}`
   const output: Panel = { title: '运行输出', description: '在服务卡片中选择项目，或启动项目查看实时输出。' }
   function explainWorkspace() {
+    if (readOnlyShare) return
     setManagingWorkspace('open')
   }
-  function manage(mode: WorkspaceManagerMode) { setWorkspaceMenu(false); setManagingWorkspace(mode) }
+  function manage(mode: WorkspaceManagerMode) { if (readOnlyShare) return; setWorkspaceMenu(false); setManagingWorkspace(mode) }
   const hasWorkspace = !!(data?.workspaceRoot || data?.workspaceFile)
   async function projectAction(project: Project, title: string) {
+    if (readOnlyShare && title !== '运行输出') return
     if (title === '启动配置') { setLaunchProject(project); return }
     setPanel({ title: title === 'JVM 诊断' ? 'JVM 诊断 / Arthas' : '运行输出', project: project.name, runtimeProject: project, description: '' })
     if (title !== '启动项目' && title !== '停止项目' && title !== 'Arthas 挂载') return
@@ -232,8 +250,8 @@ export function App() {
       <a className="brand" href="#projects" aria-label="DevFlow 工作区"><img className="brand-logo" src={theme === 'dark' ? extremePlusLogoDark : extremePlusLogo} alt="" width={32} height={24} /><strong>DevFlow</strong></a>
       <span className="header-divider" />
       <div className="workspace-actions" ref={workspaceActions} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setWorkspaceMenu(false) }}>
-        <button ref={workspaceTrigger} className="workspace-switch" aria-expanded={workspaceMenu} aria-controls="workspace-actions" onClick={() => setWorkspaceMenu(current => !current)} title={data?.workspaceFile ?? data?.workspaceRoot ?? '工作区操作'}><FolderOpen size={14} /><span>{workspaceName}</span><ChevronDown size={12} /></button>
-        {workspaceMenu && <div id="workspace-actions" className="ws-workspace-menu" role="group" aria-label="工作区操作" onKeyDown={event => { if (event.key === 'Escape') { setWorkspaceMenu(false); workspaceTrigger.current?.focus(); event.stopPropagation() } }}>
+        <button ref={workspaceTrigger} className="workspace-switch" aria-expanded={workspaceMenu} aria-controls="workspace-actions" onClick={() => { if (!readOnlyShare) setWorkspaceMenu(current => !current) }} title={data?.workspaceFile ?? data?.workspaceRoot ?? '工作区操作'}><FolderOpen size={14} /><span>{workspaceName}</span>{readOnlyShare ? <small>只读</small> : <ChevronDown size={12} />}</button>
+        {!readOnlyShare && workspaceMenu && <div id="workspace-actions" className="ws-workspace-menu" role="group" aria-label="工作区操作" onKeyDown={event => { if (event.key === 'Escape') { setWorkspaceMenu(false); workspaceTrigger.current?.focus(); event.stopPropagation() } }}>
           <span className="ws-menu-label">工作区</span>
           <button autoFocus onClick={() => manage('create')}><Plus size={15} /><span>新建工作区<small>从文件夹建立或创建空工作区</small></span></button>
           <button onClick={() => manage('open')}><FolderOpen size={15} /><span>打开工作区…<small>浏览本机文件夹与工作区文件</small></span></button>
@@ -244,14 +262,19 @@ export function App() {
           <button onClick={() => manage('open')}><Clock3 size={15} /><span>查看全部最近打开…</span></button>
           {recentError && <p className="ws-recent-menu-error" role="alert">{recentError}</p>}
           <div className="ws-menu-separator" />
+          <button disabled={!hasWorkspace} onClick={() => { setWorkspaceMenu(false); setSharing(true) }}><Share2 size={15} /><span>只读分享…<small>邀请局域网成员查看当前工作区</small></span></button>
           <button disabled={!hasWorkspace} onClick={() => manage('save')}><Save size={15} /><span>保存 / 另存工作区…</span></button>
           <button disabled={!hasWorkspace} onClick={() => manage('close')}><X size={15} /><span>关闭当前工作区</span></button>
         </div>}
       </div>
       <label className="ws-top-search"><Search size={14} /><input type="search" aria-label="搜索服务" placeholder="搜索服务…" value={query} onChange={event => setQuery(event.target.value)} />{query && <button className="ws-icon-button" aria-label="清除服务搜索" onClick={() => setQuery('')}><X size={13} /></button>}</label>
-      <DevFlowStatus />
+      <div className="ws-top-status">
+        {editorSaveStatus && <span className={`ws-editor-save-status ${editorSaveStatus.failed ? 'is-error' : ''}`} role="status" title={editorSaveStatus.text}>{editorSaveStatus.text}</span>}
+        <DevFlowStatus />
+      </div>
       <button className="ws-icon-button" title={`切换到${theme === 'dark' ? '浅色' : '深色'}主题`} aria-label={`切换到${theme === 'dark' ? '浅色' : '深色'}主题`} onClick={toggleTheme}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button>
     </header>
+    {shareError && <p className="file-notice is-error" role="alert">{shareError}</p>}
     <div className="workbench">
       <nav className="activity-bar" aria-label="功能入口">
         <div className="activity-primary">
@@ -259,11 +282,11 @@ export function App() {
           <button className={`activity-button ${explorerOpen && sidebarView === 'search' ? 'active' : ''}`} aria-label="搜索文件" title="搜索 · Ctrl+Shift+F" aria-pressed={explorerOpen && sidebarView === 'search'} aria-controls="workspace-sidebar" onClick={() => { setExplorerOpen(sidebarView !== 'search' || !explorerOpen); setSidebarView('search') }}><Search size={20} strokeWidth={1.65} /></button>
           <button className={`activity-button ${explorerOpen && sidebarView === 'git' ? 'active' : ''}`} aria-label="Git 管理" title="Git 管理" aria-pressed={explorerOpen && sidebarView === 'git'} aria-controls="workspace-sidebar" onClick={() => { setExplorerOpen(sidebarView !== 'git' || !explorerOpen); setSidebarView('git') }}><GitBranch size={20} strokeWidth={1.65} /></button>
         </div>
-        <div className="activity-secondary"><button className="activity-button" aria-label="使用说明" title="使用说明" onClick={() => setPanel({ title: '使用说明', description: '点击服务卡片查看运行输出，点击箭头展开目录和启动入口。点击启动直接使用已保存或默认配置，更多操作中的“启动配置”可保存 JVM 参数、程序参数和 Spring Profile；支持停止项目进程树及向运行中的 Java 应用附加 Arthas。底部面板可拖拽调整高度。Node.js 服务支持 npm/pnpm/yarn 启动、停止和运行输出。' })}><CircleHelp size={19} /></button><button className="activity-button" aria-label="设置" title="设置" onClick={explainWorkspace}><Settings2 size={19} /></button></div>
+        <div className="activity-secondary"><button className="activity-button" aria-label="使用说明" title="使用说明" onClick={() => setPanel({ title: '使用说明', description: '点击服务卡片查看运行输出，点击箭头展开目录和启动入口。点击启动直接使用已保存或默认配置，更多操作中的“启动配置”可保存 JVM 参数、程序参数和 Spring Profile；支持停止项目进程树及向运行中的 Java 应用附加 Arthas。底部面板可拖拽调整高度。Node.js 服务支持 npm/pnpm/yarn 启动、停止和运行输出。' })}><CircleHelp size={19} /></button>{!readOnlyShare && <button className="activity-button" aria-label="设置" title="设置" onClick={explainWorkspace}><Settings2 size={19} /></button>}</div>
       </nav>
-      <WorkspaceTree open={explorerOpen} view={sidebarView} onOpenFile={openFile} onOpenDiff={openDiff} data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} />
+      <WorkspaceTree key={shareError ? 'expired' : 'workspace'} open={explorerOpen} view={sidebarView} onOpenFile={openFile} onOpenDiff={openDiff} data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} />
       <div className="editor-area">
-        <FileWorkbench workspace={data} openRequest={fileRequest} diffRequest={diffRequest}>
+        <FileWorkbench key={shareError ? 'expired' : 'workspace'} workspace={data} openRequest={fileRequest} diffRequest={diffRequest} onSaveStatusChange={setEditorSaveStatus} onOpenFile={path => openFile(path, true)}>
           <main id="projects" className="main-content">
             <WorkspacePage key={data?.folders.map(folder => folder.path).join('|') ?? 'empty'} query={query} onQueryChange={setQuery} data={data} loading={loading} monitoringEnabled={connected} onRefresh={() => void load()} onConfigure={() => manage(hasWorkspace ? 'add_folder' : 'open')} onAction={projectAction} />
           </main>
@@ -271,8 +294,9 @@ export function App() {
         {panel && (panel.runtimeProject && data ? <RuntimeConsole key={projectKey(panel.runtimeProject)} project={panel.runtimeProject} revision={data.revision} title={panel.title} description={panel.description} onClose={() => setPanel(null)} /> : <ResizableBottomPanel title={panel.title} project={panel.project} description={panel.description} onClose={() => setPanel(null)} />)}
       </div>
     </div>
-    <footer className="statusbar"><span className={`connection ${connected ? 'online' : ''}`}><i />{loading ? '正在连接' : connected ? '本地已连接' : '未连接'}</span><button className={panel ? 'selected' : ''} aria-expanded={panel !== null} onClick={() => setPanel(panel ? null : output)}><PanelBottom size={13} />运行输出</button>{error ? <div className="service-error" title={`无法连接本地服务：${error}`}><span role="status" aria-label={`无法连接本地服务：${error}`}>本地服务未连接</span><button disabled={loading} aria-label="重试连接本地服务" onClick={() => void load()}>{loading ? '连接中…' : '重试'}</button></div> : <span className="status-version">DevFlow · 0.1.0</span>}</footer>
+    <footer className="statusbar"><span className={`connection ${connected ? 'online' : ''}`}><i />{loading ? '正在连接' : connected ? readOnlyShare ? '分享已连接 · 只读' : '本地已连接' : '未连接'}</span><button className={panel ? 'selected' : ''} aria-expanded={panel !== null} onClick={() => setPanel(panel ? null : output)}><PanelBottom size={13} />运行输出</button>{error ? <div className="service-error" title={`连接失败：${error}`}><span role="status" aria-label={`连接失败：${error}`}>本地服务未连接</span><button disabled={loading} aria-label="重试连接本地服务" onClick={() => void load()}>{loading ? '连接中…' : '重试'}</button></div> : <span className="status-version">DevFlow · 0.1.0</span>}</footer>
     {managingWorkspace && <WorkspaceManager key={managingWorkspace} mode={managingWorkspace} data={data} onChange={applyWorkspace} onRefresh={() => void load()} onClose={() => { setManagingWorkspace(null); workspaceTrigger.current?.focus() }} />}
     {launchProject && data && (launchProject.kind === 'node' ? <NodeLaunchDialog key={projectKey(launchProject)} project={launchProject} onClose={() => setLaunchProject(null)} /> : <JavaLaunchDialog key={projectKey(launchProject)} project={launchProject} onClose={() => setLaunchProject(null)} />)}
+    {sharing && <ShareDialog workspace={data} onClose={() => setSharing(false)} />}
   </div>
 }

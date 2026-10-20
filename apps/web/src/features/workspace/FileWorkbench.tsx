@@ -1,3 +1,6 @@
+import { readOnlyShare } from '../../lib/access'
+import { readViewState, restoredTabs, viewPathKey, workspaceViewKey, writeViewState, type WorkspaceViewState } from './workspaceViewState'
+import { useDialogs } from '../../components/form/BaseDialog'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, FileText, LoaderCircle, RefreshCw, Server, X } from 'lucide-react'
 import { readWorkspaceFile, writeWorkspaceFile, type WorkspaceFile, type WorkspaceResponse } from '../../lib/api'
@@ -5,17 +8,32 @@ import type { GitDiff } from '../git/api'
 import './file-editor.css'
 const GitDiffPane = lazy(() => import('../git/GitDiffPane'))
 
-const SourceEditor = lazy(() => import('../../components/editor/SourceEditor'))
+const FileEditor = lazy(() => import('../../components/editor/FileEditor'))
 export type FileOpenRequest = { path: string; pinned: boolean; sequence: number; line?: number; column?: number }
+export type FileSaveStatus = { text: string; failed: boolean }
 type FileTab = { diff?: GitDiff; key: string; path: string; file?: WorkspaceFile; draft: string; preview: boolean; loading: boolean; saving: boolean; error: string; savedAt?: number; deleting?: boolean; line: number; column: number; location?: { line: number; column: number; sequence: number } }
 type Workbench = { tabs: FileTab[]; active: string | null }
-const keyFor = (path: string) => /^[a-z]:[\\/]|^\\\\/i.test(path) ? path.replace(/\\/g, '/').toLowerCase() : path
+const snapshotFor = (value: Workbench): WorkspaceViewState => ({
+  tabs: value.tabs.filter(tab => !tab.diff).map(tab => ({ path: tab.path, preview: tab.preview, line: tab.line, column: tab.column })),
+  active: value.tabs.find(tab => tab.key === value.active && !tab.diff)?.path ?? null,
+})
+const keyFor = viewPathKey
 const textFor = (file: WorkspaceFile) => file.content.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
 const dirty = (tab: FileTab) => !!tab.file && tab.draft !== textFor(tab.file)
 const nameFor = (path: string) => path.split(/[\\/]/).at(-1) ?? path
 
-export function FileWorkbench({ workspace, openRequest, diffRequest, children }: { workspace: WorkspaceResponse | null; openRequest: FileOpenRequest | null; diffRequest?: { diff: GitDiff; sequence: number } | null; children: ReactNode }) {
+export function FileWorkbench({ workspace, openRequest, diffRequest, onOpenFile, onSaveStatusChange, children }: { workspace: WorkspaceResponse | null; openRequest: FileOpenRequest | null; diffRequest?: { diff: GitDiff; sequence: number } | null; onOpenFile?: (path: string) => void; onSaveStatusChange?: (status: FileSaveStatus | null) => void; children: ReactNode }) {
+  const dialogs = useDialogs()
+  const confirmations = useRef(new Set<string>())
   const [state, setState] = useState<Workbench>({ tabs: [], active: null })
+  const scope = workspaceViewKey(workspace)
+  const [restoredScope, setRestoredScope] = useState<string | null>(null)
+  const [editorActions, setEditorActions] = useState<HTMLDivElement | null>(null)
+  const activeTab = state.tabs.find(tab => tab.key === state.active && !tab.diff)
+  const saveText = !activeTab ? '' : activeTab.deleting ? '删除中…' : activeTab.loading ? '读取中…' : activeTab.saving ? '保存中…' : activeTab.error && dirty(activeTab) ? '保存失败' : activeTab.error && !activeTab.file ? '读取失败' : dirty(activeTab) ? '等待自动保存…' : activeTab.savedAt ? `保存于 ${new Date(activeTab.savedAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : activeTab.file?.readonly ? '只读' : '自动保存'
+  const saveFailed = !!activeTab?.error
+  useEffect(() => { onSaveStatusChange?.(saveText ? { text: saveText, failed: saveFailed } : null) }, [saveText, saveFailed, onSaveStatusChange])
+  useEffect(() => () => onSaveStatusChange?.(null), [onSaveStatusChange])
   const live = useRef(state)
   const currentWorkspace = useRef(workspace)
   currentWorkspace.current = workspace
@@ -27,7 +45,15 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, children }:
     setState(live.current)
   }, [])
   const updateTab = useCallback((key: string, update: (tab: FileTab) => FileTab) => {
-    change(value => ({ ...value, tabs: value.tabs.map(tab => tab.key === key ? update(tab) : tab) }))
+    change(value => {
+      let changed = false
+      const tabs = value.tabs.map(tab => {
+        const next = tab.key === key ? update(tab) : tab
+        if (next !== tab) changed = true
+        return next
+      })
+      return changed ? { ...value, tabs } : value
+    })
   }, [change])
 
   const loadFile = useCallback(async (path: string, key: string) => {
@@ -39,7 +65,7 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, children }:
     updateTab(key, tab => ({ ...tab, loading: true, error: '', savedAt: undefined }))
     try {
       const file = await readWorkspaceFile(path, workspace.revision, controller.signal)
-      if (!controller.signal.aborted) updateTab(key, tab => ({ ...tab, path: file.path, file, draft: textFor(file), loading: false, line: 1, column: 1 }))
+      if (!controller.signal.aborted) updateTab(key, tab => ({ ...tab, path: file.path, file, draft: textFor(file), loading: false }))
     } catch (err) {
       if (!controller.signal.aborted) updateTab(key, tab => ({ ...tab, loading: false, error: err instanceof Error ? err.message : String(err) }))
     } finally { if (pending.current.get(key) === controller) pending.current.delete(key) }
@@ -49,6 +75,33 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, children }:
     mounted.current = true
     return () => { mounted.current = false; pending.current.forEach(controller => controller.abort()); pending.current.clear() }
   }, [])
+  useEffect(() => {
+    if (scope === restoredScope) return
+    if (restoredScope) writeViewState(restoredScope, snapshotFor(live.current))
+    pending.current.forEach(controller => controller.abort()); pending.current.clear()
+    const saved: WorkspaceViewState = scope ? readViewState(scope) : {}
+    const tabs: FileTab[] = restoredTabs(saved).map(tab => ({ ...tab, key: keyFor(tab.path), draft: '', loading: false, saving: false, error: '', location: { line: tab.line, column: tab.column, sequence: 0 } }))
+    const savedActive = typeof saved.active === 'string' ? keyFor(saved.active) : null
+    const active = tabs.some(tab => tab.key === savedActive) ? savedActive : null
+    change(() => ({ tabs, active }))
+    setRestoredScope(scope)
+  }, [scope, restoredScope, change])
+  useEffect(() => {
+    if (scope !== restoredScope || !scope) return
+    const tab = live.current.tabs.find(tab => tab.key === live.current.active)
+    if (tab && !tab.diff && !tab.file && !tab.error && !pending.current.has(tab.key)) void loadFile(tab.path, tab.key)
+  }, [scope, restoredScope, state.active, loadFile])
+  const persistView = useCallback(() => {
+    if (!scope || scope !== restoredScope || workspaceViewKey(currentWorkspace.current) !== scope) return
+    writeViewState(scope, snapshotFor(live.current))
+  }, [scope, restoredScope])
+  useEffect(() => { const timer = setTimeout(persistView, 250); return () => clearTimeout(timer) }, [state, persistView])
+  useEffect(() => {
+    const hidden = () => { if (document.hidden) persistView() }
+    window.addEventListener('pagehide', persistView); document.addEventListener('visibilitychange', hidden)
+    return () => { window.removeEventListener('pagehide', persistView); document.removeEventListener('visibilitychange', hidden) }
+  }, [persistView])
+
   useEffect(() => {
     if (!openRequest) return
     const key = keyFor(openRequest.path)
@@ -60,14 +113,14 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, children }:
     }
     const preview = live.current.tabs.find(tab => tab.preview && !dirty(tab) && !tab.saving && !tab.deleting)
     if (!preview && live.current.tabs.length >= 12) {
-      window.alert('最多同时打开 12 个文件，请先关闭部分标签。')
+      void dialogs.alert({ title: '打开标签已达上限', description: '最多同时打开 12 个文件，请先关闭部分标签。' })
       return
     }
     if (preview) { pending.current.get(preview.key)?.abort(); pending.current.delete(preview.key) }
     const tab: FileTab = { key, path: openRequest.path, draft: '', preview: !openRequest.pinned, loading: true, saving: false, error: '', savedAt: undefined, line: 1, column: 1, location: openRequest.line ? { line: openRequest.line, column: openRequest.column ?? 1, sequence: openRequest.sequence } : undefined }
     change(value => ({ active: key, tabs: preview ? value.tabs.map(current => current.key === preview.key ? tab : current) : [...value.tabs, tab] }))
     void loadFile(tab.path, key)
-  }, [openRequest, change, loadFile])
+  }, [openRequest, change, loadFile, dialogs])
 
   useEffect(() => {
     if (!diffRequest) return
@@ -76,11 +129,11 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, children }:
     const existing = live.current.tabs.find(tab => tab.key === key)
     if (existing) { updateTab(key, tab => ({ ...tab, diff })); change(value => ({ ...value, active: key })); return }
     const preview = live.current.tabs.find(tab => tab.preview && !dirty(tab) && !tab.saving && !tab.deleting)
-    if (!preview && live.current.tabs.length >= 12) { window.alert('最多同时打开 12 个标签，请先关闭部分标签。'); return }
+    if (!preview && live.current.tabs.length >= 12) { void dialogs.alert({ title: '打开标签已达上限', description: '最多同时打开 12 个标签，请先关闭部分标签。' }); return }
     if (preview) { pending.current.get(preview.key)?.abort(); pending.current.delete(preview.key) }
     const tab: FileTab = { key, path: diff.path, diff, draft: '', preview: true, loading: false, saving: false, error: '', line: 1, column: 1 }
     change(value => ({ active: key, tabs: preview ? value.tabs.map(current => current.key === preview.key ? tab : current) : [...value.tabs, tab] }))
-  }, [diffRequest, change, updateTab])
+  }, [diffRequest, change, updateTab, dialogs])
 
   const hasUnsaved = state.tabs.some(dirty)
   useEffect(() => {
@@ -106,16 +159,67 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, children }:
     return () => window.removeEventListener('beforeunload', beforeUnload)
   }, [hasUnsaved])
 
+  useEffect(() => {
+    if (!readOnlyShare || !scope || scope !== restoredScope || !state.active) return
+    let disposed = false
+    let controller: AbortController | null = null
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let lastAttempt = 0
+    let delay = 15000
+    const key = state.active
+    const schedule = () => { clearTimeout(timer); if (!disposed && !document.hidden) timer = setTimeout(() => void check(), delay) }
+    async function check() {
+      if (disposed || document.hidden || controller) return
+      const tab = live.current.tabs.find(tab => tab.key === key)
+      const workspace = currentWorkspace.current
+      if (!tab || tab.diff || !workspace) return
+      if (!tab.file || tab.loading || tab.saving || dirty(tab) || !navigator.onLine) { schedule(); return }
+      lastAttempt = Date.now()
+      const request = new AbortController()
+      controller = request
+      const timeout = setTimeout(() => request.abort(), 10000)
+      try {
+        const file = await readWorkspaceFile(tab.path, workspace.revision, request.signal)
+        if (disposed || request.signal.aborted) return
+        delay = 15000
+        updateTab(key, current => {
+          if (dirty(current) || current.saving || current.file !== tab.file) return current
+          if (current.file && file.content === current.file.content && file.readonly === current.file.readonly && file.readonlyReason === current.file.readonlyReason && !current.error) return current
+          return { ...current, file, draft: textFor(file), error: '' }
+        })
+      } catch (err) {
+        if (!disposed && !document.hidden) {
+          delay = Math.min(delay * 2, 60000)
+          updateTab(key, current => ({ ...current, error: `自动同步暂不可用：${err instanceof Error ? err.message : String(err)}` }))
+        }
+      } finally {
+        clearTimeout(timeout)
+        if (controller === request) controller = null
+        schedule()
+      }
+    }
+    const wake = () => {
+      clearTimeout(timer)
+      if (document.hidden) { controller?.abort(); return }
+      if (Date.now() - lastAttempt >= 5000) void check()
+      else timer = setTimeout(() => void check(), 5000 - (Date.now() - lastAttempt))
+    }
+    schedule()
+    document.addEventListener('visibilitychange', wake); window.addEventListener('focus', wake); window.addEventListener('online', wake)
+    return () => { disposed = true; clearTimeout(timer); controller?.abort(); document.removeEventListener('visibilitychange', wake); window.removeEventListener('focus', wake); window.removeEventListener('online', wake) }
+  }, [scope, restoredScope, state.active, workspace?.revision, updateTab])
+
   const saveFile = useCallback(async (key: string) => {
     const tab = live.current.tabs.find(tab => tab.key === key)
     const workspace = currentWorkspace.current
-    if (!tab?.file || tab.file.readonly || tab.saving || tab.loading || tab.deleting || !dirty(tab) || !workspace) return
+    if (!tab?.file || tab.file.readonly || tab.saving || tab.loading || tab.deleting || confirmations.current.has(key) || !dirty(tab) || !workspace) return
     const draft = tab.draft
+    const savingScope = workspaceViewKey(workspace)
     updateTab(key, current => ({ ...current, saving: true, error: '', savedAt: undefined }))
     try {
       const file = await writeWorkspaceFile(tab.path, workspace.revision, tab.file.content, draft)
-      updateTab(key, current => ({ ...current, file, saving: false, savedAt: Date.now() }))
-    } catch (err) { updateTab(key, current => ({ ...current, saving: false, error: err instanceof Error ? err.message : String(err) })) }
+      if (workspaceViewKey(currentWorkspace.current) === savingScope) updateTab(key, current => ({ ...current, file, saving: false, savedAt: Date.now() }))
+    } catch (err) { if (workspaceViewKey(currentWorkspace.current) === savingScope) updateTab(key, current => ({ ...current, saving: false, error: err instanceof Error ? err.message : String(err) })) }
   }, [updateTab])
 
   const autosaves = useRef(new Map<string, { draft: string; timer: ReturnType<typeof setTimeout> }>())
@@ -152,8 +256,27 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, children }:
     window.addEventListener('devflow-file-delete-finished', finished)
     return () => { window.removeEventListener('devflow-before-file-delete', beforeDelete); window.removeEventListener('devflow-file-delete-finished', finished) }
   }, [change, updateTab])
-  function closeFile(tab: FileTab) {
-    if (tab.deleting || tab.saving || (dirty(tab) && !window.confirm(`“${nameFor(tab.path)}”有未保存修改，确定放弃并关闭？`))) return
+  async function confirmDiscard(key: string, reload: boolean) {
+    const tab = live.current.tabs.find(current => current.key === key)
+    if (!tab || tab.deleting || tab.saving || confirmations.current.has(key)) return false
+    if (!dirty(tab)) return true
+    confirmations.current.add(key)
+    try {
+      return await dialogs.confirm({
+        title: reload ? '放弃修改并重新读取？' : '放弃未保存的修改？',
+        description: `“${nameFor(tab.path)}”仍有未保存内容。${reload ? '重新读取将使用磁盘内容替换当前草稿。' : '关闭后将丢失当前草稿。'}`,
+        confirmText: reload ? '放弃并重新读取' : '放弃并关闭', cancelText: '继续编辑', tone: 'danger',
+      })
+    } finally {
+      confirmations.current.delete(key)
+      // Resume an autosave timer that expired while the confirmation was open.
+      updateTab(key, current => ({ ...current }))
+    }
+  }
+  async function closeFile(tab: FileTab) {
+    if (!await confirmDiscard(tab.key, false) || !mounted.current) return
+    const current = live.current.tabs.find(item => item.key === tab.key)
+    if (!current || current.saving || current.deleting) return
     pending.current.get(tab.key)?.abort(); pending.current.delete(tab.key)
     change(value => {
       const index = value.tabs.findIndex(current => current.key === tab.key)
@@ -161,13 +284,15 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, children }:
       return { tabs, active: value.active === tab.key ? tabs[Math.min(index, tabs.length - 1)]?.key ?? null : value.active }
     })
   }
-  function reloadFile(tab: FileTab) {
-    if (tab.deleting || tab.saving || (dirty(tab) && !window.confirm(`重新读取“${nameFor(tab.path)}”会放弃本地未保存修改，确定继续？`))) return
-    void loadFile(tab.path, tab.key)
+  async function reloadFile(tab: FileTab) {
+    if (!await confirmDiscard(tab.key, true) || !mounted.current) return
+    const current = live.current.tabs.find(item => item.key === tab.key)
+    if (current && !current.saving && !current.deleting) void loadFile(current.path, current.key)
   }
 
   return <div className="file-workbench">
-    <div className="file-tabbar" role="tablist" aria-label="服务与打开的文件" onKeyDown={event => {
+    <div className="file-tabbar">
+    <div className="file-tabs" role="tablist" aria-label="服务与打开的文件" onKeyDown={event => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || (event.target as HTMLElement).getAttribute('role') !== 'tab') return
       event.preventDefault()
       const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
@@ -183,13 +308,17 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, children }:
         <button className="file-tab-close" disabled={tab.saving || tab.deleting} aria-label={`关闭 ${nameFor(tab.path)}`} title="关闭文件" onClick={() => closeFile(tab)}><X size={13} /></button>
       </div>)}
     </div>
+    <div className="file-tab-actions" hidden={!activeTab}>
+      <div ref={setEditorActions} className="file-editor-actions" />
+      <button className="ws-icon-button" disabled={!activeTab || activeTab.loading || activeTab.saving || activeTab.deleting || !workspace} aria-label="重新读取文件" title="重新读取磁盘文件" onClick={() => { if (activeTab) void reloadFile(activeTab) }}><RefreshCw size={14} /></button>
+    </div>
+    </div>
     <div id="services-pane" role="tabpanel" aria-labelledby="services-tab" className="file-services-pane" hidden={state.active !== null}>{children}</div>
     {state.tabs.map(tab => <section key={tab.key} id={`file-pane-${encodeURIComponent(tab.key)}`} role="tabpanel" aria-labelledby={`file-tab-${encodeURIComponent(tab.key)}`} hidden={state.active !== tab.key} className="file-pane">
       {tab.diff ? <Suspense fallback={<div className="file-loading">正在加载 Diff…</div>}><GitDiffPane diff={tab.diff} /></Suspense> : <>
-      <header className="file-toolbar"><span className="file-path" title={tab.path}>{tab.path}</span><button className="ws-icon-button" disabled={tab.loading || tab.saving || tab.deleting || !workspace} aria-label="重新读取文件" title="重新读取磁盘文件" onClick={() => reloadFile(tab)}><RefreshCw size={14} /></button><span className="file-save-time" role="status">{tab.deleting ? '删除中…' : tab.saving ? '保存中…' : tab.error && dirty(tab) ? '保存失败' : dirty(tab) ? '等待自动保存…' : tab.savedAt ? `保存于 ${new Date(tab.savedAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : tab.file?.readonly ? '只读' : '自动保存'}</span></header>
       {tab.error && <div className="file-notice is-error" role="alert">{tab.error}<button className="ws-outline-button" disabled={tab.loading || tab.saving || tab.deleting || !workspace} onClick={() => reloadFile(tab)}>重新读取</button></div>}
       {tab.file?.readonlyReason && <p className="file-notice">{tab.file.readonlyReason}</p>}
-      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><SourceEditor key={tab.path} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
+      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor key={tab.path} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
       {tab.file && <footer className="file-status"><span role="status">{tab.saving ? '保存中…' : dirty(tab) ? '未保存' : tab.savedAt ? <><Check size={12} />已保存</> : tab.preview ? '预览 · 双击标签固定' : '已打开'}</span><span>行 {tab.line}，列 {tab.column}</span><span>UTF-8{tab.file.bom ? ' BOM' : ''} · {tab.file.lineEnding}</span></footer>}
       </>}
     </section>)}

@@ -1,3 +1,7 @@
+import { readViewState, viewPathKey, workspaceViewKey, writeViewState } from './workspaceViewState'
+import { copyText } from '../../lib/clipboard'
+import { readOnlyShare } from '../../lib/access'
+import { useDialogs } from '../../components/form/BaseDialog'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement } from 'react'
 import { AlertCircle, Check, ChevronRight, ChevronsDownUp, Copy, FolderMinus, FolderPlus, LoaderCircle, MoreHorizontal, RefreshCw, Save, Trash2, X } from 'lucide-react'
 import { TreeEntryIcon } from './TreeEntryIcon'
@@ -9,7 +13,7 @@ import { ApiError, executeWorkspace, getWorkspaceChildren, mutateWorkspaceFile, 
 type NodeEntry = WorkspaceTreeEntry & { status?: string; message?: string | null }
 type TreeRoot = { name: string; path: string }
 type NodeMenu = { entry: NodeEntry; root: TreeRoot; level: number; revision: number; x: number; y: number; target: HTMLElement }
-type NodeProps = { entry: NodeEntry; root: TreeRoot; level: number; revision: number; selected: string | null; copiedPath: string | null; onCopy: (path: string, value?: string) => Promise<void>; onSelect: (path: string) => void; onOpenFile: (path: string, pinned?: boolean) => void; onNodeMenu: (menu: NodeMenu) => void }
+type NodeProps = { scope: string | null; entry: NodeEntry; root: TreeRoot; level: number; revision: number; selected: string | null; copiedPath: string | null; onCopy: (path: string, value?: string) => Promise<void>; onSelect: (path: string) => void; onOpenFile: (path: string, pinned?: boolean) => void; onNodeMenu: (menu: NodeMenu) => void }
 
 function relativeTreePath(path: string, root: string) {
   const normalized = path.replace(/\\/g, '/'), base = root.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -19,15 +23,28 @@ function relativeTreePath(path: string, root: string) {
   return comparable(normalized).startsWith(`${comparable(base)}/`) ? normalized.slice(base.length + 1) : null
 }
 
-function TreeNode({ entry, root, level, revision, selected, copiedPath, onCopy, onSelect, onOpenFile, onNodeMenu }: NodeProps): ReactElement {
+function TreeNode({ scope, entry, root, level, revision, selected, copiedPath, onCopy, onSelect, onOpenFile, onNodeMenu }: NodeProps): ReactElement {
   const directory = entry.kind === 'directory'
   const available = !entry.status || entry.status === 'available'
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(() => {
+    const saved = scope ? readViewState(scope).expanded : []
+    return Array.isArray(saved) && saved.some(path => typeof path === 'string' && viewPathKey(path) === viewPathKey(entry.path))
+  })
+  function expand(next: boolean) {
+    setExpanded(next)
+    if (!scope) return
+    const saved = readViewState(scope).expanded
+    const paths = new Set(Array.isArray(saved) ? saved.filter(path => typeof path === 'string').slice(0, 200) : [])
+    for (const path of paths) if (viewPathKey(path) === viewPathKey(entry.path)) paths.delete(path)
+    if (next) paths.add(entry.path)
+    writeViewState(scope, { expanded: [...paths].slice(-200) })
+  }
+  useEffect(() => { if (expanded && directory && available) void readChildren() }, [expanded, entry.path, revision])
   const [children, setChildren] = useState<WorkspaceChildren | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const pending = useRef<AbortController | null>(null)
-  useEffect(() => () => pending.current?.abort(), [])
+  useEffect(() => () => { const request = pending.current; pending.current = null; request?.abort() }, [])
   useEffect(() => {
     const changed = (event: Event) => {
       const path = (event as CustomEvent<string>).detail.replace(/\\/g, '/')
@@ -56,7 +73,7 @@ function TreeNode({ entry, root, level, revision, selected, copiedPath, onCopy, 
     onSelect(entry.path)
     if (!directory) { if (available) onOpenFile(entry.path); return }
     if (!available) return
-    setExpanded(current => !current)
+    expand(!expanded)
     if (!expanded && !children && !loading) void readChildren()
   }
   function onKeyDown(event: KeyboardEvent<HTMLLIElement>) {
@@ -74,7 +91,7 @@ function TreeNode({ entry, root, level, revision, selected, copiedPath, onCopy, 
       else element.querySelector<HTMLElement>('[role="treeitem"]')?.focus()
     } else if (event.key === 'ArrowLeft') {
       event.preventDefault(); event.stopPropagation()
-      if (expanded) setExpanded(false)
+      if (expanded) expand(false)
       else element.parentElement?.closest<HTMLElement>('[role="treeitem"]')?.focus()
     } else if (['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
       event.preventDefault(); event.stopPropagation()
@@ -105,7 +122,7 @@ function TreeNode({ entry, root, level, revision, selected, copiedPath, onCopy, 
       }}><MoreHorizontal size={14} /></button>}
     </div>
     {expanded && <ul role="group">
-      {children?.entries.map(child => <MemoTreeNode key={child.path} entry={child} root={root} level={level + 1} revision={revision} selected={selected} copiedPath={copiedPath} onCopy={onCopy} onSelect={onSelect} onOpenFile={onOpenFile} onNodeMenu={onNodeMenu} />)}
+      {children?.entries.map(child => <MemoTreeNode scope={scope} key={child.path} entry={child} root={root} level={level + 1} revision={revision} selected={selected} copiedPath={copiedPath} onCopy={onCopy} onSelect={onSelect} onOpenFile={onOpenFile} onNodeMenu={onNodeMenu} />)}
       {loading && <li role="none" className="ws-tree-note">正在读取…</li>}
       {error && <li role="none" className="ws-tree-note is-error" onClick={event => event.stopPropagation()}><span role="status">{error}</span><button onClick={() => void readChildren()}>重试</button></li>}
       {children && !children.entries.length && <li role="none" className="ws-tree-note">空文件夹或仅包含已忽略目录</li>}
@@ -119,6 +136,8 @@ function maxSidebarWidth() { return window.innerWidth < 720 ? Math.max(200, Math
 function clampWidth(width: number) { return Math.round(Math.max(200, Math.min(maxSidebarWidth(), width))) }
 
 export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigure, onAddFolder, onSave, onClose, onOpenFile, onOpenDiff }: { data: WorkspaceResponse | null; open: boolean; view: 'explorer' | 'search' | 'git'; onOpenDiff: (diff: GitDiff) => void; onChange: (data: WorkspaceResponse) => void; onRefresh: () => void; onConfigure: () => void; onAddFolder: () => void; onSave: () => void; onClose: () => void; onOpenFile: (path: string, pinned?: boolean, line?: number, column?: number) => void }) {
+  const dialogs = useDialogs()
+  const scope = workspaceViewKey(data)
   const [generation, setGeneration] = useState(0)
   const [selected, setSelected] = useState<string | null>(null)
   const [menu, setMenu] = useState<NodeMenu | null>(null)
@@ -139,7 +158,7 @@ export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigu
     const scope = copyScope.current
     let notice: { message: string; error: boolean; path?: string }
     try {
-      await navigator.clipboard.writeText(value)
+      await copyText(value)
       notice = { message: `路径已复制：${value}`, error: false, path }
     } catch {
       notice = { message: '复制失败，请允许浏览器访问剪贴板后重试', error: true }
@@ -169,7 +188,8 @@ export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigu
     return () => window.removeEventListener('resize', fit)
   }, [])
   const hasWorkspace = !!(data?.workspaceRoot || data?.workspaceFile)
-  useEffect(() => { setSelected(null); setMenu(null) }, [data?.revision])
+  useEffect(() => { const saved = scope ? readViewState(scope).selected : null; setSelected(typeof saved === 'string' ? saved : null); setMenu(null) }, [scope, data?.revision])
+  const selectPath = useCallback((path: string) => { setSelected(path); if (scope) writeViewState(scope, { selected: path }) }, [scope])
   useEffect(() => { setMenu(null); finishResize() }, [open, view])
   useEffect(() => {
     setCopyNotice(null)
@@ -208,7 +228,8 @@ export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigu
     if (!menu || menu.entry.kind !== 'file' || mutating.current) return
     const { entry, revision } = menu
     if (operation === 'delete') {
-      if (!window.confirm(`确定永久删除“${entry.name}”？文件和此文件未保存的修改都将删除，无法撤销。`)) return
+      if (!await dialogs.confirm({ title: '永久删除文件？', description: `“${entry.name}”及其未保存的修改都将删除，此操作无法撤销。`, confirmText: '永久删除', tone: 'danger' })) return
+      if (mutating.current) return
       if (!window.dispatchEvent(new CustomEvent('devflow-before-file-delete', { detail: entry.path, cancelable: true }))) {
         setOperationError('文件正在读取、保存或删除，请稍后重试。'); return
       }
@@ -232,17 +253,17 @@ export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigu
   return <aside ref={sidebarRef} hidden={!open} className={`workspace-sidebar ${resizing ? 'is-resizing' : ''}`} style={{ '--explorer-width': `${width}px` } as CSSProperties} id="workspace-sidebar" aria-label={view === 'git' ? '工作区 Git 管理' : view === 'search' ? '工作区搜索' : '工作区资源管理器'}>
     <div className="ws-explorer-view" hidden={view !== 'explorer'}>
     <div className="ws-explorer-heading"><h2 className="ws-explorer-title" title={data?.workspaceFile ?? data?.workspaceRoot ?? ''}><span className="ws-explorer-name">{data?.name ?? '未选择工作区'}</span>{data?.dirty && <small className="ws-explorer-unsaved">未保存</small>}</h2><div>
-      <button className="ws-icon-button" disabled={!hasWorkspace} aria-label="添加文件夹到工作区" title="添加文件夹到工作区" onClick={onAddFolder}><FolderPlus size={15} /></button>
-      {data?.dirty && <button className="ws-icon-button" aria-label="保存工作区更改" title="保存工作区更改" onClick={onSave}><Save size={14} /></button>}
+      {!readOnlyShare && <button className="ws-icon-button" disabled={!hasWorkspace} aria-label="添加文件夹到工作区" title="添加文件夹到工作区" onClick={onAddFolder}><FolderPlus size={15} /></button>}
+      {!readOnlyShare && data?.dirty && <button className="ws-icon-button" aria-label="保存工作区更改" title="保存工作区更改" onClick={onSave}><Save size={14} /></button>}
       <button className="ws-icon-button" aria-label="刷新目录树" title="刷新目录树" onClick={() => setGeneration(current => current + 1)}><RefreshCw size={14} /></button>
-      <button className="ws-icon-button" aria-label="折叠所有文件夹" title="折叠所有文件夹" onClick={() => setGeneration(current => current + 1)}><ChevronsDownUp size={14} /></button>
+      <button className="ws-icon-button" aria-label="折叠所有文件夹" title="折叠所有文件夹" onClick={() => { if (scope) writeViewState(scope, { expanded: [] }); setGeneration(current => current + 1) }}><ChevronsDownUp size={14} /></button>
       <button className="ws-icon-button" aria-label="收起资源管理器" title="收起资源管理器" onClick={onClose}><X size={14} /></button>
     </div></div>
     <div className="ws-tree-scroll">
-      <ul role="tree" aria-label="工作区文件夹" key={`${data?.revision ?? 0}:${generation}`}>
-        {roots.map(folder => <MemoTreeNode key={folder.path} entry={folder} root={folder} level={1} revision={data!.revision} selected={selected} copiedPath={copyNotice?.path ?? null} onCopy={copyPath} onSelect={setSelected} onOpenFile={onOpenFile} onNodeMenu={openNodeMenu} />)}
+      <ul role="tree" aria-label="工作区文件夹" key={`${scope}:${data?.revision ?? 0}:${generation}`}>
+        {roots.map(folder => <MemoTreeNode scope={scope} key={folder.path} entry={folder} root={folder} level={1} revision={data!.revision} selected={selected} copiedPath={copyNotice?.path ?? null} onCopy={copyPath} onSelect={selectPath} onOpenFile={onOpenFile} onNodeMenu={openNodeMenu} />)}
       </ul>
-      {!data?.folders.length && <div className="ws-tree-empty"><p>{hasWorkspace ? '工作区还没有文件夹' : '打开文件夹或工作区'}</p><button className="ws-outline-button" onClick={hasWorkspace ? onAddFolder : onConfigure}><FolderPlus size={14} />{hasWorkspace ? '添加文件夹' : '打开工作区'}</button></div>}
+      {!data?.folders.length && <div className="ws-tree-empty"><p>{hasWorkspace ? '工作区还没有文件夹' : '打开文件夹或工作区'}</p>{!readOnlyShare && <button className="ws-outline-button" onClick={hasWorkspace ? onAddFolder : onConfigure}><FolderPlus size={14} />{hasWorkspace ? '添加文件夹' : '打开工作区'}</button>}</div>}
       {data?.warnings.map(warning => <p className="ws-tree-note is-error" role="status" key={warning}>{warning}</p>)}
       {operationError && <p className="ws-tree-note is-error" role="alert">{operationError}</p>}
     </div>
@@ -285,11 +306,11 @@ export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigu
         if (relative === null) return
         void copyPath(menu.entry.path, relative); menu.target.focus(); setMenu(null)
       }}><Copy size={15} /><span>复制相对路径<small className="ws-context-relative">相对 {menu.root.name}</small></span></button>
-      {menu.entry.kind === 'file' && <>
+      {!readOnlyShare && menu.entry.kind === 'file' && <>
         <button role="menuitem" disabled={removing} title="将磁盘文件复制为同目录副本" onClick={() => void mutateFile('copy')}><Copy size={15} />复制文件</button>
         <button className="ws-context-remove" role="menuitem" disabled={removing} onClick={() => void mutateFile('delete')}><Trash2 size={15} />删除文件</button>
       </>}
-      {menu.level === 1 && <><button className="ws-context-remove" role="menuitem" disabled={removing} onClick={() => void removeRoot()}><FolderMinus size={15} />{removing ? '正在移除…' : '从工作区移除'}</button>
+      {!readOnlyShare && menu.level === 1 && <><button className="ws-context-remove" role="menuitem" disabled={removing} onClick={() => void removeRoot()}><FolderMinus size={15} />{removing ? '正在移除…' : '从工作区移除'}</button>
       <small>仅移除引用，不删除文件；保存后持久化。</small></>}
     </div>}
   </aside>

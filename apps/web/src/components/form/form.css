@@ -47,6 +47,8 @@
 .df-button:hover:not(:disabled) { background: var(--ws-hover); }
 .df-button.is-primary { background: var(--ws-primary); border-color: transparent; color: var(--ws-primary-ink); }
 .df-button.is-primary:hover:not(:disabled) { background: var(--ws-primary-hover); }
+.df-button.is-danger { background: var(--ws-error-bg); border-color: var(--ws-error); color: var(--ws-error); }
+.df-button.is-danger:hover:not(:disabled) { background: var(--ws-error); color: var(--ws-bg); }
 .df-button:disabled { opacity: .45; cursor: default; }
 @keyframes df-select-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) {

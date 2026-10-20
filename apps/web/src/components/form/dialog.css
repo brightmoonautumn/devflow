@@ -1,0 +1,10 @@
+.df-dialog { width: min(420px, calc(100vw - 28px)); max-height: calc(100dvh - 32px); margin: auto; padding: 20px; box-sizing: border-box; overflow-y: auto; border: 1px solid var(--ws-border); border-radius: 12px; background: var(--ws-surface); color: var(--ws-ink); box-shadow: var(--ws-shadow); font: var(--ws-font-body)/1.6 var(--font-ui); }
+.df-dialog::backdrop { background: #080b1266; backdrop-filter: blur(3px); }
+.df-dialog-heading { display: flex; align-items: center; gap: 10px; }
+.df-dialog-heading h2 { margin: 0; color: var(--ws-ink); font-size: 15px; font-weight: 500; }
+.df-dialog-icon { display: grid; place-items: center; flex-shrink: 0; width: 34px; height: 34px; border-radius: 9px; color: var(--ws-accent); background: var(--ws-accent-bg); }
+.df-dialog.is-danger .df-dialog-icon { color: var(--ws-error); background: var(--ws-error-bg); }
+.df-dialog-description { margin: 14px 0 20px; max-height: 45dvh; overflow-y: auto; color: var(--ws-muted); font-size: var(--ws-font-body); line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.df-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.df-dialog .df-button:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 2px; }
+@media (max-width: 550px) { .df-dialog { padding: 16px; } }

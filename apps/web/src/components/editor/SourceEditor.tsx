@@ -21,10 +21,10 @@ export const colors = syntaxHighlighting(HighlightStyle.define([
   { tag: [tags.variableName, tags.name], color: 'var(--ws-ink)' },
 ]))
 
-type Props = { path: string; value: string; readonly: boolean; location?: { line: number; column: number; sequence: number }; onChange: (value: string) => void; onSave: () => void; onPosition: (line: number, column: number) => void }
+export type SourceEditorProps = { path: string; value: string; readonly: boolean; location?: { line: number; column: number; sequence: number }; onChange: (value: string) => void; onSave: () => void; onPosition: (line: number, column: number) => void }
 
 /** Public editor boundary: feature code never depends on CodeMirror state or DOM APIs. */
-export default function SourceEditor({ path, value, readonly, location, onChange, onSave, onPosition }: Props) {
+export default function SourceEditor({ path, value, readonly, location, onChange, onSave, onPosition }: SourceEditorProps) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   const editable = useRef(new Compartment())
@@ -40,6 +40,7 @@ export default function SourceEditor({ path, value, readonly, location, onChange
       doc: initial.current,
       extensions: [
         basicSetup, colors, language.of([]),
+        /\.(?:md|markdown)$/i.test(path) ? EditorView.lineWrapping : [],
         EditorState.tabSize.of(2),
         editable.current.of([EditorState.readOnly.of(readonly), EditorView.editable.of(!readonly)]),
         EditorView.contentAttributes.of({ 'aria-label': `编辑 ${path}`, spellcheck: 'false' }),
@@ -75,7 +76,10 @@ export default function SourceEditor({ path, value, readonly, location, onChange
   useEffect(() => {
     const editor = view.current
     if (editor && editor.state.doc.toString() !== value) {
-      editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: value } })
+      const selection = editor.state.selection.main
+      const top = editor.scrollDOM.scrollTop, left = editor.scrollDOM.scrollLeft
+      editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: value }, selection: { anchor: Math.min(selection.anchor, value.length), head: Math.min(selection.head, value.length) } })
+      editor.scrollDOM.scrollTop = top; editor.scrollDOM.scrollLeft = left
     }
   }, [value])
   useEffect(() => {

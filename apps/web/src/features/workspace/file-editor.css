@@ -1,6 +1,9 @@
 .file-workbench { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .file-workbench [hidden] { display: none !important; }
-.file-tabbar { display: flex; flex-shrink: 0; min-height: 36px; overflow-x: auto; background: var(--ws-surface); border-bottom: 1px solid var(--ws-border); }
+.file-tabbar { display: flex; flex-shrink: 0; min-width: 0; min-height: 36px; background: var(--ws-surface); border-bottom: 1px solid var(--ws-border); }
+.file-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; }
+.file-tab-actions, .file-editor-actions { display: flex; align-items: center; flex-shrink: 0; gap: 5px; }
+.file-tab-actions { padding: 0 8px; border-left: 1px solid var(--ws-subtle-border); }
 .file-tab-group { display: flex; flex-shrink: 0; align-items: center; max-width: 250px; border-right: 1px solid var(--ws-subtle-border); border-top: 2px solid transparent; }
 .file-tab-group.is-active, .file-services-tab.is-active { background: var(--ws-bg); border-top-color: var(--ws-accent); }
 .file-tab { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 8px 10px; background: transparent; color: var(--ws-muted); font-size: var(--ws-font-small); white-space: nowrap; }
@@ -15,10 +18,6 @@
 .file-dirty { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--ws-accent); }
 .file-services-pane { flex: 1; min-height: 0; display: flex; }
 .file-pane { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-.file-toolbar { display: flex; flex-shrink: 0; align-items: center; gap: 7px; padding: 6px 12px; border-bottom: 1px solid var(--ws-subtle-border); }
-.file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-muted); font-size: var(--ws-font-small); }
-.file-toolbar .ws-outline-button { flex-shrink: 0; }
-.file-save-time { flex-shrink: 0; color: var(--ws-muted); font-size: var(--ws-font-small); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .df-source-editor { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .file-notice { display: flex; align-items: center; flex-shrink: 0; gap: 10px; flex-wrap: wrap; margin: 0; padding: 8px 12px; color: var(--ws-muted); background: var(--ws-hover); font-size: var(--ws-font-small); overflow-wrap: anywhere; }
 .file-notice.is-error { color: var(--ws-error); background: var(--ws-error-bg); }
@@ -28,4 +27,4 @@
 .file-status span:first-child { margin-right: auto; color: var(--ws-muted); }
 .df-source-editor .cm-search { font-size: var(--ws-font-small); }
 .df-source-editor .cm-textfield { background: var(--ws-bg); color: var(--ws-ink); border-color: var(--ws-border); }
-@media (max-width: 550px) { .file-toolbar { padding: 5px 8px; } .file-tab-group { max-width: 200px; } .file-status { gap: 8px; } }
+@media (max-width: 550px) { .file-tab-group { max-width: 200px; } .file-status { gap: 8px; } }

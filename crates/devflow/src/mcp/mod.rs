@@ -47,6 +47,10 @@ fn tools() -> Value {
     // Expand each schema independently; a single json! token-munching array
     // makes macro recursion grow with the total size of the tool catalog.
     let tools = vec![
+        json!({"name":"workspace_share_create","description":"Create a read-only invitation for the current workspace, frozen to its included folders. Valid 5–1440 minutes, revoked on restart. Return token only once; attach to /share/#token on the dedicated LAN listener. Guests can read files/search/Git diff/logs, never mutate. Only local owner may create.","inputSchema":{"type":"object","properties":{"expectedRevision":{"type":"integer","minimum":0},"lifetimeMinutes":{"type":"integer","minimum":5,"maximum":1440}},"required":["expectedRevision","lifetimeMinutes"],"additionalProperties":false},"annotations":{"readOnlyHint":false}}),
+        read("workspace_share_list", "List active read-only invitations (no tokens). Local owner only."),
+        json!({"name":"workspace_share_revoke","description":"Revoke an invitation by id. Local owner only. Subsequent guest reads fail, including responses still being prepared.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false},"annotations":{"readOnlyHint":false}}),
+        json!({"name":"workspace_share_read","description":"Read through an invitation's fixed workspace permissions. Request type is workspace, children(path), file(path), search(query, optional mode/caseSensitive/wholeWord/regex/includeGlob/excludeGlob), runtime (scoped project metrics), metrics (backend process metrics), git_status, git_diff(repository/version/path), or output(projectPath, optional script/after/runId). Unknown actions and fields are rejected in core. This local MCP adapter still requires owner transport authentication; LAN guests use /api/shared/read on the separate listener.","inputSchema":{"type":"object","properties":{"token":{"type":"string"},"request":{"type":"object"}},"required":["token","request"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}),
         json!({"name":"workspace_git_status","description":"Read active workspace Git repositories and their porcelain v2 changes. Parent submodule pointers and child repository files are separate groups with separate versions. Discovers initialized index gitlinks without recursively scanning .git/dependencies. Needs authentication and current workspace revision.","inputSchema":{"type":"object","properties":{"expectedRevision":{"type":"integer","minimum":0}},"required":["expectedRevision"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}),
         json!({"name":"workspace_git_diff","description":"Read HEAD versus current disk content for a changed file, or old/new submodule commit IDs for a parent gitlink. Additions/deletions use an empty side. Binary/large files return an explanation. Requires the repository version from workspace_git_status.","inputSchema":{"type":"object","properties":{"expectedRevision":{"type":"integer"},"repository":{"type":"string"},"version":{"type":"string"},"path":{"type":"string"}},"required":["expectedRevision","repository","version","path"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}),
         json!({"name":"workspace_git_mutate","description":"Add selected untracked files to VCS or rollback selected tracked changes to HEAD. Rollback of newly added files unstages and preserves disk content. Never deletes untracked files or checks out child submodule HEADs. Caller must confirm rollback's listed paths. Returns per-repository successful paths/errors; batches are not atomic.","inputSchema":{"type":"object","properties":{"expectedRevision":{"type":"integer"},"operation":{"enum":["add","rollback"]},"selections":{"type":"array","minItems":1,"maxItems":32,"items":git_selection.clone()}},"required":["expectedRevision","operation","selections"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}}),
@@ -111,7 +115,31 @@ pub async fn handle(
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-            if matches!(name, "workspace_git_status" | "workspace_git_diff" | "workspace_git_mutate" | "workspace_git_commit_preview" | "workspace_git_commit_apply") {
+            if matches!(name, "workspace_share_create" | "workspace_share_list" | "workspace_share_revoke" | "workspace_share_read") {
+                let authenticated = security::authenticated(&headers, &state);
+                let network = state.share_network.clone();
+                let name = name.to_owned();
+                let result = call_core(state, move |engine| {
+                    let invalid = |err: serde_json::Error| WorkspaceError { code: "invalid_query", message: err.to_string() };
+                    if !authenticated { return Err(WorkspaceError { code: "unauthorized", message: "需要本机管理令牌".into() }); }
+                    match name.as_str() {
+                        "workspace_share_list" => Ok(json!({"network":network,"invitations":engine.workspace.share_list(true)?})),
+                        "workspace_share_create" => {
+                            if network.address.is_none() { return Err(WorkspaceError { code: "unavailable", message: "分享端口未启动".into() }); }
+                            Ok(json!(engine.workspace.share_create(serde_json::from_value(arguments).map_err(invalid)?, true)?))
+                        }
+                        "workspace_share_revoke" => engine.workspace.share_revoke(serde_json::from_value(arguments).map_err(invalid)?, true),
+                        _ => {
+                            #[derive(serde::Deserialize)]
+                            #[serde(deny_unknown_fields)]
+                            struct Read { token: String, request: devflow_core::workspace::ShareReadRequest }
+                            let request: Read = serde_json::from_value(arguments).map_err(invalid)?;
+                            engine.share_read(&request.token, request.request)
+                        }
+                    }
+                }).await;
+                Ok(tool_result(result))
+            } else if matches!(name, "workspace_git_status" | "workspace_git_diff" | "workspace_git_mutate" | "workspace_git_commit_preview" | "workspace_git_commit_apply") {
                 let authenticated = security::authenticated(&headers, &state);
                 let name = name.to_owned();
                 let result = call_core(state, move |engine| {
@@ -406,8 +434,9 @@ mod tests {
     fn workspace_tools_advertise_revision_and_required_paths() {
         let catalog = tools();
         let tools = catalog["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 35);
+        assert_eq!(tools.len(), 39);
         for name in [
+            "workspace_share_create",
             "workspace_git_status",
             "workspace_git_diff",
             "workspace_git_mutate",

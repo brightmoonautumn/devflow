@@ -1,3 +1,5 @@
+import { readOnlyShare } from './access'
+import { shareRequest } from '../features/sharing/transport'
 export interface Project {
   name: string
   kind: 'maven' | 'node' | 'maven_and_node'
@@ -83,12 +85,14 @@ function getToken() {
   return session
 }
 export async function request<T>(url: string, options: RequestInit = {}, retry = true): Promise<T> {
+  if (readOnlyShare) return shareRequest<T>(url, options)
   const token = await getToken()
   const headers = new Headers(options.headers)
   headers.set('Authorization', `Bearer ${token}`)
   if (options.body) headers.set('Content-Type', 'application/json')
   const response = await fetch(url, { ...options, signal: options.signal ?? AbortSignal.timeout(15000), headers, cache: 'no-store' })
   if (response.status === 401 && retry) { session = null; return request<T>(url, options, false) }
+  if (url.startsWith('/api/workspace/shares') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) throw new ApiError('backend_outdated', '当前后端尚不支持只读分享，请更新并重启后端。')
   if (url.startsWith('/api/workspace/git/') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) throw new ApiError('backend_outdated', '当前后端尚不支持 Git 管理，请更新并重启后端。')
   if (url.startsWith('/api/workspace/replace/') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) {
     throw new ApiError('backend_outdated', '当前后端尚不支持搜索替换，请更新并重启后端后重试。')

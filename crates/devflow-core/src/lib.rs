@@ -28,7 +28,11 @@ impl DevFlowEngine {
     }
 
     pub fn runtime_snapshot(&self) -> Result<runtime::RuntimeSnapshot, workspace::WorkspaceError> {
-        let workspace = self.workspace.snapshot()?;
+        self.runtime_snapshot_for(&self.workspace)
+    }
+
+    pub(crate) fn runtime_snapshot_for(&self, workspace: &workspace::WorkspaceService) -> Result<runtime::RuntimeSnapshot, workspace::WorkspaceError> {
+        let workspace = workspace.snapshot()?;
         let mut outputs = Vec::new();
         let mut managed = Vec::new();
         for project in &workspace.projects {

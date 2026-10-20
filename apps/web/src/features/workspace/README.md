@@ -15,9 +15,20 @@ Both file operations use the authenticated, revision-checked Rust core via HTTP/
 The shared editor loads CodeMirror language parsers by filename, including YAML,
 Python, SQL, shell, PowerShell, Dockerfile, TOML, properties, Go and Rust. A local
 log tokenizer highlights timestamps, severity levels and exception stacks.
+`FileEditor` routes Markdown to a Vditor document editor behind the shared editor
+boundary. Document, source and comparison modes use the same draft and file APIs;
+Mermaid/KaTeX/highlight assets are served locally. See `components/editor/README.md`.
 HTTP and MCP use the same bounded ripgrep service in `devflow-core`; see
 `docs/features/workspace.md` for configuration, limits and validation status.
 
 ### Git 入口
 
 活动栏新增 Git，WorkspaceTree 挂载相邻 `features/git/GitPanel`，FileWorkbench 承载只读 Diff 标签。业务 API 和样式归属 `features/git`，CodeMirror 对比实现封装在 `components/editor/GitDiffEditor`。父子仓库分别选择与提交，行为说明见 `docs/features/workspace-git.md`。
+
+`workspaceViewState.ts` persists view metadata per workspace: ordinary file tabs,
+active file, source cursor, expanded tree nodes and sidebar preferences. Files are
+read lazily through the existing authorized API after restoration. Local sessions
+use localStorage; readonly shares use sessionStorage. Draft content, diff bodies
+and credentials are not part of this store. Markdown stores only its mode under
+an editor-specific key. Readonly file polling checks the active file every 15s,
+pauses in hidden pages and backs off to 60s on failure without remounting editors.

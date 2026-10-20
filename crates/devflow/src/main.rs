@@ -1,6 +1,7 @@
 mod http;
 mod mcp;
 mod security;
+mod share;
 
 use axum::{
     Router,
@@ -12,6 +13,8 @@ use tower_http::services::{ServeDir, ServeFile};
 pub struct AppState {
     pub engine: Arc<devflow_core::DevFlowEngine>,
     pub api_token: String,
+    pub share_network: share::Network,
+    pub share_slots: Arc<tokio::sync::Semaphore>,
 }
 
 pub async fn call_core<T: Send + 'static>(
@@ -66,12 +69,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         root,
         restore_recent,
     )?;
+    let (share_listener, share_network) = share::bind().await;
+    if let Some(error) = &share_network.error { tracing::warn!("{error}"); }
     let state = Arc::new(AppState {
         engine: Arc::new(engine),
         api_token,
+        share_network,
+        share_slots: Arc::new(tokio::sync::Semaphore::new(8)),
     });
+    let guest_router = share::router(state.clone());
     let app = Router::new()
         .route("/api/health", get(http::health))
+        .route("/api/workspace/shares", get(share::list).post(share::create))
+        .route("/api/workspace/shares/revoke", post(share::revoke))
         .route("/api/session", get(http::session))
         .route("/api/projects", get(http::projects))
         .route(
@@ -137,6 +147,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = format!("127.0.0.1:{port}").parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("DevFlow at http://{addr}");
+    if let Some(share_listener) = share_listener {
+        tokio::spawn(async move {
+            if let Err(error) = axum::serve(share_listener, guest_router.into_make_service_with_connect_info::<SocketAddr>()).await { tracing::error!("只读分享监听失败：{error}"); }
+        });
+    }
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

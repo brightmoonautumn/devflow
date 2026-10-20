@@ -1,3 +1,4 @@
+import { readOnlyShare } from '../../lib/access'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, ChevronsDownUp, FileText, ListX, LoaderCircle, RefreshCw, Replace, ReplaceAll, Search, SlidersHorizontal, X } from 'lucide-react'
 import { applyWorkspaceReplace, previewWorkspaceReplace, searchWorkspace, type ReplacePreview, type SearchMatch, type WorkspaceResponse, type WorkspaceSearch as SearchResponse } from '../../lib/api'
@@ -91,7 +92,7 @@ export function WorkspaceSearch({ workspace, active, onOpenFile, onClose }: {
   }
   function toggle(path: string) { setCollapsed(value => { const next = new Set(value); if (next.has(path)) next.delete(path); else next.add(path); return next }) }
   const canSearch = available && !!query.trim() && !busy
-  const canReplace = canSearch && !loading && contentCount > 0
+  const canReplace = !readOnlyShare && canSearch && !loading && contentCount > 0
   function checkEditors(paths: string[]) {
     if (!window.dispatchEvent(new CustomEvent('devflow-before-replace', { detail: paths, cancelable: true }))) {
       throw new Error('目标文件有未保存修改，或正在读取/保存，请先处理编辑器中的文件再替换。')
@@ -136,7 +137,7 @@ export function WorkspaceSearch({ workspace, active, onOpenFile, onClose }: {
       <button className="ws-icon-button" title="收起搜索" aria-label="收起搜索" onClick={onClose}><X size={14} /></button>
     </div></header>
     <form className="ws-search-form" onSubmit={event => { event.preventDefault(); if (!busy) setAttempt(value => value + 1) }}><fieldset disabled={busy}>
-      <div className="ws-search-query-row"><button type="button" className="ws-replace-toggle" title="展开替换" aria-label="展开替换" aria-expanded={showReplace} onClick={() => setShowReplace(value => !value)}>{showReplace ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
+      <div className="ws-search-query-row">{!readOnlyShare && <button type="button" className="ws-replace-toggle" title="展开替换" aria-label="展开替换" aria-expanded={showReplace} onClick={() => setShowReplace(value => !value)}>{showReplace ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>}
       <div className="ws-search-input"><input ref={input} value={query} disabled={!available} aria-label="搜索文件名与内容" placeholder="搜索" onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Escape' && loading) { event.stopPropagation(); pending.current?.abort(); setLoading(false); setCancelled(true) } }} />
         <div className="ws-search-options" role="group" aria-label="搜索选项">
           <button type="button" aria-label="区分大小写" aria-pressed={caseSensitive} onClick={() => setCaseSensitive(value => !value)} title="区分大小写">Aa</button>
