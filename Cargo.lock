@@ -123,6 +123,7 @@ name = "devflow-core"
 version = "0.1.0"
 dependencies = [
  "jsonc-parser",
+ "regex",
  "roxmltree",
  "serde",
  "serde_json",

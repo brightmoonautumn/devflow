@@ -18,7 +18,7 @@ fn response<T: serde::Serialize>(result: Result<T, WorkspaceError>) -> ApiResult
                 "outside_roots" | "outside_workspace" | "excluded_directory"
                 | "permission_denied" => StatusCode::FORBIDDEN,
                 "not_found" => StatusCode::NOT_FOUND,
-                "conflict" | "already_exists" | "unsaved_changes" | "duplicate_folder" => {
+                "conflict" | "file_conflict" | "already_exists" | "unsaved_changes" | "duplicate_folder" => {
                     StatusCode::CONFLICT
                 }
                 "unavailable" | "io_error" => StatusCode::SERVICE_UNAVAILABLE,
@@ -62,6 +62,52 @@ pub async fn workspace_browse(
     Query(request): Query<devflow_core::workspace::WorkspaceBrowseRequest>,
 ) -> ApiResult {
     response(call_core(state, move |engine| engine.workspace.browse(request)).await)
+}
+pub async fn workspace_pick(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<devflow_core::workspace::WorkspacePickRequest>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.pick_local(request, authenticated)).await)
+}
+pub async fn workspace_file_read(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(request): Query<devflow_core::workspace::WorkspaceFileReadRequest>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.read_file(request, authenticated)).await)
+}
+pub async fn workspace_search(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<devflow_core::workspace::WorkspaceSearchRequest>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.search(request, authenticated)).await)
+}
+pub async fn workspace_file_write(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<devflow_core::workspace::WorkspaceFileWriteRequest>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.write_file(request, authenticated)).await)
+}
+pub async fn workspace_replace_preview(
+    State(state): State<Arc<AppState>>, headers: HeaderMap,
+    Json(request): Json<devflow_core::workspace::ReplacePreviewRequest>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.replace_preview(request, authenticated)).await)
+}
+pub async fn workspace_replace_apply(
+    State(state): State<Arc<AppState>>, headers: HeaderMap,
+    Json(request): Json<devflow_core::workspace::ReplaceApplyRequest>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.replace_apply(request, authenticated)).await)
 }
 pub async fn workspace_children(
     State(state): State<Arc<AppState>>,

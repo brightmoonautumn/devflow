@@ -7,6 +7,19 @@ Local-first development control center. **Rust + Tokio + Axum + React + TypeScri
 > This is a workspace-focused starter, not a finished IDE. Workspace management, Maven/Node discovery, metrics, managed Java/Node launch/stop, live output and official Arthas attachment share one core engine across Web and MCP. Aggregate frontend scripts are managed as independent services sharing their package root. See [workspace documentation](docs/features/workspace.md).
 
 ## Prerequisites
+
+Search uses the pinned official `@vscode/ripgrep` package. `pnpm install` prepares
+the current platform binary and licenses under `tools/ripgrep/`; development and
+packaging scripts also prepare it. Release bundles include this directory and
+search offline without Node.js, PATH changes or manual rg configuration. If
+installation scripts were disabled, run `pnpm tools:prepare` with optional
+dependencies installed. `DEVFLOW_RG_PATH` is an optional absolute-path override.
+The left activity bar has separate Explorer and Search views, sharing one
+resizable sidebar. One input searches both filenames and content; results are
+grouped by file with highlighted matches. Expand Replace for occurrence, file,
+or workspace content replacement. Replace All shows a preview before applying;
+disk conflicts and unsaved editor drafts are protected. File names are unchanged.
+
 - Rust stable toolchain (rustup; supports edition 2024)
 - Node.js 22+ and pnpm 11.25.0 (`corepack enable` or `npm i -g pnpm@11.25.0`)
 - JDK and Maven for Java services; Node.js and the selected npm/pnpm/yarn installation for frontend services

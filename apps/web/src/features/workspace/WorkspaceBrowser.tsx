@@ -12,7 +12,7 @@ export function WorkspaceBrowser({ catalog, path, onNavigate, selected, onSelect
   const [filter, setFilter] = useState('')
   const [refresh, setRefresh] = useState(0)
   useEffect(() => {
-    setFilter(''); setListing(null); setError(''); onSelect(null)
+    setFilter(''); setListing(null); setError('')
     if (!path) { setLoading(false); return }
     const controller = new AbortController()
     setLoading(true)
@@ -27,7 +27,7 @@ export function WorkspaceBrowser({ catalog, path, onNavigate, selected, onSelect
   return <div className="ws-browser">
     <div className="ws-browser-toolbar">
       <button type="button" className="ws-icon-button" disabled={disabled || !path || loading} aria-label="上一级目录" onClick={() => navigate(listing?.parent ?? null)}><ArrowLeft size={15} /></button>
-      <button type="button" className="ws-browser-home" disabled={disabled} onClick={() => navigate(null)}><HardDrive size={14} />本机目录</button>
+      <button type="button" className="ws-browser-home" disabled={disabled} onClick={() => navigate(null)}><HardDrive size={14} />已授权位置</button>
       <ChevronRight size={12} /><span className="ws-browser-location" title={path ?? '已授权位置'}>{path ?? '已授权位置'}</span>
       <button type="button" className="ws-icon-button" disabled={disabled || loading || !path} aria-label="刷新浏览目录" onClick={() => setRefresh(value => value + 1)}><RefreshCw size={13} /></button>
     </div>

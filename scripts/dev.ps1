@@ -35,6 +35,8 @@ $logDirectory = Join-Path $repoRoot '.devflow'
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 Push-Location $repoRoot
 try {
+    & node (Join-Path $PSScriptRoot 'prepare-ripgrep.cjs')
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to prepare search. Run pnpm install with optional dependencies enabled.' }
     Write-Host 'Starting Rust API at http://127.0.0.1:31080 (first build may take a few minutes)...'
     $backend = Start-Process cargo -ArgumentList 'run', '-p', 'devflow' -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDirectory 'backend.out.log') -RedirectStandardError (Join-Path $logDirectory 'backend.err.log')
     $ready = $false

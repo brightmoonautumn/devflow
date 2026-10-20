@@ -42,15 +42,22 @@ fn tools() -> Value {
         };
         json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}})
     };
+    let search_schema = json!({"type":"object","properties":{"query":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0},"mode":{"enum":["files","content","both"]},"caseSensitive":{"type":"boolean"},"wholeWord":{"type":"boolean"},"regex":{"type":"boolean"},"includeGlob":{"type":"string"},"excludeGlob":{"type":"string"}},"required":["query","expectedRevision"],"additionalProperties":false});
     json!({"tools":[
+        {"name":"workspace_replace_preview","description":"Preview content replacements without writing. Pass search, replacement, optional preserveCase, optional path (one file), optional line/column (one occurrence). Requires complete bounded content search; filename matches are never renamed. Returns before/after samples and a server-side planId valid for 5 minutes; only the latest plan survives. Regex replacements support $&, $0..$99, $$, and escaped newline/tab/backslash.","inputSchema":{"type":"object","properties":{"search":search_schema,"replacement":{"type":"string"},"preserveCase":{"type":"boolean"},"path":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1}},"required":["search","replacement"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}},
+        {"name":"workspace_replace_apply","description":"Apply an inspected replacement planId at its revision. Validates exact disk snapshots, workspace membership and readonly protection before writes. Consumes the plan; reports exact applied files and a failure on partial I/O errors. Batch replacement is not a filesystem transaction.","inputSchema":{"type":"object","properties":{"planId":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0}},"required":["planId","expectedRevision"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}},
         {"name":"node_execute","description":"Start or stop an authorized Node service using a discovered package script, never an arbitrary command. For aggregate projects pass nodeScript from workspace_get as script. npm/pnpm/yarn are supported; dependencies are not installed automatically.","inputSchema":{"type":"object","properties":{"projectPath":{"type":"string"},"script":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0},"operation":{"oneOf":[{"type":"object","properties":{"type":{"const":"start"},"packageManager":{"enum":["npm","pnpm","yarn"]},"args":{"type":"array","items":{"type":"string"}}},"required":["type"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"stop"},"pid":{"type":"integer"}},"required":["type"],"additionalProperties":false}]}},"required":["projectPath","expectedRevision","operation"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}},
         {"name":"node_options","description":"Read discovered launch scripts and preferred package manager for an active workspace Node service.","inputSchema":{"type":"object","properties":{"projectPath":{"type":"string"},"script":{"type":"string"}},"required":["projectPath"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}},
         {"name":"node_output","description":"Read bounded Node stdout/stderr and run state; pass runId and nextCursor as runId/after. Include script for aggregate services.","inputSchema":{"type":"object","properties":{"projectPath":{"type":"string"},"script":{"type":"string"},"after":{"type":"integer","minimum":0},"runId":{"type":"string"}},"required":["projectPath"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}},
 
+        {"name":"workspace_file_read","description":"Read an existing UTF-8 text file up to 1 MiB inside active authorized workspace folders. Returns exact content for expectedContent when saving. Binary files and ignored directories are rejected.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0}},"required":["path","expectedRevision"],"additionalProperties":false},"annotations":{"readOnlyHint":true}},
+        {"name":"workspace_file_write","description":"Save an existing active workspace UTF-8 text file up to 1 MiB, preserving BOM and line endings. Pass exact content returned by workspace_file_read as expectedContent; external changes produce file_conflict. Does not create files or execute commands.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0},"expectedContent":{"type":"string"},"content":{"type":"string"}},"required":["path","expectedRevision","expectedContent","content"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}},
+        {"name":"workspace_search","description":"Search filenames/relative paths and UTF-8 content together by default (mode=both); files/content modes remain available for compatibility. Uses ripgrep in active authorized workspace folders. Respects ignore files; excludes dependency/build/Git directories and symlinks. Bounded to 200 results and 5 seconds. Content results contain 1-based line/UTF-16 column and preview; searches disk, not unsaved drafts.","inputSchema":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":1024},"mode":{"enum":["files","content","both"],"default":"both"},"expectedRevision":{"type":"integer","minimum":0},"caseSensitive":{"type":"boolean"},"wholeWord":{"type":"boolean"},"regex":{"type":"boolean"},"includeGlob":{"type":"string","maxLength":1024},"excludeGlob":{"type":"string","maxLength":1024}},"required":["query","expectedRevision"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}},
         read("workspace_list", "List projects in the active workspace (legacy array result)"),
         read("workspace_get", "Read active folders, file, projects, dirty state and revision. Read this before mutations."),
         read("workspace_refresh", "Refresh runnable application discovery from source and return the active workspace; does not run Maven or start services"),
-        read("workspace_catalog", "List configured allowed roots and workspace files directly within them; no recursive scan"),
+        read("workspace_catalog", "List recentWorkspaces in most-recent-first order, configured allowed roots and workspace files directly within them; no recursive scan"),
+        {"name":"workspace_pick","description":"Ask the local desktop user to choose a workspace file or folder in a native system dialog. Only the chosen location and folders declared by a chosen workspace gain session access. Cancellation returns a null path. Requires human interaction; may take up to 180 seconds.","inputSchema":{"type":"object","required":["kind","expectedRevision"],"properties":{"kind":{"enum":["workspace_file","folder"]},"expectedRevision":{"type":"integer","minimum":0}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false}},
         {"name":"workspace_browse","description":"Browse one level of allowlisted folders and .code-workspace files before opening a workspace. Omit path to list allowed roots.","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true}},
         {"name":"workspace_create_from_folder","description":"Atomically create a workspace file containing an existing allowlisted folder; never overwrites files.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"folder":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0},"discardChanges":{"type":"boolean"}},"required":["path","folder","expectedRevision"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}},
         {"name":"workspace_close","description":"Close the active workspace without stopping processes or deleting files. Dirty state requires explicit discardChanges=true; save first to retain changes.","inputSchema":{"type":"object","properties":{"expectedRevision":{"type":"integer","minimum":0},"discardChanges":{"type":"boolean"}},"required":["expectedRevision"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}},
@@ -60,6 +67,7 @@ fn tools() -> Value {
         {"name":"java_options","description":"List detected Java main classes and Spring application profile files; additional profiles may be supplied explicitly.","inputSchema":{"type":"object","properties":{"projectPath":{"type":"string"}},"required":["projectPath"],"additionalProperties":false},"annotations":{"readOnlyHint":true}},
         {"name":"java_output","description":"Read bounded stdout/stderr/build/Arthas output and run state. Pass returned runId and nextCursor as runId/after to continue; a new run resets the cursor.","inputSchema":{"type":"object","properties":{"projectPath":{"type":"string"},"after":{"type":"integer","minimum":0},"runId":{"type":"string"}},"required":["projectPath"],"additionalProperties":false},"annotations":{"readOnlyHint":true}},
         read("devflow_metrics", "Read DevFlow backend process CPU and physical memory only; excludes Codex/browser and managed projects. CPU is normalized to total logical CPU capacity; first sample is null."),
+        write("workspace_open_recent", "Reopen a path returned by workspace_catalog recentWorkspaces, restoring only that entry's remembered roots. Never grants access to arbitrary paths. Unsaved workspace changes require discardChanges=true.", true, false),
         write("workspace_open", "Open an allowlisted .code-workspace file or directory. Unsaved changes require explicit discardChanges=true.", true, false),
         write("workspace_create", "Create a new .code-workspace file and make it active; never overwrites an existing file", true, false),
         write("workspace_add_folder", "Add an existing allowlisted directory to the active workspace in memory; call workspace_save to persist", true, true),
@@ -92,7 +100,37 @@ pub async fn handle(
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-            if name == "node_execute" {
+            if name == "workspace_replace_preview" {
+                let authenticated = security::authenticated(&headers, &state);
+                match serde_json::from_value::<devflow_core::workspace::ReplacePreviewRequest>(arguments) {
+                    Ok(request) => Ok(tool_result(call_core(state, move |e| e.workspace.replace_preview(request, authenticated)).await)),
+                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
+            } else if name == "workspace_replace_apply" {
+                let authenticated = security::authenticated(&headers, &state);
+                match serde_json::from_value::<devflow_core::workspace::ReplaceApplyRequest>(arguments) {
+                    Ok(request) => Ok(tool_result(call_core(state, move |e| e.workspace.replace_apply(request, authenticated)).await)),
+                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
+            } else if name == "workspace_search" {
+                let authenticated = security::authenticated(&headers, &state);
+                match serde_json::from_value::<devflow_core::workspace::WorkspaceSearchRequest>(arguments) {
+                    Ok(request) => Ok(tool_result(call_core(state, move |e| e.workspace.search(request, authenticated)).await)),
+                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
+            } else if name == "workspace_file_read" {
+                let authenticated = security::authenticated(&headers, &state);
+                match serde_json::from_value::<devflow_core::workspace::WorkspaceFileReadRequest>(arguments) {
+                    Ok(request) => Ok(tool_result(call_core(state, move |e| e.workspace.read_file(request, authenticated)).await)),
+                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
+            } else if name == "workspace_file_write" {
+                let authenticated = security::authenticated(&headers, &state);
+                match serde_json::from_value::<devflow_core::workspace::WorkspaceFileWriteRequest>(arguments) {
+                    Ok(request) => Ok(tool_result(call_core(state, move |e| e.workspace.write_file(request, authenticated)).await)),
+                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
+            } else if name == "node_execute" {
                 match serde_json::from_value::<devflow_core::runtime::node::NodeRequest>(arguments)
                 {
                     Ok(request) => Ok(tool_result(
@@ -150,6 +188,12 @@ pub async fn handle(
                         })
                         .await,
                     )),
+                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
+            } else if name == "workspace_pick" {
+                let authenticated = security::authenticated(&headers, &state);
+                match serde_json::from_value::<devflow_core::workspace::WorkspacePickRequest>(arguments) {
+                    Ok(request) => Ok(tool_result(call_core(state, move |e| e.workspace.pick_local(request, authenticated)).await)),
                     Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
                 }
             } else if name == "workspace_browse" {
@@ -250,6 +294,7 @@ pub async fn handle(
                 if !matches!(
                     name,
                     "workspace_open"
+                        | "workspace_open_recent"
                         | "workspace_create"
                         | "workspace_add_folder"
                         | "workspace_remove_folder"
@@ -264,6 +309,9 @@ pub async fn handle(
                         ),
                         Ok(args) => {
                             let operation = match (name, args.path) {
+                                ("workspace_open_recent", Some(path)) => {
+                                    Some(WorkspaceOperation::OpenRecent { path })
+                                }
                                 ("workspace_open", Some(path)) => {
                                     Some(WorkspaceOperation::Open { path })
                                 }
@@ -318,8 +366,14 @@ mod tests {
     fn workspace_tools_advertise_revision_and_required_paths() {
         let catalog = tools();
         let tools = catalog["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 21);
+        assert_eq!(tools.len(), 28);
         for name in [
+            "workspace_replace_apply",
+            "workspace_search",
+            "workspace_file_read",
+            "workspace_file_write",
+            "workspace_pick",
+            "workspace_open_recent",
             "workspace_open",
             "workspace_create",
             "workspace_add_folder",

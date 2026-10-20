@@ -20,6 +20,19 @@ use std::{
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_FOLDERS: usize = 512;
 
+#[path = "files.rs"]
+mod files;
+pub use files::{WorkspaceFile, WorkspaceFileReadRequest, WorkspaceFileWriteRequest};
+#[path = "search.rs"]
+mod search;
+pub use search::{WorkspaceSearchRequest, WorkspaceSearch};
+#[path = "replace.rs"]
+mod replace;
+pub use replace::{ReplacePreviewRequest, ReplaceApplyRequest, ReplacePreview, ReplaceOutcome};
+#[path = "recent.rs"]
+mod recent;
+pub use recent::RecentWorkspaceEntry;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceError {
@@ -78,6 +91,7 @@ pub struct WorkspaceCatalog {
     pub allowed_roots: Vec<String>,
     pub workspace_files: Vec<String>,
     pub warnings: Vec<String>,
+    pub recent_workspaces: Vec<RecentWorkspaceEntry>,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -125,6 +139,7 @@ pub struct WorkspaceRequest {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkspaceOperation {
     Open { path: String },
+    OpenRecent { path: String },
     Create { path: String },
     CreateFromFolder { path: String, folder: String },
     Close,
@@ -144,13 +159,40 @@ struct Session {
 struct State {
     revision: u64,
     session: Option<Session>,
+    notice: Option<String>,
 }
 
-/// One instance is shared by HTTP and MCP. Roots are server configuration only.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspacePickKind {
+    WorkspaceFile,
+    Folder,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspacePickRequest {
+    pub kind: WorkspacePickKind,
+    pub expected_revision: u64,
+}
+#[derive(Debug, Serialize)]
+pub struct WorkspacePickResult {
+    pub path: Option<String>,
+}
+#[derive(Default)]
+struct LocalGrants {
+    roots: Vec<PathBuf>,
+    files: Vec<PathBuf>,
+}
+
+/// One instance is shared by HTTP and MCP; native selections grant session access.
 pub struct WorkspaceService {
     roots: Vec<PathBuf>,
+    local_grants: Mutex<LocalGrants>,
+    picker: Mutex<()>,
     state: Mutex<State>,
     discovery: Mutex<HashMap<PathBuf, (Instant, Discovery)>>,
+    recent_path: Mutex<Option<PathBuf>>,
+    replacement: Mutex<Option<replace::ReplacementPlan>>,
 }
 
 impl WorkspaceService {
@@ -167,8 +209,12 @@ impl WorkspaceService {
         }
         let service = Self {
             roots: canonical,
+            local_grants: Mutex::new(LocalGrants::default()),
+            picker: Mutex::new(()),
             state: Mutex::new(State::default()),
             discovery: Mutex::new(HashMap::new()),
+            recent_path: Mutex::new(None),
+            replacement: Mutex::new(None),
         };
         if let Some(path) = initial {
             let session = service.open_session(&path)?;
@@ -181,6 +227,67 @@ impl WorkspaceService {
         self.state
             .lock()
             .map_err(|_| error("unavailable", "工作区服务暂不可用"))
+    }
+
+    fn allowed_roots(&self) -> Result<Vec<PathBuf>> {
+        let grants = self.local_grants.lock().map_err(|_| error("unavailable", "本机位置暂不可用"))?;
+        let mut roots = self.roots.clone();
+        roots.extend(grants.roots.iter().cloned());
+        roots.sort();
+        roots.dedup();
+        Ok(roots)
+    }
+
+    pub fn pick_local(&self, request: WorkspacePickRequest, authenticated: bool) -> Result<WorkspacePickResult> {
+        if !authenticated { return Err(error("unauthorized", "需要有效的访问令牌")); }
+        let _picker = self.picker.try_lock().map_err(|_| error("conflict", "已有一个系统选择窗口，请先完成选择"))?;
+        if self.lock()?.revision != request.expected_revision {
+            return Err(error("conflict", "工作区已修改，请刷新后重试"));
+        }
+        let selection = super::picker::pick(request.kind)?;
+        self.accept_local_selection(request, selection)
+    }
+
+    // Only the trusted OS picker calls this; no client-supplied path can grant access.
+    fn accept_local_selection(&self, request: WorkspacePickRequest, selection: Option<String>) -> Result<WorkspacePickResult> {
+        let state = self.lock()?;
+        if state.revision != request.expected_revision {
+            return Err(error("conflict", "选择期间工作区已修改，请刷新后重新选择"));
+        }
+        let Some(selected) = selection else { return Ok(WorkspacePickResult { path: None }); };
+        let selected = Path::new(&selected);
+        validate_absolute(selected)?;
+        let selected = selected.canonicalize()?;
+        let mut roots = Vec::new();
+        match request.kind {
+            WorkspacePickKind::Folder => {
+                if !selected.is_dir() { return Err(error("invalid_path", "请选择存在的文件夹")); }
+                roots.push(selected.clone());
+            }
+            WorkspacePickKind::WorkspaceFile => {
+                if !is_workspace_file(&selected) || !selected.is_file() {
+                    return Err(error("invalid_path", "请选择 .code-workspace 文件"));
+                }
+                let source = read_workspace(&selected)?;
+                let value = parse_document(&source)?;
+                // Choosing a workspace also chooses its explicitly declared local folders.
+                for entry in folder_entries(&value)? {
+                    if let Ok(folder) = resolve_folder(entry, parent(&selected)?) {
+                        if validate_absolute(&folder).is_ok() {
+                            if let Ok(folder) = folder.canonicalize() {
+                                if folder.is_dir() { roots.push(folder); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut grants = self.local_grants.lock().map_err(|_| error("unavailable", "本机位置暂不可用"))?;
+        for root in roots { if !grants.roots.contains(&root) { grants.roots.push(root); } }
+        if matches!(request.kind, WorkspacePickKind::WorkspaceFile) && !grants.files.contains(&selected) {
+            grants.files.push(selected.clone());
+        }
+        Ok(WorkspacePickResult { path: Some(display_path(&selected)) })
     }
 
     pub fn snapshot(&self) -> Result<WorkspaceSnapshot> {
@@ -344,7 +451,9 @@ impl WorkspaceService {
     pub fn catalog(&self) -> Result<WorkspaceCatalog> {
         let mut files = Vec::new();
         let mut warnings = Vec::new();
-        for root in &self.roots {
+        let roots = self.allowed_roots()?;
+        files.extend(self.local_grants.lock().map_err(|_| error("unavailable", "本机位置暂不可用"))?.files.iter().map(|p| display_path(p)));
+        for root in &roots {
             match fs::read_dir(root) {
                 Ok(entries) => {
                     for entry in entries.take(2001) {
@@ -373,10 +482,15 @@ impl WorkspaceService {
         }
         files.sort();
         files.dedup();
+        let recent_workspaces = match self.recent_entries() {
+            Ok(entries) => entries,
+            Err(err) => { warnings.push(format!("最近打开列表读取失败：{err}")); Vec::new() }
+        };
         Ok(WorkspaceCatalog {
-            allowed_roots: self.roots.iter().map(|p| display_path(p)).collect(),
+            allowed_roots: roots.iter().map(|p| display_path(p)).collect(),
             workspace_files: files,
             warnings,
+            recent_workspaces,
         })
     }
 
@@ -387,8 +501,7 @@ impl WorkspaceService {
             return Ok(WorkspaceBrowse {
                 path: None,
                 parent: None,
-                entries: self
-                    .roots
+                entries: self.allowed_roots()?
                     .iter()
                     .map(|root| WorkspaceTreeEntry {
                         name: display_path(root),
@@ -492,6 +605,10 @@ impl WorkspaceService {
                     source,
                     dirty: false,
                 });
+            }
+            WorkspaceOperation::OpenRecent { path } => {
+                check_discard(&state, request.discard_changes)?;
+                state.session = Some(self.open_recent_session(&path)?);
             }
             WorkspaceOperation::Open { path } => {
                 check_discard(&state, request.discard_changes)?;
@@ -638,6 +755,7 @@ impl WorkspaceService {
             }
         }
         state.revision += 1;
+        state.notice = self.persist_recent(&state).err().map(|err| format!("当前位置已打开，但记忆失败，下次重启可能无法恢复：{err}"));
         self.snapshot_of(&state)
     }
 
@@ -650,7 +768,7 @@ impl WorkspaceService {
             dirty: false,
             folders: Vec::new(),
             projects: Vec::new(),
-            warnings: Vec::new(),
+            warnings: state.notice.clone().into_iter().collect(),
             hint: None,
         };
         let Some(session) = &state.session else {
@@ -706,9 +824,8 @@ impl WorkspaceService {
                 .map(str::to_owned)
                 .unwrap_or_else(|| {
                     path.file_name()
-                        .unwrap_or(path.as_os_str())
-                        .to_string_lossy()
-                        .into_owned()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| display_path(&path))
                 });
             if status == "available" {
                 match self.services_in(&path) {
@@ -787,22 +904,25 @@ impl WorkspaceService {
         // Reject unrelated drives, UNC hosts and device namespaces before any
         // filesystem access. Canonical checks below additionally reject links.
         let candidate = comparison_path(path);
-        if !self.roots.iter().any(|root| {
+        let roots = self.allowed_roots()?;
+        let files = self.local_grants.lock().map_err(|_| error("unavailable", "本机位置暂不可用"))?.files.clone();
+        let exact_file = files.iter().any(|file| comparison_path(file) == candidate);
+        if !exact_file && !roots.iter().any(|root| {
             let root = comparison_path(root);
             candidate == root || candidate.starts_with(&format!("{root}/"))
         }) {
             return Err(error(
                 "outside_roots",
-                "路径不在 DEVFLOW_ALLOWED_ROOTS 授权目录内",
+                "请通过系统选择窗口选择此位置，或配置 DEVFLOW_ALLOWED_ROOTS",
             ));
         }
         // Resolve the nearest existing ancestor first, even for missing paths.
         // A junction outside a root must not be reported as an authorized path.
         let resolved = resolve_missing(path)?;
-        if !self.roots.iter().any(|root| resolved.starts_with(root)) {
+        if !files.contains(&resolved) && !roots.iter().any(|root| resolved.starts_with(root)) {
             return Err(error(
                 "outside_roots",
-                "路径不在 DEVFLOW_ALLOWED_ROOTS 授权目录内",
+                "请通过系统选择窗口选择此位置，或配置 DEVFLOW_ALLOWED_ROOTS",
             ));
         }
         Ok(resolved.canonicalize()?)
@@ -815,6 +935,18 @@ impl WorkspaceService {
                 "invalid_path",
                 "保存文件必须使用 .code-workspace 扩展名",
             ));
+        }
+        // An explicitly selected workspace file may be saved without granting its parent.
+        let selected_file = self.local_grants.lock()
+            .map_err(|_| error("unavailable", "本机位置暂不可用"))?
+            .files.iter().any(|file| comparison_path(file) == comparison_path(path));
+        if selected_file {
+            let target = self.authorize(path)?;
+            let meta = fs::symlink_metadata(path)?;
+            if meta.file_type().is_symlink() || !meta.is_file() {
+                return Err(error("invalid_path", "不能覆盖链接或目录"));
+            }
+            return Ok(target);
         }
         let directory = self.authorize(parent(path)?)?;
         if !directory.is_dir() {
@@ -1057,6 +1189,59 @@ fn rebase(source: &str, base: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pick_request(kind: WorkspacePickKind, expected_revision: u64) -> WorkspacePickRequest {
+        WorkspacePickRequest { kind, expected_revision }
+    }
+
+    #[test]
+    fn native_folder_selection_grants_only_the_selected_tree() {
+        let fixture = Fixture::new();
+        let selected = fixture.0.join("中文 项目");
+        fs::create_dir_all(selected.join("子目录")).unwrap();
+        let service = WorkspaceService::new(vec![], None).unwrap();
+        assert_eq!(service.authorize(&selected).unwrap_err().code, "outside_roots");
+        let result = service.accept_local_selection(pick_request(WorkspacePickKind::Folder, 0), Some(path(&selected))).unwrap();
+        assert!(result.path.is_some());
+        assert!(service.authorize(&selected.join("子目录")).is_ok());
+        assert_eq!(service.authorize(&fixture.0).unwrap_err().code, "outside_roots");
+        assert_eq!(service.snapshot().unwrap().revision, 0);
+        assert!(service.snapshot().unwrap().folders.is_empty());
+    }
+
+    #[test]
+    fn native_workspace_selection_grants_declared_folders_and_exact_file_only() {
+        let fixture = Fixture::new();
+        let projects = fixture.0.join("项目");
+        let config_dir = fixture.0.join("配置");
+        fs::create_dir_all(&projects).unwrap();
+        fs::create_dir_all(&config_dir).unwrap();
+        let config = config_dir.join("中文.code-workspace");
+        fs::write(&config, "{\n// 保留注释\n\"folders\": [{\"path\": \"../项目\"}], \"settings\": {}}\n").unwrap();
+        let service = WorkspaceService::new(vec![], None).unwrap();
+        service.accept_local_selection(pick_request(WorkspacePickKind::WorkspaceFile, 0), Some(path(&config))).unwrap();
+        assert!(service.authorize(&projects).is_ok());
+        assert!(service.authorize(&config).is_ok());
+        assert_eq!(service.authorize(&config_dir).unwrap_err().code, "outside_roots");
+        assert!(service.save_target(&config).is_ok());
+        assert_eq!(service.save_target(&config_dir.join("other.code-workspace")).unwrap_err().code, "outside_roots");
+        let opened = fixture.command(&service, WorkspaceOperation::Open { path: path(&config) }).unwrap();
+        assert_eq!(opened.folders[0].status, "available");
+        fixture.command(&service, WorkspaceOperation::Save { path: None }).unwrap();
+        assert!(fs::read_to_string(&config).unwrap().contains("保留注释"));
+    }
+
+    #[test]
+    fn native_picker_checks_authentication_revision_and_cancel_without_granting() {
+        let fixture = Fixture::new();
+        let service = WorkspaceService::new(vec![], None).unwrap();
+        assert_eq!(service.pick_local(pick_request(WorkspacePickKind::Folder, 0), false).unwrap_err().code, "unauthorized");
+        assert_eq!(service.pick_local(pick_request(WorkspacePickKind::Folder, 1), true).unwrap_err().code, "conflict");
+        assert!(service.accept_local_selection(pick_request(WorkspacePickKind::Folder, 0), None).unwrap().path.is_none());
+        assert_eq!(service.accept_local_selection(pick_request(WorkspacePickKind::Folder, 1), Some(path(&fixture.0))).unwrap_err().code, "conflict");
+        assert_eq!(service.authorize(&fixture.0).unwrap_err().code, "outside_roots");
+        assert!(service.catalog().unwrap().allowed_roots.is_empty());
+    }
 
     struct Fixture(PathBuf);
     impl Fixture {

@@ -22,7 +22,8 @@ export interface WorkspaceResponse {
 }
 
 export interface WorkspaceFolder { name: string; path: string; status: 'available' | 'blocked' | 'unavailable' | 'not_directory' | 'unsupported'; message: string | null }
-export interface WorkspaceCatalog { allowedRoots: string[]; workspaceFiles: string[]; warnings: string[] }
+export interface RecentWorkspace { name: string; path: string; kind: 'workspace_file' | 'folder'; available: boolean }
+export interface WorkspaceCatalog { allowedRoots: string[]; workspaceFiles: string[]; warnings: string[]; recentWorkspaces?: RecentWorkspace[] }
 export interface WorkspaceTreeEntry { name: string; path: string; kind: 'directory' | 'file' }
 export interface WorkspaceChildren { path: string; revision: number; entries: WorkspaceTreeEntry[]; truncated: boolean }
 export function getWorkspaceChildren(path: string, expectedRevision: number, signal: AbortSignal) {
@@ -32,10 +33,39 @@ export interface WorkspaceBrowse { path: string | null; parent: string | null; e
 export function browseWorkspace(path?: string, signal?: AbortSignal) {
   return request<WorkspaceBrowse>(`/api/workspace/browse${path ? `?${new URLSearchParams({ path })}` : ''}`, { signal })
 }
-export type WorkspaceOperation = { type: 'open' | 'create' | 'remove_folder'; path: string } | { type: 'create_from_folder'; path: string; folder: string } | { type: 'close' } | { type: 'add_folder'; path: string; name?: string } | { type: 'save'; path?: string }
+export function pickWorkspaceLocation(kind: 'workspace_file' | 'folder', expectedRevision: number) {
+  return request<{ path: string | null }>('/api/workspace/pick', {
+    method: 'POST', body: JSON.stringify({ kind, expectedRevision }), signal: AbortSignal.timeout(190000),
+  })
+}
+export interface WorkspaceFile {
+  path: string; content: string; revision: number; readonly: boolean; readonlyReason: string | null
+  lineEnding: 'LF' | 'CRLF' | 'CR'; bom: boolean
+}
+export function readWorkspaceFile(path: string, expectedRevision: number, signal?: AbortSignal) {
+  return request<WorkspaceFile>(`/api/workspace/file?${new URLSearchParams({ path, expectedRevision: String(expectedRevision) })}`, { signal })
+}
+export function writeWorkspaceFile(path: string, expectedRevision: number, expectedContent: string, content: string) {
+  return request<WorkspaceFile>('/api/workspace/file', { method: 'PUT', body: JSON.stringify({ path, expectedRevision, expectedContent, content }) })
+}
+export type WorkspaceOperation = { type: 'open' | 'open_recent' | 'create' | 'remove_folder'; path: string } | { type: 'create_from_folder'; path: string; folder: string } | { type: 'close' } | { type: 'add_folder'; path: string; name?: string } | { type: 'save'; path?: string }
 
 export class ApiError extends Error {
   constructor(public code: string, message: string) { super(message) }
+}
+export type SearchMode = 'files' | 'content' | 'both'
+export interface SearchMatch { path: string; root: string; relativePath: string; line: number | null; column: number | null; preview: string | null; previewMatches?: { start: number; end: number }[] }
+export interface WorkspaceSearch { revision: number; matches: SearchMatch[]; truncated: boolean; warnings: string[] }
+export function searchWorkspace(query: string, mode: SearchMode, expectedRevision: number, options: { caseSensitive: boolean; wholeWord: boolean; regex: boolean; includeGlob?: string; excludeGlob?: string }, signal: AbortSignal) {
+  return request<WorkspaceSearch>('/api/workspace/search', { method: 'POST', body: JSON.stringify({ query, mode, expectedRevision, ...options }), signal })
+}
+export interface ReplacePreview { planId: string; revision: number; replacements: number; files: { path: string; replacements: number; before: string; after: string }[] }
+export interface ReplaceOutcome { files: string[]; replacements: number; failure: { code: string; message: string } | null }
+export function previewWorkspaceReplace(search: { query: string; expectedRevision: number; caseSensitive: boolean; wholeWord: boolean; regex: boolean; includeGlob: string; excludeGlob: string }, replacement: string, preserveCase: boolean, path?: string, line?: number, column?: number) {
+  return request<ReplacePreview>('/api/workspace/replace/preview', { method: 'POST', body: JSON.stringify({ search, replacement, preserveCase, path, line, column }) })
+}
+export function applyWorkspaceReplace(planId: string, expectedRevision: number) {
+  return request<ReplaceOutcome>('/api/workspace/replace/apply', { method: 'POST', body: JSON.stringify({ planId, expectedRevision }) })
 }
 let session: Promise<string> | null = null
 function getToken() {
@@ -54,11 +84,23 @@ async function request<T>(url: string, options: RequestInit = {}, retry = true):
   if (options.body) headers.set('Content-Type', 'application/json')
   const response = await fetch(url, { ...options, signal: options.signal ?? AbortSignal.timeout(15000), headers, cache: 'no-store' })
   if (response.status === 401 && retry) { session = null; return request<T>(url, options, false) }
+  if (url.startsWith('/api/workspace/replace/') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) {
+    throw new ApiError('backend_outdated', '当前后端尚不支持搜索替换，请更新并重启后端后重试。')
+  }
+  if (url === '/api/workspace/search' && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) {
+    throw new ApiError('backend_outdated', '当前后端尚不支持文件搜索，请更新并重启后端后重试。')
+  }
+  if (url.startsWith('/api/workspace/file') && (response.ok || response.status === 404 || response.status === 405) && !response.headers.get('content-type')?.includes('application/json')) {
+    throw new ApiError('backend_outdated', '当前后端尚不支持文件编辑，请通过 DevFlow-Restart.cmd 更新并重启后重试。')
+  }
   if (!response.ok) {
+    if (response.status === 404 && url === '/api/workspace/pick') {
+      throw new ApiError('backend_outdated', '当前运行的后端尚不支持系统选择窗口，请重新编译并重启 DevFlow 后端后重试。')
+    }
     const body = await response.text()
     let value: { code?: string; message?: string } = {}
     try { value = JSON.parse(body) ?? {} } catch { /* Axum extraction failures return plain text. */ }
-    if (response.status === 422 && body.includes('unknown variant') && /`(?:close|create_from_folder|remove_folder)`/.test(body)) {
+    if (response.status === 422 && body.includes('unknown variant') && /`(?:close|create_from_folder|remove_folder|open_recent)`/.test(body)) {
       throw new ApiError('backend_outdated', '当前运行的后端版本尚不支持此操作，请重新编译并重启 DevFlow 后端后重试。')
     }
     throw new ApiError(value.code ?? 'request_failed', value.message ?? `HTTP ${response.status}`)

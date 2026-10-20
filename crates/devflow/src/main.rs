@@ -39,11 +39,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
     let root = std::env::var_os("DEVFLOW_WORKSPACE")
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .map(|path| path.canonicalize())
         .transpose()?;
     let mut roots: Vec<PathBuf> = std::env::var_os("DEVFLOW_ALLOWED_ROOTS")
-        .map(|value| std::env::split_paths(&value).collect())
+        .map(|value| std::env::split_paths(&value).filter(|path| !path.as_os_str().is_empty()).collect())
         .unwrap_or_default();
     if let Some(initial) = &root {
         let initial = initial.canonicalize()?;
@@ -57,8 +58,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let restore_recent = root.is_none()
+        || std::env::var("DEVFLOW_RESTORE_RECENT").is_ok_and(|value| value == "1");
+    let engine = devflow_core::DevFlowEngine::new(roots, None)?;
+    engine.workspace.configure_recent(
+        std::env::current_dir()?.join(".devflow/recent-workspace.json"),
+        root,
+        restore_recent,
+    )?;
     let state = Arc::new(AppState {
-        engine: Arc::new(devflow_core::DevFlowEngine::new(roots, root)?),
+        engine: Arc::new(engine),
         api_token,
     });
     let app = Router::new()
@@ -71,7 +80,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/workspace/catalog", get(http::workspace_catalog))
         .route("/api/workspace/browse", get(http::workspace_browse))
+        .route("/api/workspace/pick", post(http::workspace_pick))
         .route("/api/workspace/children", get(http::workspace_children))
+        .route("/api/workspace/search", post(http::workspace_search))
+        .route("/api/workspace/replace/preview", post(http::workspace_replace_preview))
+        .route("/api/workspace/replace/apply", post(http::workspace_replace_apply))
+        .route(
+            "/api/workspace/file",
+            get(http::workspace_file_read)
+                .put(http::workspace_file_write)
+                .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
         .route("/api/runtime/projects", get(http::runtime_projects))
         .route("/api/runtime/self", get(http::devflow_metrics))
         .route("/api/runtime/java", post(http::java_execute))
@@ -80,7 +99,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/runtime/node", post(http::node_execute))
         .route("/api/runtime/node/options", get(http::node_options))
         .route("/api/runtime/node/output", get(http::node_output))
-        .route("/mcp", post(mcp::handle))
+        .route(
+            "/mcp",
+            post(mcp::handle).layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
         // Authenticate API/MCP routes; the browser must load the static shell
         // before it can obtain a session token. Add the static fallback below.
         .route_layer(axum::middleware::from_fn_with_state(

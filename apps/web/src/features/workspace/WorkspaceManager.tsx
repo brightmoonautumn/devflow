@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, FolderOpen, FolderPlus, Layers3, Save, X } from 'lucide-react'
-import { ApiError, executeWorkspace, getWorkspaceCatalog, type WorkspaceCatalog, type WorkspaceOperation, type WorkspaceResponse } from '../../lib/api'
+import { ArrowRight, Clock3, FolderOpen, FolderPlus, Layers3, Save, X } from 'lucide-react'
+import { ApiError, executeWorkspace, getWorkspaceCatalog, pickWorkspaceLocation, type WorkspaceCatalog, type WorkspaceOperation, type WorkspaceResponse } from '../../lib/api'
 import { WorkspaceBrowser } from './WorkspaceBrowser'
 
 export type WorkspaceManagerMode = 'open' | 'create' | 'add_folder' | 'save' | 'close'
@@ -23,6 +23,7 @@ export function WorkspaceManager({ mode: initialMode, data, onChange, onRefresh,
   const [catalogAttempt, setCatalogAttempt] = useState(0)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [picking, setPicking] = useState(false)
   const [discard, setDiscard] = useState(false)
   const [baseRevision, setBaseRevision] = useState(data?.revision)
   const stale = baseRevision !== undefined && data?.revision !== baseRevision
@@ -40,6 +41,21 @@ export function WorkspaceManager({ mode: initialMode, data, onChange, onRefresh,
     setSourceFolder(folder); setStep(1); setSelected(null)
     setPath(catalog?.allowedRoots.find(root => /[\\/]WorkSpace$/i.test(root)) ?? null)
     if (folder) setFilename(folder.split(/[\\/]/).filter(Boolean).at(-1) ?? '我的工作区')
+  }
+  async function pickLocal(kind: 'workspace_file' | 'folder') {
+    if (busy || stale || baseRevision === undefined) return
+    setBusy(true); setPicking(true); setError('')
+    try {
+      const result = await pickWorkspaceLocation(kind, baseRevision)
+      if (result.path) {
+        if (kind === 'workspace_file') { setSelected(result.path); setPath(null) }
+        else { setPath(result.path); setSelected(null) }
+        setCatalogAttempt(value => value + 1)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      if (err instanceof ApiError && err.code === 'conflict') onRefresh()
+    } finally { setBusy(false); setPicking(false) }
   }
   async function run(operation: WorkspaceOperation, thenClose = false) {
     if (busy || stale || baseRevision === undefined) return
@@ -76,7 +92,20 @@ export function WorkspaceManager({ mode: initialMode, data, onChange, onRefresh,
       {stale && <div className="ws-dialog-notice" role="alert"><p>当前工作区已被其他入口修改。</p><button className="ws-outline-button" disabled={busy} onClick={() => { setBaseRevision(data?.revision); setDiscard(false); setError('') }}>基于当前工作区继续</button></div>}
       {mode === 'create' && <div className="ws-create-steps"><span className={step === 0 ? 'is-current' : ''}>1 选择起始文件夹</span><ArrowRight size={12} /><span className={step === 1 ? 'is-current' : ''}>2 名称与保存位置</span>{step === 0 ? <button type="button" disabled={busy} onClick={() => chooseDestination(null)}>创建空工作区</button> : <button type="button" disabled={busy} onClick={() => { setStep(0); setPath(sourceFolder); setSelected(null) }}>上一步</button>}</div>}
       {mode !== 'close' && <>
+        {mode === 'open' && <section className="ws-recent" aria-label="最近打开的工作区">
+          <h3><Clock3 size={14} />最近打开</h3>
+          {catalog?.recentWorkspaces?.length ? <div className="ws-recent-list">{catalog.recentWorkspaces.map(entry => <button type="button" key={entry.path} disabled={busy || stale || baseRevision === undefined || !entry.available || (needsDiscard && !discard)} title={entry.available ? entry.path : `位置不存在或已改变：${entry.path}`} onClick={() => void run({ type: 'open_recent', path: entry.path })}>
+            {entry.kind === 'folder' ? <FolderOpen size={17} /> : <Layers3 size={17} />}<span><strong>{entry.name}</strong><small>{entry.path}</small></span><small>{entry.available ? entry.kind === 'folder' ? '文件夹' : '工作区' : '不可用'}</small><ArrowRight size={13} />
+          </button>)}</div> : <p className="ws-manager-hint">{!catalog ? '正在读取最近记录…' : !catalog.recentWorkspaces ? '当前后端尚不支持最近打开列表，请更新并重启 DevFlow。' : '暂无最近记录，打开工作区或文件夹后会自动保留。'}</p>}
+          {needsDiscard && !discard && <p className="ws-manager-hint">请先保存，或勾选下方“放弃未保存的更改”后打开最近位置。</p>}
+        </section>}
         {saving && <div className="ws-workspace-name"><label htmlFor="workspace-name">工作区名称</label><div><input id="workspace-name" autoFocus value={filename} onChange={event => setFilename(event.target.value)} disabled={busy} autoComplete="off" /><span>.code-workspace</span></div>{mode === 'create' && <p className="ws-manager-hint">{sourceFolder ? `包含文件夹：${sourceFolder}` : '空工作区，可稍后在资源树中添加文件夹。'}</p>}</div>}
+        <div className="ws-native-picker">
+          {mode === 'open' && <button type="button" className="ws-outline-button" disabled={busy || stale || baseRevision === undefined} onClick={() => void pickLocal('workspace_file')}><Layers3 size={15} />选择工作区文件…</button>}
+          <button type="button" className="ws-outline-button" disabled={busy || stale || baseRevision === undefined} onClick={() => void pickLocal('folder')}><FolderOpen size={15} />{saving ? '选择保存文件夹…' : '选择本机文件夹…'}</button>
+          <p className="ws-manager-hint" role="status">{picking ? '请在系统窗口中选择，取消后可返回。' : '可选择本机任意位置。下方保留已授权位置，方便再次打开。'}</p>
+        </div>
+        {mode === 'open' && selected && <p className="ws-native-selection" title={selected}>已选择：{selected}</p>}
         {catalogError ? <div className="ws-dialog-notice" role="alert"><p>{catalogError}</p><button className="ws-outline-button" onClick={() => setCatalogAttempt(value => value + 1)}>重新加载位置</button></div> : <WorkspaceBrowser catalog={catalog} path={path} onNavigate={setPath} selected={selected} onSelect={setSelected} foldersOnly={mode !== 'open'} disabled={busy} />}
         {mode === 'add_folder' && <div className="ws-workspace-name ws-folder-alias"><label htmlFor="workspace-folder-name">显示名称（可选）</label><div><input id="workspace-folder-name" value={folderName} onChange={event => setFolderName(event.target.value)} maxLength={256} placeholder="默认使用文件夹名称" disabled={busy} /></div></div>}
       </>}

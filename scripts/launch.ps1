@@ -1,6 +1,7 @@
 ﻿param(
     [string]$Workspace = '',
-    [string[]]$AllowedRoots = @()
+    [string[]]$AllowedRoots = @(),
+    [string]$ExecutablePath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -8,6 +9,10 @@ $appRoot = Split-Path -Parent $PSScriptRoot
 $baseUrl = 'http://127.0.0.1:31080'
 
 function Get-DevFlowExecutable([string]$Root) {
+    if ($ExecutablePath) {
+        if (!(Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) { throw "后台程序不存在：$ExecutablePath" }
+        return (Resolve-Path -LiteralPath $ExecutablePath).Path
+    }
     foreach ($relative in @('devflow.exe', 'target\release\devflow.exe', 'target\debug\devflow.exe')) {
         $candidate = Join-Path $Root $relative
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
@@ -60,6 +65,11 @@ function Resolve-DevFlowConfiguration($Config, [string]$SelectedWorkspace, [stri
 function Start-DevFlow {
     $stateDirectory = Join-Path $appRoot '.devflow'
     $configPath = Join-Path $stateDirectory 'launcher.json'
+    $recentPath = Join-Path $stateDirectory 'recent-workspace.json'
+    $restoreRecent = (!$Workspace -and !$env:DEVFLOW_WORKSPACE)
+    $previousWorkspace = $env:DEVFLOW_WORKSPACE
+    $previousRoots = $env:DEVFLOW_ALLOWED_ROOTS
+    $previousRestoreRecent = $env:DEVFLOW_RESTORE_RECENT
     $mutex = New-Object System.Threading.Mutex($false, 'Local\DevFlow.BrowserLauncher')
     $locked = $false
     try {
@@ -82,8 +92,14 @@ function Start-DevFlow {
         if (Test-Path -LiteralPath $configPath) {
             $config = Get-Content -LiteralPath $configPath -Encoding UTF8 -Raw | ConvertFrom-Json
         }
+        if ($restoreRecent -and (Test-Path -LiteralPath $recentPath -PathType Leaf)) {
+            # Core restores the latest UI/MCP location and its scoped grants.
+            # Do not keep reopening the launcher's original directory.
+            $availableRoots = @($config.allowedRoots | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) })
+            $config = [pscustomobject]@{ workspace = ''; allowedRoots = $availableRoots }
+        }
         $config = Resolve-DevFlowConfiguration $config $Workspace $AllowedRoots
-        if ($config.allowedRoots.Count -eq 0) {
+        if ($config.allowedRoots.Count -eq 0 -and !($restoreRecent -and (Test-Path -LiteralPath $recentPath -PathType Leaf))) {
             Add-Type -AssemblyName System.Windows.Forms
             $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
             $dialog.Description = '首次启动：选择项目或工作区所在目录，DevFlow 仅访问授权目录。'
@@ -96,6 +112,7 @@ function Start-DevFlow {
         $json = $config | ConvertTo-Json -Depth 3
         [IO.File]::WriteAllText($configPath, $json, (New-Object Text.UTF8Encoding($false)))
         $env:DEVFLOW_WORKSPACE = $config.workspace
+        $env:DEVFLOW_RESTORE_RECENT = if ($restoreRecent) { '1' } else { '0' }
         $env:DEVFLOW_ALLOWED_ROOTS = $config.allowedRoots -join [IO.Path]::PathSeparator
         $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
         $stdout = Join-Path $stateDirectory "backend-$stamp.out.log"
@@ -114,6 +131,9 @@ function Start-DevFlow {
         } while ([DateTime]::UtcNow -lt $deadline)
         throw "等待后台就绪超时，请查看日志：$stderr。后台未被强制结束，可稍后再次双击启动器。"
     } finally {
+        $env:DEVFLOW_WORKSPACE = $previousWorkspace
+        $env:DEVFLOW_ALLOWED_ROOTS = $previousRoots
+        $env:DEVFLOW_RESTORE_RECENT = $previousRestoreRecent
         if ($locked) { $mutex.ReleaseMutex() }
         $mutex.Dispose()
     }

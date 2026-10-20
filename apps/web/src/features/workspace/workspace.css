@@ -201,6 +201,8 @@
 
 .workspace-shell .workbench { position: relative; }
 .workspace-sidebar { position: relative; z-index: 20; display: flex; flex-direction: column; flex: 0 0 var(--explorer-width, 260px); width: var(--explorer-width, 260px); min-height: 0; min-width: 0; background: var(--ws-surface); border-right: 1px solid var(--ws-border); }
+.ws-explorer-view, .ws-search-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.workspace-sidebar[hidden], .ws-explorer-view[hidden], .ws-search-view[hidden] { display: none; }
 .ws-explorer-heading { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 10px 7px 7px 13px; }
 .ws-explorer-title { display: flex; flex: 1; align-items: center; gap: 7px; min-width: 0; font-size: var(--ws-font-title); line-height: 26px; font-weight: 600; color: var(--ws-accent); }
 .ws-explorer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: .2px; }
@@ -425,6 +427,9 @@ body:has(.ws-bottom-panel.is-resizing) * { cursor: row-resize !important; }
 .workspace-shell .panel-content .java-console-message { flex-shrink: 0; padding: 7px 12px; margin: 0; font-size: var(--ws-font-small); color: var(--ws-error); }
 .java-console-log { flex: 1; overflow: auto; min-height: 0; padding: 10px 12px; font: var(--ws-font-small)/1.7 var(--font-mono); color: var(--ws-ink); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
 .java-log-line { min-height: 1.7em; }
+.java-console-log .java-log-link { color: var(--ws-accent); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; border-radius: 2px; }
+.java-console-log .java-log-link:hover { background: var(--ws-accent-bg); }
+.java-console-log .java-log-link:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 2px; }
 .java-log-part.is-normal { color: var(--ws-ink); }
 .java-log-part.is-timestamp, .java-log-part.is-context { color: var(--ws-muted); }
 .java-log-part.is-pid { color: var(--log-pid); }
@@ -448,3 +453,25 @@ body:has(.ws-bottom-panel.is-resizing) * { cursor: row-resize !important; }
   .java-console-actions a { width: 25px; height: 25px; padding: 0; }
   .java-console-actions .ws-launch, .java-console-actions .ws-outline-button { width: 25px; height: 25px; padding: 0; }
 }
+
+.ws-native-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.ws-native-picker .ws-manager-hint { flex-basis: 100%; margin: 0; }
+.ws-native-selection { margin: 0 0 10px; overflow-wrap: anywhere; font-size: var(--ws-font-small); color: var(--ws-ink); }
+.ws-workspace-menu { max-height: min(640px, calc(100dvh - 100px)); overflow-y: auto; }
+.ws-workspace-menu > button > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ws-workspace-menu small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-recent-menu-empty, .ws-recent-menu-error { display: block; margin: 0; padding: 7px 9px; color: var(--ws-dim); font-size: var(--ws-font-small); line-height: 1.7; overflow-wrap: anywhere; }
+.ws-recent-menu-error { color: var(--ws-error); }
+.ws-recent { margin-bottom: 16px; }
+.ws-recent h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 9px; color: var(--ws-muted); font-size: var(--ws-font-body); font-weight: 500; }
+.ws-recent-list { max-height: 240px; overflow-y: auto; border: 1px solid var(--ws-border); border-radius: 8px; }
+.ws-recent-list > button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; background: transparent; color: var(--ws-muted); text-align: left; border-bottom: 1px solid var(--ws-subtle-border); }
+.ws-recent-list > button:last-child { border-bottom: 0; }
+.ws-recent-list > button:hover:not(:disabled) { background: var(--ws-hover); }
+.ws-recent-list > button:focus-visible { outline: 1px solid var(--ws-accent); outline-offset: -2px; }
+.ws-recent-list > button:disabled { opacity: .55; }
+.ws-recent-list > button > svg { flex-shrink: 0; color: var(--ws-accent); }
+.ws-recent-list > button > span { flex: 1; min-width: 0; }
+.ws-recent-list strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ws-font-body); font-weight: 500; color: var(--ws-ink); }
+.ws-recent-list small { display: block; color: var(--ws-dim); font-size: var(--ws-font-small); }
+.ws-recent-list span small { margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

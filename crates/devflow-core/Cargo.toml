@@ -11,6 +11,7 @@ jsonc-parser = { version = "0.34", features = ["serde", "cst"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 roxmltree = "0.21"
+regex = "1.13.1"
 tree-sitter = "0.25"
 tree-sitter-java = "0.23"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }

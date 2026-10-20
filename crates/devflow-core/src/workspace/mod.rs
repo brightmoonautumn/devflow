@@ -2,6 +2,7 @@ use serde::Serialize;
 use std::path::Path;
 
 mod service;
+mod picker;
 pub use service::*;
 mod discovery;
 pub(crate) use discovery::node_launch_scripts;
