@@ -2,46 +2,32 @@ import { readOnlyShare } from '../../lib/access'
 import { readViewState, restoredTabs, viewPathKey, workspaceViewKey, writeViewState, type WorkspaceViewState } from './workspaceViewState'
 import { useDialogs } from '../../components/form/BaseDialog'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Check, History, FileText, LoaderCircle, RefreshCw, Server, X } from 'lucide-react'
+import { Check, FileText, LoaderCircle, RefreshCw, Server, X } from 'lucide-react'
 import { readWorkspaceFile, writeWorkspaceFile, type WorkspaceFile, type WorkspaceResponse } from '../../lib/api'
-import { gitRequest, notifyGitUpdated, type GitDiff, type GitHistoryTarget, type GitUpdateProgress } from '../git/api'
 import './file-editor.css'
-const GitUpdatePage = lazy(() => import('../git/GitUpdatePage'))
-const GitHistoryPage = lazy(() => import('../git/GitHistoryPage'))
-const GitDiffPane = lazy(() => import('../git/GitDiffPane'))
 
-const FileEditor = lazy(() => import('../git/GitFileEditor'))
+const FileEditor = lazy(() => import('../../components/editor/FileEditor'))
 export type FileOpenRequest = { path: string; pinned: boolean; sequence: number; line?: number; column?: number }
 export type FileSaveStatus = { text: string; failed: boolean }
-type FileTab = { diff?: GitDiff; key: string; path: string; file?: WorkspaceFile; draft: string; preview: boolean; loading: boolean; saving: boolean; error: string; savedAt?: number; deleting?: boolean; line: number; column: number; location?: { line: number; column: number; sequence: number } }
+type FileTab = { key: string; path: string; file?: WorkspaceFile; draft: string; preview: boolean; loading: boolean; saving: boolean; error: string; savedAt?: number; deleting?: boolean; line: number; column: number; location?: { line: number; column: number; sequence: number } }
 type Workbench = { tabs: FileTab[]; active: string | null }
 const snapshotFor = (value: Workbench): WorkspaceViewState => ({
-  tabs: value.tabs.filter(tab => !tab.diff).map(tab => ({ path: tab.path, preview: tab.preview, line: tab.line, column: tab.column })),
-  active: value.tabs.find(tab => tab.key === value.active && !tab.diff)?.path ?? null,
+  tabs: value.tabs.map(tab => ({ path: tab.path, preview: tab.preview, line: tab.line, column: tab.column })),
+  active: value.tabs.find(tab => tab.key === value.active)?.path ?? null,
 })
 const keyFor = viewPathKey
 const textFor = (file: WorkspaceFile) => file.content.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
 const dirty = (tab: FileTab) => !!tab.file && tab.draft !== textFor(tab.file)
 const nameFor = (path: string) => path.split(/[\\/]/).at(-1) ?? path
 
-export function FileWorkbench({ workspace, openRequest, diffRequest, historyRequest, onOpenDiff, onOpenFile, onSaveStatusChange, children }: { workspace: WorkspaceResponse | null; openRequest: FileOpenRequest | null; diffRequest?: { diff: GitDiff; sequence: number } | null; historyRequest?: number; onOpenDiff?: (diff: GitDiff) => void; onOpenFile?: (path: string) => void; onSaveStatusChange?: (status: FileSaveStatus | null) => void; children: ReactNode }) {
+export function FileWorkbench({ workspace, openRequest, onOpenFile, onSaveStatusChange, children }: { workspace: WorkspaceResponse | null; openRequest: FileOpenRequest | null; onOpenFile?: (path: string) => void; onSaveStatusChange?: (status: FileSaveStatus | null) => void; children: ReactNode }) {
   const dialogs = useDialogs()
-  const [historyOpened, setHistoryOpened] = useState(false)
-  const [updateOpened, setUpdateOpened] = useState(false)
-  const [updateTarget, setUpdateTarget] = useState<{ repository?: string; sequence: number }>()
-  const [gitLocks, setGitLocks] = useState(new Set<string>())
-  const gitLocksRef = useRef(gitLocks)
-  const inRepository = (path: string, repository: string) => { const candidate = keyFor(path), root = keyFor(repository).replace(/\/$/, ''); return candidate === root || candidate.startsWith(`${root}/`) }
-  const gitLocked = (path: string) => [...gitLocksRef.current].some(root => inRepository(path, root))
-  const [historyTarget, setHistoryTarget] = useState<GitHistoryTarget | null>(null)
-  useEffect(() => { setHistoryTarget(null) }, [workspace?.revision])
-  useEffect(() => { setUpdateOpened(false); setGitLocks(new Set()); gitLocksRef.current = new Set() }, [workspace?.revision])
   const confirmations = useRef(new Set<string>())
   const [state, setState] = useState<Workbench>({ tabs: [], active: null })
   const scope = workspaceViewKey(workspace)
   const [restoredScope, setRestoredScope] = useState<string | null>(null)
   const [editorActions, setEditorActions] = useState<HTMLDivElement | null>(null)
-  const activeTab = state.tabs.find(tab => tab.key === state.active && !tab.diff)
+  const activeTab = state.tabs.find(tab => tab.key === state.active)
   const saveText = !activeTab ? '' : activeTab.deleting ? '删除中…' : activeTab.loading ? '读取中…' : activeTab.saving ? '保存中…' : activeTab.error && dirty(activeTab) ? '保存失败' : activeTab.error && !activeTab.file ? '读取失败' : dirty(activeTab) ? '等待自动保存…' : activeTab.savedAt ? `保存于 ${new Date(activeTab.savedAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : activeTab.file?.readonly ? '只读' : '自动保存'
   const saveFailed = !!activeTab?.error
   useEffect(() => { onSaveStatusChange?.(saveText ? { text: saveText, failed: saveFailed } : null) }, [saveText, saveFailed, onSaveStatusChange])
@@ -67,28 +53,6 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, historyRequ
       return changed ? { ...value, tabs } : value
     })
   }, [change])
-  useEffect(() => {
-    if (readOnlyShare || workspace?.revision === undefined) return
-    const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout>, observed = '', finished = ''
-    const poll = async () => {
-      try {
-        const job = await gitRequest<GitUpdateProgress | null>('update/progress', { expectedRevision: workspace.revision }, AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]))
-        if (controller.signal.aborted) return
-        if (job && (!job.done || (finished !== job.jobId && (job.jobId === observed || gitLocksRef.current.has(job.repository))))) {
-          const next = new Set(gitLocksRef.current)
-          if (job.done) next.delete(job.repository); else next.add(job.repository)
-          if (next.size !== gitLocksRef.current.size || [...next].some(root => !gitLocksRef.current.has(root))) { gitLocksRef.current = next; setGitLocks(next) }
-          observed = job.jobId
-          if (job.done && finished !== job.jobId) { finished = job.jobId; notifyGitUpdated(job.repository) }
-        }
-      } catch { /* Older/offline backends must not disturb ordinary file editing. */ }
-      if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 2000)
-    }
-    void poll()
-    return () => { controller.abort(); clearTimeout(timer) }
-  }, [workspace?.revision])
-
   const loadFile = useCallback(async (path: string, key: string) => {
     const workspace = currentWorkspace.current
     if (!workspace) return
@@ -122,7 +86,7 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, historyRequ
   useEffect(() => {
     if (scope !== restoredScope || !scope) return
     const tab = live.current.tabs.find(tab => tab.key === live.current.active)
-    if (tab && !tab.diff && !tab.file && !tab.error && !pending.current.has(tab.key)) void loadFile(tab.path, tab.key)
+    if (tab && !tab.file && !tab.error && !pending.current.has(tab.key)) void loadFile(tab.path, tab.key)
   }, [scope, restoredScope, state.active, loadFile])
   const persistView = useCallback(() => {
     if (!scope || scope !== restoredScope || workspaceViewKey(currentWorkspace.current) !== scope) return
@@ -155,54 +119,7 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, historyRequ
     void loadFile(tab.path, key)
   }, [openRequest, change, loadFile, dialogs])
 
-  useEffect(() => {
-    if (!historyRequest) return
-    setHistoryOpened(true)
-    change(value => ({ ...value, active: 'git-history' }))
-  }, [historyRequest, change])
-
-  useEffect(() => {
-    if (!diffRequest) return
-    const { diff } = diffRequest
-    const key = `git:${diff.repository}:${diff.historical ? `${diff.commit}:${diff.parent ?? "root"}:` : ""}${diff.path}`
-    const existing = live.current.tabs.find(tab => tab.key === key)
-    if (existing) { updateTab(key, tab => ({ ...tab, diff })); change(value => ({ ...value, active: key })); return }
-    const preview = live.current.tabs.find(tab => tab.preview && !dirty(tab) && !tab.saving && !tab.deleting)
-    if (!preview && live.current.tabs.length >= 12) { void dialogs.alert({ title: '打开标签已达上限', description: '最多同时打开 12 个标签，请先关闭部分标签。' }); return }
-    if (preview) { pending.current.get(preview.key)?.abort(); pending.current.delete(preview.key) }
-    const tab: FileTab = { key, path: diff.path, diff, draft: '', preview: true, loading: false, saving: false, error: '', line: 1, column: 1 }
-    change(value => ({ active: key, tabs: preview ? value.tabs.map(current => current.key === preview.key ? tab : current) : [...value.tabs, tab] }))
-  }, [diffRequest, change, updateTab, dialogs])
-
   const hasUnsaved = state.tabs.some(dirty)
-  useEffect(() => {
-    const open = (event: Event) => {
-      if (readOnlyShare) return
-      const repository = (event as CustomEvent<string | undefined>).detail
-      setUpdateOpened(true); setUpdateTarget({ repository, sequence: Date.now() })
-      change(value => ({ ...value, active: 'git-update' }))
-    }
-    const before = (event: Event) => {
-      const root = (event as CustomEvent<string>).detail
-      if (live.current.tabs.some(tab => inRepository(tab.path, root) && (dirty(tab) || tab.saving || tab.loading || tab.deleting))) event.preventDefault()
-    }
-    const lock = (event: Event) => {
-      const { repository, locked } = (event as CustomEvent<{ repository: string; locked: boolean }>).detail
-      const next = new Set(gitLocksRef.current)
-      if (locked) next.add(repository); else next.delete(repository)
-      gitLocksRef.current = next; setGitLocks(next)
-    }
-    const updated = (event: Event) => {
-      const { repository } = (event as CustomEvent<{ repository: string }>).detail
-      for (const tab of live.current.tabs.filter(tab => !tab.diff && inRepository(tab.path, repository))) {
-        if (dirty(tab) || tab.saving) updateTab(tab.key, current => ({ ...current, error: 'Git 操作已更新磁盘，本地草稿已保留，请重新读取并合并。' }))
-        else void loadFile(tab.path, tab.key)
-      }
-    }
-    window.addEventListener('devflow-git-update-open', open); window.addEventListener('devflow-before-git-update', before)
-    window.addEventListener('devflow-git-lock', lock); window.addEventListener('devflow-git-updated', updated)
-    return () => { window.removeEventListener('devflow-git-update-open', open); window.removeEventListener('devflow-before-git-update', before); window.removeEventListener('devflow-git-lock', lock); window.removeEventListener('devflow-git-updated', updated) }
-  }, [change, loadFile, updateTab])
   useEffect(() => {
     const beforeReplace = (event: Event) => {
       const paths = new Set((event as CustomEvent<string[]>).detail.map(keyFor))
@@ -239,7 +156,7 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, historyRequ
       if (disposed || document.hidden || controller) return
       const tab = live.current.tabs.find(tab => tab.key === key)
       const workspace = currentWorkspace.current
-      if (!tab || tab.diff || !workspace) return
+      if (!tab || !workspace) return
       if (!tab.file || tab.loading || tab.saving || dirty(tab) || !navigator.onLine) { schedule(); return }
       lastAttempt = Date.now()
       const request = new AbortController()
@@ -277,7 +194,6 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, historyRequ
   }, [scope, restoredScope, state.active, workspace?.revision, updateTab])
 
   const saveFile = useCallback(async (key: string) => {
-    if (gitLocked(live.current.tabs.find(tab => tab.key === key)?.path ?? '')) return
     const tab = live.current.tabs.find(tab => tab.key === key)
     const workspace = currentWorkspace.current
     if (!tab?.file || tab.file.readonly || tab.saving || tab.loading || tab.deleting || confirmations.current.has(key) || !dirty(tab) || !workspace) return
@@ -292,7 +208,7 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, historyRequ
 
   const autosaves = useRef(new Map<string, { draft: string; timer: ReturnType<typeof setTimeout> }>())
   useEffect(() => {
-    const eligible = state.tabs.filter(tab => dirty(tab) && !gitLocked(tab.path) && !tab.saving && !tab.loading && !tab.deleting && !tab.error && !tab.file?.readonly && !!workspace)
+    const eligible = state.tabs.filter(tab => dirty(tab) && !tab.saving && !tab.loading && !tab.deleting && !tab.error && !tab.file?.readonly && !!workspace)
     for (const [key, pending] of autosaves.current) {
       if (!eligible.some(tab => tab.key === key && tab.draft === pending.draft)) { clearTimeout(pending.timer); autosaves.current.delete(key) }
     }
@@ -300,7 +216,7 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, historyRequ
       if (autosaves.current.has(tab.key)) continue
       autosaves.current.set(tab.key, { draft: tab.draft, timer: setTimeout(() => { autosaves.current.delete(tab.key); void saveFile(tab.key) }, 700) })
     }
-  }, [state.tabs, workspace, saveFile, gitLocks])
+  }, [state.tabs, workspace, saveFile])
   useEffect(() => () => { autosaves.current.forEach(pending => clearTimeout(pending.timer)); autosaves.current.clear() }, [])
   useEffect(() => {
     const beforeDelete = (event: Event) => {
@@ -369,20 +285,9 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, historyRequ
       tabs[next]?.click(); tabs[next]?.focus()
     }}>
       <button id="services-tab" role="tab" aria-selected={state.active === null} aria-controls="services-pane" tabIndex={state.active === null ? 0 : -1} className={`file-tab file-services-tab ${state.active === null ? 'is-active' : ''}`} onClick={() => change(value => ({ ...value, active: null }))}><Server size={14} />服务</button>
-      {historyOpened && <div className={`file-tab-group ${state.active === 'git-history' ? 'is-active' : ''}`}>
-        <button id="git-history-tab" className="file-tab" role="tab" aria-selected={state.active === 'git-history'} aria-controls="git-history-pane" tabIndex={state.active === 'git-history' ? 0 : -1} onClick={() => change(value => ({ ...value, active: 'git-history' }))}><History size={14} /><span>Git History</span></button>
-        <button className="file-tab-close" title="关闭历史" aria-label="关闭 Git History" onClick={() => { setHistoryOpened(false); change(value => ({ ...value, active: value.active === 'git-history' ? null : value.active })) }}><X size={13} /></button>
-      </div>}
-      {updateOpened && <div className={`file-tab-group ${state.active === 'git-update' ? 'is-active' : ''}`}>
-        <button id="git-update-tab" className="file-tab" role="tab" aria-selected={state.active === 'git-update'} aria-controls="git-update-pane" tabIndex={state.active === 'git-update' ? 0 : -1} onClick={() => change(value => ({ ...value, active: 'git-update' }))}><RefreshCw size={14} /><span>Update / Merge</span></button>
-        <button className="file-tab-close" title="关闭更新与合并" aria-label="关闭更新与合并" onClick={() => {
-          if (!window.dispatchEvent(new Event('devflow-git-update-before-close', { cancelable: true }))) { void dialogs.alert({ title: '暂时不能关闭', description: '请先保存合并结果或等待更新任务完成。关闭页面不会中止 Git 操作。' }); return }
-          setUpdateOpened(false); change(value => ({ ...value, active: value.active === 'git-update' ? null : value.active }))
-        }}><X size={13} /></button>
-      </div>}
       {state.tabs.map(tab => <div key={tab.key} className={`file-tab-group ${state.active === tab.key ? 'is-active' : ''}`}>
         <button id={`file-tab-${encodeURIComponent(tab.key)}`} className={`file-tab ${tab.preview ? 'is-preview' : ''}`} role="tab" tabIndex={state.active === tab.key ? 0 : -1} aria-selected={state.active === tab.key} aria-controls={`file-pane-${encodeURIComponent(tab.key)}`} title={`${tab.path}${dirty(tab) ? '\n未保存' : ''}`} onClick={() => change(value => ({ ...value, active: tab.key }))} onDoubleClick={() => updateTab(tab.key, current => ({ ...current, preview: false }))}>
-          {tab.loading || tab.saving ? <LoaderCircle size={14} className="spinning" /> : <FileText size={14} />}<span>{tab.diff?.historical ? `${tab.diff.commit?.slice(0, 8)} · ` : tab.diff ? 'Diff · ' : ''}{nameFor(tab.path)}</span>{dirty(tab) && <i className="file-dirty" aria-label="未保存" />}
+          {tab.loading || tab.saving ? <LoaderCircle size={14} className="spinning" /> : <FileText size={14} />}<span>{nameFor(tab.path)}</span>{dirty(tab) && <i className="file-dirty" aria-label="未保存" />}
         </button>
         <button className="file-tab-close" disabled={tab.saving || tab.deleting} aria-label={`关闭 ${nameFor(tab.path)}`} title="关闭文件" onClick={() => closeFile(tab)}><X size={13} /></button>
       </div>)}
@@ -394,15 +299,11 @@ export function FileWorkbench({ workspace, openRequest, diffRequest, historyRequ
     </div>
     </div>
     <div id="services-pane" role="tabpanel" aria-labelledby="services-tab" className="file-services-pane" hidden={state.active !== null}>{children}</div>
-    {historyOpened && <section id="git-history-pane" className="file-pane" role="tabpanel" aria-labelledby="git-history-tab" hidden={state.active !== 'git-history'}><Suspense fallback={<div className="file-loading">正在加载 Git History…</div>}><GitHistoryPage key={`${scope}:${workspace?.revision ?? 0}`} workspace={workspace} target={historyTarget} onOpenDiff={diff => onOpenDiff?.(diff)} /></Suspense></section>}
-    {updateOpened && workspace && <section id="git-update-pane" className="file-pane" role="tabpanel" aria-labelledby="git-update-tab" hidden={state.active !== 'git-update'}><Suspense fallback={<div className="file-loading">正在加载 Update Project…</div>}><GitUpdatePage key={`${scope}:${workspace.revision}`} revision={workspace.revision} target={updateTarget} active={state.active === 'git-update'} /></Suspense></section>}
     {state.tabs.map(tab => <section key={tab.key} id={`file-pane-${encodeURIComponent(tab.key)}`} role="tabpanel" aria-labelledby={`file-tab-${encodeURIComponent(tab.key)}`} hidden={state.active !== tab.key} className="file-pane">
-      {tab.diff ? <Suspense fallback={<div className="file-loading">正在加载 Diff…</div>}><GitDiffPane diff={tab.diff} revision={workspace?.revision} onDiffChange={diff => updateTab(tab.key, current => ({ ...current, diff }))} /></Suspense> : <>
       {tab.error && <div className="file-notice is-error" role="alert">{tab.error}<button className="ws-outline-button" disabled={tab.loading || tab.saving || tab.deleting || !workspace} onClick={() => reloadFile(tab)}>重新读取</button></div>}
       {tab.file?.readonlyReason && !(readOnlyShare && tab.file.readonlyReason === '只读分享') && <p className="file-notice">{tab.file.readonlyReason}</p>}
-      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor key={tab.path} revision={workspace?.revision} active={state.active === tab.key} onOpenHistory={target => { setHistoryTarget(target); setHistoryOpened(true); change(value => ({ ...value, active: 'git-history' })) }} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting || gitLocked(tab.path)} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
+      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor key={tab.path} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
       {tab.file && <footer className="file-status"><span role="status">{tab.saving ? '保存中…' : dirty(tab) ? '未保存' : tab.savedAt ? <><Check size={12} />已保存</> : tab.preview ? '预览 · 双击标签固定' : '已打开'}</span><span>行 {tab.line}，列 {tab.column}</span><span>UTF-8{tab.file.bom ? ' BOM' : ''} · {tab.file.lineEnding}</span></footer>}
-      </>}
     </section>)}
   </div>
 }

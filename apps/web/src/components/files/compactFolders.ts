@@ -1,4 +1,4 @@
-// Presentation only: callers supply either loaded disk entries or Git change nodes.
+// Presentation only: callers supply loaded directory entries.
 export const MAX_COMPACT_FOLDER_SEGMENTS = 32
 
 export function compactFolderChild<T>(segments: readonly T[], entries: readonly T[], options: {

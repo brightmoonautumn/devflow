@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-// Keep existing Explorer preferences when sharing the setting with Git.
+// Keep the existing Explorer display preference.
 const storageKey = 'devflow.explorer.compactFolders'
 const changeEvent = 'devflow-compact-folders-changed'
 function readPreference() {

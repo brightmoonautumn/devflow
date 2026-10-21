@@ -1,12 +1,11 @@
 import './tree-entry-icon.css'
-import { Braces, Coffee, Database, File, FileCode2, FileImage, FileJson2, FileText, Folder, FolderCode, FolderCog, FolderOpen, GitBranch, Package, Settings2, Terminal, type LucideIcon } from 'lucide-react'
+import { Braces, Coffee, Database, File, FileCode2, FileImage, FileJson2, FileText, Folder, FolderCode, FolderCog, FolderOpen, Package, Settings2, Terminal, type LucideIcon } from 'lucide-react'
 
 type IconStyle = { icon: LucideIcon; tone: string }
 
 function fileStyle(name: string): IconStyle {
   if (name === 'pom.xml') return { icon: Package, tone: 'orange' }
   if (/^(package\.json|pnpm-lock\.yaml|package-lock\.json|yarn\.lock)$/.test(name)) return { icon: Package, tone: 'green' }
-  if (name.startsWith('.git')) return { icon: GitBranch, tone: 'orange' }
   if (name.startsWith('.env') || /^(dockerfile|docker-compose)/.test(name)) return { icon: Settings2, tone: 'teal' }
   const extension = name.split('.').pop()
   if (extension === 'java') return { icon: Coffee, tone: 'orange' }

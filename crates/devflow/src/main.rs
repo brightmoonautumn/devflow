@@ -34,8 +34,12 @@ pub async fn call_core<T: Send + 'static>(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--devflow-runtime-worker")) {
-        let directory = std::env::args_os().nth(2).ok_or("Missing runtime worker directory")?;
+    if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new("--devflow-runtime-worker"))
+    {
+        let directory = std::env::args_os()
+            .nth(2)
+            .ok_or("Missing runtime worker directory")?;
         devflow_core::runtime::managed::run_worker(std::path::Path::new(&directory))?;
         return Ok(());
     }
@@ -56,7 +60,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .map(|path| path.canonicalize())
         .transpose()?;
     let mut roots: Vec<PathBuf> = std::env::var_os("DEVFLOW_ALLOWED_ROOTS")
-        .map(|value| std::env::split_paths(&value).filter(|path| !path.as_os_str().is_empty()).collect())
+        .map(|value| {
+            std::env::split_paths(&value)
+                .filter(|path| !path.as_os_str().is_empty())
+                .collect()
+        })
         .unwrap_or_default();
     if let Some(initial) = &root {
         let initial = initial.canonicalize()?;
@@ -70,8 +78,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let restore_recent = root.is_none()
-        || std::env::var("DEVFLOW_RESTORE_RECENT").is_ok_and(|value| value == "1");
+    let restore_recent =
+        root.is_none() || std::env::var("DEVFLOW_RESTORE_RECENT").is_ok_and(|value| value == "1");
     let engine = devflow_core::DevFlowEngine::new(roots, None)?;
     engine.workspace.configure_recent(
         std::env::current_dir()?.join(".devflow/recent-workspace.json"),
@@ -79,7 +87,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         restore_recent,
     )?;
     let (share_listener, share_network) = share::bind().await;
-    if let Some(error) = &share_network.error { tracing::warn!("{error}"); }
+    if let Some(error) = &share_network.error {
+        tracing::warn!("{error}");
+    }
     let state = Arc::new(AppState {
         engine: Arc::new(engine),
         api_token,
@@ -92,7 +102,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/health", get(http::health))
         .route("/api/workspace/terminal", post(http::terminal_execute))
         .route("/api/workspace/terminal/socket", get(http::terminal_socket))
-        .route("/api/workspace/shares", get(share::list).post(share::create))
+        .route(
+            "/api/workspace/shares",
+            get(share::list).post(share::create),
+        )
         .route("/api/workspace/shares/revoke", post(share::revoke))
         .route("/api/session", get(http::session))
         .route("/api/projects", get(http::projects))
@@ -105,30 +118,14 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/workspace/pick", post(http::workspace_pick))
         .route("/api/workspace/children", get(http::workspace_children))
         .route("/api/workspace/search", post(http::workspace_search))
-        .route("/api/workspace/replace/preview", post(http::workspace_replace_preview))
-        .route("/api/workspace/replace/apply", post(http::workspace_replace_apply))
-        .route("/api/workspace/git/status", post(http::git_status))
-        .route("/api/workspace/git/update/check", post(http::git_update_check))
-        .route("/api/workspace/git/update/start", post(http::git_update_start))
-        .route("/api/workspace/git/update/progress", post(http::git_update_progress))
-        .route("/api/workspace/git/merge/status", post(http::git_merge_status))
-        .route("/api/workspace/git/merge/file", post(http::git_merge_file))
-        .route("/api/workspace/git/merge/resolve", post(http::git_merge_resolve).layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)))
-        .route("/api/workspace/git/merge/finish", post(http::git_merge_finish))
-        .route("/api/workspace/git/merge/abort", post(http::git_merge_abort))
-        .route("/api/workspace/git/repositories", post(http::git_repositories))
-        .route("/api/workspace/git/blame", post(http::git_blame).layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)))
-        .route("/api/workspace/git/history/overview", post(http::git_history_overview))
-        .route("/api/workspace/git/sync", post(http::git_sync))
-        .route("/api/workspace/git/fetch", post(http::git_fetch))
-        .route("/api/workspace/git/history", post(http::git_history))
-        .route("/api/workspace/git/history/commit", post(http::git_history_commit))
-        .route("/api/workspace/git/history/diff", post(http::git_history_diff))
-        .route("/api/workspace/git/diff", post(http::git_diff))
-        .route("/api/workspace/git/mutate", post(http::git_mutate))
-        .route("/api/workspace/git/commit/preview", post(http::git_commit_preview))
-        .route("/api/workspace/git/commit/apply", post(http::git_commit_apply))
-        .route("/api/workspace/git/push", post(http::git_push))
+        .route(
+            "/api/workspace/replace/preview",
+            post(http::workspace_replace_preview),
+        )
+        .route(
+            "/api/workspace/replace/apply",
+            post(http::workspace_replace_apply),
+        )
         .route(
             "/api/workspace/file",
             get(http::workspace_file_read)
@@ -178,7 +175,14 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("DevFlow at http://{addr}");
     if let Some(share_listener) = share_listener {
         tokio::spawn(async move {
-            if let Err(error) = axum::serve(share_listener, guest_router.into_make_service_with_connect_info::<SocketAddr>()).await { tracing::error!("只读分享监听失败：{error}"); }
+            if let Err(error) = axum::serve(
+                share_listener,
+                guest_router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            {
+                tracing::error!("只读分享监听失败：{error}");
+            }
         });
     }
     let result = axum::serve(listener, app)

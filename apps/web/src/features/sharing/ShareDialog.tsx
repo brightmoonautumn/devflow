@@ -61,7 +61,7 @@ export function ShareDialog({ workspace, onClose }: { workspace: WorkspaceRespon
       <div className="ws-location-body share-dialog-body">
         <section className="share-scope" aria-labelledby={`${id}-scope`}>
           <h3 id={`${id}-scope`}>分享范围</h3>
-          <p>受邀者可查看目录、文件、搜索结果、Git Diff 和服务日志，无法修改文件或运行服务。</p>
+          <p>受邀者可查看目录、文件、搜索结果和服务日志，无法修改文件或运行服务。</p>
           <ul>{workspace?.folders.map(folder => <li key={folder.path} title={folder.path}>{folder.path}</li>)}</ul>
           <p className="share-muted">链接持有者均可访问这些内容。请分享给可信的局域网成员；重启后台后所有邀请失效。</p>
         </section>

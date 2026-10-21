@@ -19,28 +19,27 @@ use std::{
 
 #[path = "terminal.rs"]
 mod terminal;
-pub use terminal::{TerminalRequest, TerminalOperation, TerminalResponse, TerminalStreamPage};
+pub use terminal::{TerminalOperation, TerminalRequest, TerminalResponse, TerminalStreamPage};
 
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_FOLDERS: usize = 512;
 
 #[path = "files.rs"]
 mod files;
-pub use files::{WorkspaceFile, WorkspaceFileMutation, WorkspaceFileReadRequest, WorkspaceFileWriteRequest};
+pub use files::{
+    WorkspaceFile, WorkspaceFileMutation, WorkspaceFileReadRequest, WorkspaceFileWriteRequest,
+};
 #[path = "search.rs"]
 mod search;
-pub use search::{WorkspaceSearchRequest, WorkspaceSearch};
+pub use search::{WorkspaceSearch, WorkspaceSearchRequest};
 #[path = "replace.rs"]
 mod replace;
-pub use replace::{ReplacePreviewRequest, ReplaceApplyRequest, ReplacePreview, ReplaceOutcome};
-#[path = "git/mod.rs"]
-mod git;
-pub use git::{GitBlameRequest, GitBlame, BlameCommit, BlameRange, GitHistoryRequest, GitHistoryCommitRequest, GitHistoryDiffRequest, GitHistory, GitHistoryCommit, GitHistoryDiff, HistoryCommit, HistoryFile, GitStatusRequest, GitDiffRequest, GitMutationRequest, GitCommitRequest, GitCommitApplyRequest, GitPushRequest, GitStatus, GitDiff, GitOutcome, GitCommitPreview};
-pub use git::{GitHistoryOverviewRequest, GitHistoryOverview, OverviewCommit, GitSyncRequest, GitSync, GitSyncInfo, GitFetchRequest};
-pub use git::{GitUpdateRequest, GitUpdateProgressRequest, GitMergeRequest, GitResolveRequest, GitUpdateInfo, GitUpdateProgress, GitMergeState, GitConflictContent};
+pub use replace::{ReplaceApplyRequest, ReplaceOutcome, ReplacePreview, ReplacePreviewRequest};
 #[path = "sharing.rs"]
 mod sharing;
-pub use sharing::{ShareCreateRequest, ShareRevokeRequest, ShareInvitation, ShareCreated, ShareReadRequest};
+pub use sharing::{
+    ShareCreateRequest, ShareCreated, ShareInvitation, ShareReadRequest, ShareRevokeRequest,
+};
 #[path = "recent.rs"]
 mod recent;
 pub use recent::RecentWorkspaceEntry;
@@ -208,10 +207,6 @@ pub struct WorkspaceService {
     discovery: std::sync::Arc<Mutex<HashMap<PathBuf, (Instant, Discovery)>>>,
     recent_path: std::sync::Arc<Mutex<Option<PathBuf>>>,
     replacement: std::sync::Arc<Mutex<Option<replace::ReplacementPlan>>>,
-    git_operations: std::sync::Arc<std::sync::RwLock<()>>,
-    git_cache: std::sync::Arc<git::cache::GitCache>,
-    git_plan: std::sync::Arc<Mutex<Option<git::CommitPlan>>>,
-    git_update: std::sync::Arc<Mutex<Option<git::UpdateJob>>>,
     shares: std::sync::Arc<Mutex<HashMap<String, sharing::ShareGrant>>>,
 }
 
@@ -236,10 +231,6 @@ impl WorkspaceService {
             discovery: std::sync::Arc::new(Mutex::new(HashMap::new())),
             recent_path: std::sync::Arc::new(Mutex::new(None)),
             replacement: std::sync::Arc::new(Mutex::new(None)),
-            git_operations: std::sync::Arc::new(std::sync::RwLock::new(())),
-            git_cache: std::sync::Arc::new(git::cache::GitCache::default()),
-            git_plan: std::sync::Arc::new(Mutex::new(None)),
-            git_update: std::sync::Arc::new(Mutex::new(None)),
             shares: std::sync::Arc::new(Mutex::new(HashMap::new())),
         };
         if let Some(path) = initial {
@@ -256,7 +247,10 @@ impl WorkspaceService {
     }
 
     fn allowed_roots(&self) -> Result<Vec<PathBuf>> {
-        let grants = self.local_grants.lock().map_err(|_| error("unavailable", "本机位置暂不可用"))?;
+        let grants = self
+            .local_grants
+            .lock()
+            .map_err(|_| error("unavailable", "本机位置暂不可用"))?;
         let mut roots = self.roots.clone();
         roots.extend(grants.roots.iter().cloned());
         roots.sort();
@@ -264,9 +258,18 @@ impl WorkspaceService {
         Ok(roots)
     }
 
-    pub fn pick_local(&self, request: WorkspacePickRequest, authenticated: bool) -> Result<WorkspacePickResult> {
-        if !authenticated { return Err(error("unauthorized", "需要有效的访问令牌")); }
-        let _picker = self.picker.try_lock().map_err(|_| error("conflict", "已有一个系统选择窗口，请先完成选择"))?;
+    pub fn pick_local(
+        &self,
+        request: WorkspacePickRequest,
+        authenticated: bool,
+    ) -> Result<WorkspacePickResult> {
+        if !authenticated {
+            return Err(error("unauthorized", "需要有效的访问令牌"));
+        }
+        let _picker = self
+            .picker
+            .try_lock()
+            .map_err(|_| error("conflict", "已有一个系统选择窗口，请先完成选择"))?;
         if self.lock()?.revision != request.expected_revision {
             return Err(error("conflict", "工作区已修改，请刷新后重试"));
         }
@@ -275,19 +278,27 @@ impl WorkspaceService {
     }
 
     // Only the trusted OS picker calls this; no client-supplied path can grant access.
-    fn accept_local_selection(&self, request: WorkspacePickRequest, selection: Option<String>) -> Result<WorkspacePickResult> {
+    fn accept_local_selection(
+        &self,
+        request: WorkspacePickRequest,
+        selection: Option<String>,
+    ) -> Result<WorkspacePickResult> {
         let state = self.lock()?;
         if state.revision != request.expected_revision {
             return Err(error("conflict", "选择期间工作区已修改，请刷新后重新选择"));
         }
-        let Some(selected) = selection else { return Ok(WorkspacePickResult { path: None }); };
+        let Some(selected) = selection else {
+            return Ok(WorkspacePickResult { path: None });
+        };
         let selected = Path::new(&selected);
         validate_absolute(selected)?;
         let selected = selected.canonicalize()?;
         let mut roots = Vec::new();
         match request.kind {
             WorkspacePickKind::Folder => {
-                if !selected.is_dir() { return Err(error("invalid_path", "请选择存在的文件夹")); }
+                if !selected.is_dir() {
+                    return Err(error("invalid_path", "请选择存在的文件夹"));
+                }
                 roots.push(selected.clone());
             }
             WorkspacePickKind::WorkspaceFile => {
@@ -301,19 +312,32 @@ impl WorkspaceService {
                     if let Ok(folder) = resolve_folder(entry, parent(&selected)?) {
                         if validate_absolute(&folder).is_ok() {
                             if let Ok(folder) = folder.canonicalize() {
-                                if folder.is_dir() { roots.push(folder); }
+                                if folder.is_dir() {
+                                    roots.push(folder);
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        let mut grants = self.local_grants.lock().map_err(|_| error("unavailable", "本机位置暂不可用"))?;
-        for root in roots { if !grants.roots.contains(&root) { grants.roots.push(root); } }
-        if matches!(request.kind, WorkspacePickKind::WorkspaceFile) && !grants.files.contains(&selected) {
+        let mut grants = self
+            .local_grants
+            .lock()
+            .map_err(|_| error("unavailable", "本机位置暂不可用"))?;
+        for root in roots {
+            if !grants.roots.contains(&root) {
+                grants.roots.push(root);
+            }
+        }
+        if matches!(request.kind, WorkspacePickKind::WorkspaceFile)
+            && !grants.files.contains(&selected)
+        {
             grants.files.push(selected.clone());
         }
-        Ok(WorkspacePickResult { path: Some(display_path(&selected)) })
+        Ok(WorkspacePickResult {
+            path: Some(display_path(&selected)),
+        })
     }
 
     pub fn snapshot(&self) -> Result<WorkspaceSnapshot> {
@@ -427,7 +451,7 @@ impl WorkspaceService {
         ) {
             return Err(error(
                 "excluded_directory",
-                "依赖、构建产物和 Git 目录不展开",
+                "依赖、构建产物和版本管理元数据目录不展开",
             ));
         }
         let mut entries = Vec::new();
@@ -478,7 +502,14 @@ impl WorkspaceService {
         let mut files = Vec::new();
         let mut warnings = Vec::new();
         let roots = self.allowed_roots()?;
-        files.extend(self.local_grants.lock().map_err(|_| error("unavailable", "本机位置暂不可用"))?.files.iter().map(|p| display_path(p)));
+        files.extend(
+            self.local_grants
+                .lock()
+                .map_err(|_| error("unavailable", "本机位置暂不可用"))?
+                .files
+                .iter()
+                .map(|p| display_path(p)),
+        );
         for root in &roots {
             match fs::read_dir(root) {
                 Ok(entries) => {
@@ -510,7 +541,10 @@ impl WorkspaceService {
         files.dedup();
         let recent_workspaces = match self.recent_entries() {
             Ok(entries) => entries,
-            Err(err) => { warnings.push(format!("最近打开列表读取失败：{err}")); Vec::new() }
+            Err(err) => {
+                warnings.push(format!("最近打开列表读取失败：{err}"));
+                Vec::new()
+            }
         };
         Ok(WorkspaceCatalog {
             allowed_roots: roots.iter().map(|p| display_path(p)).collect(),
@@ -527,7 +561,8 @@ impl WorkspaceService {
             return Ok(WorkspaceBrowse {
                 path: None,
                 parent: None,
-                entries: self.allowed_roots()?
+                entries: self
+                    .allowed_roots()?
                     .iter()
                     .map(|root| WorkspaceTreeEntry {
                         name: display_path(root),
@@ -547,7 +582,7 @@ impl WorkspaceService {
         ) {
             return Err(error(
                 "excluded_directory",
-                "依赖、构建产物和 Git 目录不展开",
+                "依赖、构建产物和版本管理元数据目录不展开",
             ));
         }
         let mut entries = Vec::new();
@@ -609,7 +644,12 @@ impl WorkspaceService {
         if state.revision != request.expected_revision {
             return Err(error("conflict", "工作区已被其他入口修改，请刷新后重试"));
         }
-        let reset_terminals = !matches!(&request.operation, WorkspaceOperation::AddFolder { .. } | WorkspaceOperation::RemoveFolder { .. } | WorkspaceOperation::Save { .. });
+        let reset_terminals = !matches!(
+            &request.operation,
+            WorkspaceOperation::AddFolder { .. }
+                | WorkspaceOperation::RemoveFolder { .. }
+                | WorkspaceOperation::Save { .. }
+        );
         match request.operation {
             WorkspaceOperation::Close => {
                 check_discard(&state, request.discard_changes)?;
@@ -785,8 +825,10 @@ impl WorkspaceService {
         // Switching workspaces closes all shells; editing folders retains only
         // terminals whose original working directory remains authorized.
         self.reconcile_terminals(&state, reset_terminals)?;
-        self.git_cache.clear_scope();
-        state.notice = self.persist_recent(&state).err().map(|err| format!("当前位置已打开，但记忆失败，下次重启可能无法恢复：{err}"));
+        state.notice = self
+            .persist_recent(&state)
+            .err()
+            .map(|err| format!("当前位置已打开，但记忆失败，下次重启可能无法恢复：{err}"));
         self.snapshot_of(&state)
     }
 
@@ -936,12 +978,19 @@ impl WorkspaceService {
         // filesystem access. Canonical checks below additionally reject links.
         let candidate = comparison_path(path);
         let roots = self.allowed_roots()?;
-        let files = self.local_grants.lock().map_err(|_| error("unavailable", "本机位置暂不可用"))?.files.clone();
+        let files = self
+            .local_grants
+            .lock()
+            .map_err(|_| error("unavailable", "本机位置暂不可用"))?
+            .files
+            .clone();
         let exact_file = files.iter().any(|file| comparison_path(file) == candidate);
-        if !exact_file && !roots.iter().any(|root| {
-            let root = comparison_path(root);
-            candidate == root || candidate.starts_with(&format!("{root}/"))
-        }) {
+        if !exact_file
+            && !roots.iter().any(|root| {
+                let root = comparison_path(root);
+                candidate == root || candidate.starts_with(&format!("{root}/"))
+            })
+        {
             return Err(error(
                 "outside_roots",
                 "请通过系统选择窗口选择此位置，或配置 DEVFLOW_ALLOWED_ROOTS",
@@ -968,9 +1017,13 @@ impl WorkspaceService {
             ));
         }
         // An explicitly selected workspace file may be saved without granting its parent.
-        let selected_file = self.local_grants.lock()
+        let selected_file = self
+            .local_grants
+            .lock()
             .map_err(|_| error("unavailable", "本机位置暂不可用"))?
-            .files.iter().any(|file| comparison_path(file) == comparison_path(path));
+            .files
+            .iter()
+            .any(|file| comparison_path(file) == comparison_path(path));
         if selected_file {
             let target = self.authorize(path)?;
             let meta = fs::symlink_metadata(path)?;
@@ -1041,7 +1094,6 @@ impl WorkspaceService {
         if result.is_err() {
             let _ = fs::remove_file(&temp);
         }
-        if result.is_ok() { self.git_cache.invalidate_path(target); }
         result
     }
 }
@@ -1223,7 +1275,10 @@ mod tests {
     use super::*;
 
     fn pick_request(kind: WorkspacePickKind, expected_revision: u64) -> WorkspacePickRequest {
-        WorkspacePickRequest { kind, expected_revision }
+        WorkspacePickRequest {
+            kind,
+            expected_revision,
+        }
     }
 
     #[test]
@@ -1232,11 +1287,22 @@ mod tests {
         let selected = fixture.0.join("中文 项目");
         fs::create_dir_all(selected.join("子目录")).unwrap();
         let service = WorkspaceService::new(vec![], None).unwrap();
-        assert_eq!(service.authorize(&selected).unwrap_err().code, "outside_roots");
-        let result = service.accept_local_selection(pick_request(WorkspacePickKind::Folder, 0), Some(path(&selected))).unwrap();
+        assert_eq!(
+            service.authorize(&selected).unwrap_err().code,
+            "outside_roots"
+        );
+        let result = service
+            .accept_local_selection(
+                pick_request(WorkspacePickKind::Folder, 0),
+                Some(path(&selected)),
+            )
+            .unwrap();
         assert!(result.path.is_some());
         assert!(service.authorize(&selected.join("子目录")).is_ok());
-        assert_eq!(service.authorize(&fixture.0).unwrap_err().code, "outside_roots");
+        assert_eq!(
+            service.authorize(&fixture.0).unwrap_err().code,
+            "outside_roots"
+        );
         assert_eq!(service.snapshot().unwrap().revision, 0);
         assert!(service.snapshot().unwrap().folders.is_empty());
     }
@@ -1249,17 +1315,44 @@ mod tests {
         fs::create_dir_all(&projects).unwrap();
         fs::create_dir_all(&config_dir).unwrap();
         let config = config_dir.join("中文.code-workspace");
-        fs::write(&config, "{\n// 保留注释\n\"folders\": [{\"path\": \"../项目\"}], \"settings\": {}}\n").unwrap();
+        fs::write(
+            &config,
+            "{\n// 保留注释\n\"folders\": [{\"path\": \"../项目\"}], \"settings\": {}}\n",
+        )
+        .unwrap();
         let service = WorkspaceService::new(vec![], None).unwrap();
-        service.accept_local_selection(pick_request(WorkspacePickKind::WorkspaceFile, 0), Some(path(&config))).unwrap();
+        service
+            .accept_local_selection(
+                pick_request(WorkspacePickKind::WorkspaceFile, 0),
+                Some(path(&config)),
+            )
+            .unwrap();
         assert!(service.authorize(&projects).is_ok());
         assert!(service.authorize(&config).is_ok());
-        assert_eq!(service.authorize(&config_dir).unwrap_err().code, "outside_roots");
+        assert_eq!(
+            service.authorize(&config_dir).unwrap_err().code,
+            "outside_roots"
+        );
         assert!(service.save_target(&config).is_ok());
-        assert_eq!(service.save_target(&config_dir.join("other.code-workspace")).unwrap_err().code, "outside_roots");
-        let opened = fixture.command(&service, WorkspaceOperation::Open { path: path(&config) }).unwrap();
+        assert_eq!(
+            service
+                .save_target(&config_dir.join("other.code-workspace"))
+                .unwrap_err()
+                .code,
+            "outside_roots"
+        );
+        let opened = fixture
+            .command(
+                &service,
+                WorkspaceOperation::Open {
+                    path: path(&config),
+                },
+            )
+            .unwrap();
         assert_eq!(opened.folders[0].status, "available");
-        fixture.command(&service, WorkspaceOperation::Save { path: None }).unwrap();
+        fixture
+            .command(&service, WorkspaceOperation::Save { path: None })
+            .unwrap();
         assert!(fs::read_to_string(&config).unwrap().contains("保留注释"));
     }
 
@@ -1267,11 +1360,41 @@ mod tests {
     fn native_picker_checks_authentication_revision_and_cancel_without_granting() {
         let fixture = Fixture::new();
         let service = WorkspaceService::new(vec![], None).unwrap();
-        assert_eq!(service.pick_local(pick_request(WorkspacePickKind::Folder, 0), false).unwrap_err().code, "unauthorized");
-        assert_eq!(service.pick_local(pick_request(WorkspacePickKind::Folder, 1), true).unwrap_err().code, "conflict");
-        assert!(service.accept_local_selection(pick_request(WorkspacePickKind::Folder, 0), None).unwrap().path.is_none());
-        assert_eq!(service.accept_local_selection(pick_request(WorkspacePickKind::Folder, 1), Some(path(&fixture.0))).unwrap_err().code, "conflict");
-        assert_eq!(service.authorize(&fixture.0).unwrap_err().code, "outside_roots");
+        assert_eq!(
+            service
+                .pick_local(pick_request(WorkspacePickKind::Folder, 0), false)
+                .unwrap_err()
+                .code,
+            "unauthorized"
+        );
+        assert_eq!(
+            service
+                .pick_local(pick_request(WorkspacePickKind::Folder, 1), true)
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+        assert!(
+            service
+                .accept_local_selection(pick_request(WorkspacePickKind::Folder, 0), None)
+                .unwrap()
+                .path
+                .is_none()
+        );
+        assert_eq!(
+            service
+                .accept_local_selection(
+                    pick_request(WorkspacePickKind::Folder, 1),
+                    Some(path(&fixture.0))
+                )
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+        assert_eq!(
+            service.authorize(&fixture.0).unwrap_err().code,
+            "outside_roots"
+        );
         assert!(service.catalog().unwrap().allowed_roots.is_empty());
     }
 

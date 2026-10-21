@@ -95,7 +95,6 @@ export async function request<T>(url: string, options: RequestInit = {}, retry =
   if (response.status === 401 && retry) { session = null; return request<T>(url, options, false) }
   if (url === '/api/workspace/terminal' && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) throw new ApiError('backend_outdated', '当前后端尚不支持交互终端，请更新并重启 DevFlow。')
   if (url.startsWith('/api/workspace/shares') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) throw new ApiError('backend_outdated', '当前后端尚不支持只读分享，请更新并重启后端。')
-  if (url.startsWith('/api/workspace/git/') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) throw new ApiError('backend_outdated', '当前后端尚不支持 Git 管理，请更新并重启后端。')
   if (url.startsWith('/api/workspace/replace/') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) {
     throw new ApiError('backend_outdated', '当前后端尚不支持搜索替换，请更新并重启后端后重试。')
   }
@@ -121,9 +120,6 @@ export async function request<T>(url: string, options: RequestInit = {}, retry =
 }
 export function getWorkspaceCatalog(signal?: AbortSignal) { return request<WorkspaceCatalog>('/api/workspace/catalog', { signal }) }
 export function executeWorkspace(operation: WorkspaceOperation, expectedRevision: number, discardChanges = false) {
-  if (!window.dispatchEvent(new Event('devflow-git-update-before-close', { cancelable: true }))) {
-    return Promise.reject(new ApiError('conflict', '请先保存或放弃合并草稿，并等待 Git 更新任务完成，再更改工作区。'))
-  }
   return request<WorkspaceResponse>('/api/workspace', { method: 'POST', body: JSON.stringify({ operation, expectedRevision, discardChanges }) })
 }
 

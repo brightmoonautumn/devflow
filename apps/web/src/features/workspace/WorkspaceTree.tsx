@@ -8,8 +8,6 @@ import { TreeEntryIcon } from '../../components/files/TreeEntryIcon'
 import { FileTreeRow, TreeChevron, TreePathLabel, handleTreeNavigation } from '../../components/files/FileTreeRow'
 import { compactFolderChild, MAX_COMPACT_FOLDER_SEGMENTS } from '../../components/files/compactFolders'
 import { useCompactFolders } from '../../components/files/useCompactFolders'
-import { GitPanel } from '../git/GitPanel'
-import type { GitDiff } from '../git/api'
 import { WorkspaceSearch } from './WorkspaceSearch'
 import { ApiError, executeWorkspace, getWorkspaceChildren, mutateWorkspaceFile, type WorkspaceChildren, type WorkspaceResponse, type WorkspaceTreeEntry } from '../../lib/api'
 
@@ -166,16 +164,11 @@ const MemoTreeNode = memo(TreeNode)
 function maxSidebarWidth() { return window.innerWidth < 720 ? Math.max(200, Math.min(360, window.innerWidth - (window.innerWidth <= 550 ? 45 : 51) - 28)) : Math.max(200, Math.min(520, window.innerWidth - 420)) }
 function clampWidth(width: number) { return Math.round(Math.max(200, Math.min(maxSidebarWidth(), width))) }
 
-export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigure, onAddFolder, onSave, onClose, onOpenFile, onOpenDiff, onOpenHistory }: { data: WorkspaceResponse | null; open: boolean; view: 'explorer' | 'search' | 'git'; onOpenDiff: (diff: GitDiff) => void; onOpenHistory: () => void; onChange: (data: WorkspaceResponse) => void; onRefresh: () => void; onConfigure: () => void; onAddFolder: () => void; onSave: () => void; onClose: () => void; onOpenFile: (path: string, pinned?: boolean, line?: number, column?: number) => void }) {
+export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigure, onAddFolder, onSave, onClose, onOpenFile }: { data: WorkspaceResponse | null; open: boolean; view: 'explorer' | 'search'; onChange: (data: WorkspaceResponse) => void; onRefresh: () => void; onConfigure: () => void; onAddFolder: () => void; onSave: () => void; onClose: () => void; onOpenFile: (path: string, pinned?: boolean, line?: number, column?: number) => void }) {
   const dialogs = useDialogs()
   const scope = workspaceViewKey(data)
   const [compact, setCompact] = useCompactFolders()
   const [generation, setGeneration] = useState(0)
-  useEffect(() => {
-    const changed = () => setGeneration(current => current + 1)
-    window.addEventListener('devflow-git-updated', changed)
-    return () => window.removeEventListener('devflow-git-updated', changed)
-  }, [])
   const [selected, setSelected] = useState<string | null>(null)
   const [menu, setMenu] = useState<NodeMenu | null>(null)
   const [removing, setRemoving] = useState(false)
@@ -287,7 +280,7 @@ export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigu
       mutating.current = false; setRemoving(false)
     }
   }
-  return <aside ref={sidebarRef} hidden={!open} className={`workspace-sidebar ${resizing ? 'is-resizing' : ''}`} style={{ '--explorer-width': `${width}px` } as CSSProperties} id="workspace-sidebar" aria-label={view === 'git' ? '工作区 Git 管理' : view === 'search' ? '工作区搜索' : '工作区资源管理器'}>
+  return <aside ref={sidebarRef} hidden={!open} className={`workspace-sidebar ${resizing ? 'is-resizing' : ''}`} style={{ '--explorer-width': `${width}px` } as CSSProperties} id="workspace-sidebar" aria-label={view === 'search' ? '工作区搜索' : '工作区资源管理器'}>
     <div className="ws-explorer-view" hidden={view !== 'explorer'}>
     <div className="ws-explorer-heading"><h2 className="ws-explorer-title" title={data?.workspaceFile ?? data?.workspaceRoot ?? ''}><span className="ws-explorer-name">{data?.name ?? '未选择工作区'}</span>{data?.dirty && <small className="ws-explorer-unsaved">未保存</small>}</h2><div>
       {!readOnlyShare && <button className="ws-icon-button" disabled={!hasWorkspace} aria-label="添加文件夹到工作区" title="添加文件夹到工作区" onClick={onAddFolder}><FolderPlus size={15} /></button>}
@@ -310,7 +303,6 @@ export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigu
     <div className={`ws-tree-footer ${copyNotice?.error ? 'is-error' : ''}`} title={copyNotice?.message ?? selected ?? data?.workspaceFile ?? ''}><span role="status" aria-live="polite" aria-atomic="true">{copyNotice?.message}</span>{!copyNotice && (selected ?? data?.workspaceFile ?? '悬停文件或文件夹，按 C 复制绝对路径')}</div>
     </div>
     <div className="ws-search-view" hidden={view !== 'search'}><WorkspaceSearch key={data?.revision ?? 0} workspace={data} active={open && view === 'search'} onOpenFile={onOpenFile} onClose={onClose} /></div>
-    <div className="ws-search-view" hidden={view !== 'git'}><GitPanel key={data?.revision ?? 0} workspace={data} active={open && view === 'git'} onOpenDiff={onOpenDiff} onOpenHistory={onOpenHistory} onClose={onClose} /></div>
     <div ref={resizeHandle} className="ws-sidebar-resizer" role="separator" aria-label="调整资源管理器宽度" aria-orientation="vertical" aria-valuemin={200} aria-valuemax={maxSidebarWidth()} aria-valuenow={width} tabIndex={0} title="拖拽调整宽度 · 双击恢复默认" onPointerDown={event => {
       if (event.button !== 0) return
       event.preventDefault(); event.stopPropagation(); event.currentTarget.focus()
