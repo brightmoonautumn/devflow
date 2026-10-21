@@ -78,6 +78,14 @@ pub async fn workspace_pick(
         .await,
     )
 }
+pub async fn workspace_pick_cancel(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<devflow_core::workspace::WorkspacePickCancelRequest>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.cancel_local_pick(request, authenticated)).await)
+}
 pub async fn workspace_file_read(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

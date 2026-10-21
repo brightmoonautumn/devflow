@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, Clock3, FolderOpen, FolderPlus, Layers3, Save, X } from 'lucide-react'
-import { ApiError, executeWorkspace, getWorkspaceCatalog, pickWorkspaceLocation, type WorkspaceCatalog, type WorkspaceOperation, type WorkspaceResponse } from '../../lib/api'
+import { ApiError, cancelWorkspacePick, executeWorkspace, getWorkspaceCatalog, pickWorkspaceLocation, type WorkspaceCatalog, type WorkspaceOperation, type WorkspaceResponse } from '../../lib/api'
 import { WorkspaceBrowser } from './WorkspaceBrowser'
 
 export type WorkspaceManagerMode = 'open' | 'create' | 'add_folder' | 'save' | 'close'
@@ -10,6 +10,8 @@ type Props = { mode: WorkspaceManagerMode; data: WorkspaceResponse | null; onCha
 
 export function WorkspaceManager({ mode: initialMode, data, onChange, onRefresh, onClose }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
+  const pickerRequest = useRef<string | null>(null)
+  const cancelPending = useRef(false)
   const [mode, setMode] = useState(initialMode)
   const [path, setPath] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
@@ -24,6 +26,7 @@ export function WorkspaceManager({ mode: initialMode, data, onChange, onRefresh,
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [picking, setPicking] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const [discard, setDiscard] = useState(false)
   const [baseRevision, setBaseRevision] = useState(data?.revision)
   const stale = baseRevision !== undefined && data?.revision !== baseRevision
@@ -43,10 +46,12 @@ export function WorkspaceManager({ mode: initialMode, data, onChange, onRefresh,
     if (folder) setFilename(folder.split(/[\\/]/).filter(Boolean).at(-1) ?? '我的工作区')
   }
   async function pickLocal(kind: 'workspace_file' | 'folder') {
-    if (busy || stale || baseRevision === undefined) return
+    if (busy || cancelling || stale || baseRevision === undefined) return
+    const requestId = crypto.randomUUID()
+    pickerRequest.current = requestId
     setBusy(true); setPicking(true); setError('')
     try {
-      const result = await pickWorkspaceLocation(kind, baseRevision)
+      const result = await pickWorkspaceLocation(kind, baseRevision, requestId)
       if (result.path) {
         if (kind === 'workspace_file') { setSelected(result.path); setPath(null) }
         else { setPath(result.path); setSelected(null) }
@@ -55,7 +60,15 @@ export function WorkspaceManager({ mode: initialMode, data, onChange, onRefresh,
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       if (err instanceof ApiError && err.code === 'conflict') onRefresh()
-    } finally { setBusy(false); setPicking(false) }
+    } finally { pickerRequest.current = null; setBusy(false); setPicking(false) }
+  }
+  async function cancelPick() {
+    const requestId = pickerRequest.current
+    if (!requestId || cancelPending.current) return
+    cancelPending.current = true; setCancelling(true); setError('')
+    try { await cancelWorkspacePick(requestId) }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)) }
+    finally { cancelPending.current = false; setCancelling(false) }
   }
   async function run(operation: WorkspaceOperation, thenClose = false) {
     if (busy || stale || baseRevision === undefined) return
@@ -86,7 +99,7 @@ export function WorkspaceManager({ mode: initialMode, data, onChange, onRefresh,
     setMode('save'); setCloseAfterSave(true); setPath(null); setSelected(null)
   }
   const canSubmit = !!data && !busy && !stale && (!needsDiscard || discard) && (mode === 'close' || (mode === 'open' ? !!(selected || path) : !!path))
-  return <dialog ref={dialog} className="ws-dialog ws-location-dialog" aria-labelledby="workspace-manager-title" aria-describedby="workspace-manager-description" onCancel={event => { if (busy) event.preventDefault(); else onClose() }}>
+  return <dialog ref={dialog} className="ws-dialog ws-location-dialog" aria-labelledby="workspace-manager-title" aria-describedby="workspace-manager-description" onCancel={event => { if (busy) { event.preventDefault(); if (picking) void cancelPick() } else onClose() }}>
     <header className="ws-location-heading"><div className="ws-dialog-symbol">{mode === 'add_folder' ? <FolderPlus size={22} /> : <Layers3 size={22} />}</div><div><h2 id="workspace-manager-title">{titles[mode]}</h2><p id="workspace-manager-description">{descriptions[mode]}</p></div><button className="ws-icon-button" type="button" disabled={busy} aria-label="关闭工作区管理" onClick={onClose}><X size={17} /></button></header>
     <div className="ws-location-body">
       {stale && <div className="ws-dialog-notice" role="alert"><p>当前工作区已被其他入口修改。</p><button className="ws-outline-button" disabled={busy} onClick={() => { setBaseRevision(data?.revision); setDiscard(false); setError('') }}>基于当前工作区继续</button></div>}
@@ -103,7 +116,8 @@ export function WorkspaceManager({ mode: initialMode, data, onChange, onRefresh,
         <div className="ws-native-picker">
           {mode === 'open' && <button type="button" className="ws-outline-button" disabled={busy || stale || baseRevision === undefined} onClick={() => void pickLocal('workspace_file')}><Layers3 size={15} />选择工作区文件…</button>}
           <button type="button" className="ws-outline-button" disabled={busy || stale || baseRevision === undefined} onClick={() => void pickLocal('folder')}><FolderOpen size={15} />{saving ? '选择保存文件夹…' : '选择本机文件夹…'}</button>
-          <p className="ws-manager-hint" role="status">{picking ? '请在系统窗口中选择，取消后可返回。' : '可选择本机任意位置。下方保留已授权位置，方便再次打开。'}</p>
+          <p className="ws-manager-hint" role="status">{picking ? cancelling ? '正在关闭系统选择窗口…' : '请在系统窗口中选择；若被遮挡，可从任务栏切换到“DevFlow — 选择本机位置”，或在此取消选择。' : '可选择本机任意位置。下方保留已授权位置，方便再次打开。'}</p>
+          {picking && <button type="button" className="ws-outline-button" disabled={cancelling} onClick={() => void cancelPick()}>{cancelling ? '正在取消…' : '取消选择'}</button>}
         </div>
         {mode === 'open' && selected && <p className="ws-native-selection" title={selected}>已选择：{selected}</p>}
         {catalogError ? <div className="ws-dialog-notice" role="alert"><p>{catalogError}</p><button className="ws-outline-button" onClick={() => setCatalogAttempt(value => value + 1)}>重新加载位置</button></div> : <WorkspaceBrowser catalog={catalog} path={path} onNavigate={setPath} selected={selected} onSelect={setSelected} foldersOnly={mode !== 'open'} disabled={busy} />}

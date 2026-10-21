@@ -116,6 +116,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/workspace/catalog", get(http::workspace_catalog))
         .route("/api/workspace/browse", get(http::workspace_browse))
         .route("/api/workspace/pick", post(http::workspace_pick))
+        .route("/api/workspace/pick/cancel", post(http::workspace_pick_cancel))
         .route("/api/workspace/children", get(http::workspace_children))
         .route("/api/workspace/search", post(http::workspace_search))
         .route(

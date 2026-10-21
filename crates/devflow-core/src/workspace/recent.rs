@@ -225,7 +225,7 @@ mod tests {
         fs::write(&file, r#"{"folders":[{"path":"../项目"}],"settings":{}}"#).unwrap();
         let service = WorkspaceService::new(vec![], None).unwrap();
         service.configure_recent(fixture.record(), None, true).unwrap();
-        service.accept_local_selection(WorkspacePickRequest { kind: WorkspacePickKind::WorkspaceFile, expected_revision: 0 }, Some(display_path(&file))).unwrap();
+        service.accept_local_selection(WorkspacePickRequest { kind: WorkspacePickKind::WorkspaceFile, expected_revision: 0, request_id: None }, Some(display_path(&file))).unwrap();
         fixture.open(&service, &file);
         let restarted = WorkspaceService::new(vec![], None).unwrap();
         restarted.configure_recent(fixture.record(), None, true).unwrap();

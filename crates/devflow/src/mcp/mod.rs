@@ -80,7 +80,8 @@ fn tools() -> Value {
             "workspace_catalog",
             "List recentWorkspaces in most-recent-first order, configured allowed roots and workspace files directly within them; no recursive scan",
         ),
-        json!({"name":"workspace_pick","description":"Ask the local desktop user to choose a workspace file or folder in a native system dialog. Only the chosen location and folders declared by a chosen workspace gain session access. Cancellation returns a null path. Requires human interaction; may take up to 180 seconds.","inputSchema":{"type":"object","required":["kind","expectedRevision"],"properties":{"kind":{"enum":["workspace_file","folder"]},"expectedRevision":{"type":"integer","minimum":0}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
+        json!({"name":"workspace_pick","description":"Ask the local desktop user to choose a workspace file or folder in a native system dialog. Only the chosen location and folders declared by a chosen workspace gain session access. Cancellation returns a null path. Requires human interaction; may take up to 180 seconds. Supply a unique UUID requestId to allow workspace_pick_cancel.","inputSchema":{"type":"object","required":["kind","expectedRevision"],"properties":{"kind":{"enum":["workspace_file","folder"]},"expectedRevision":{"type":"integer","minimum":0},"requestId":{"type":"string","format":"uuid"}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
+        json!({"name":"workspace_pick_cancel","description":"Cancel only the active native picker with the matching requestId. Requires authentication. A cancelled selection grants no access. Returns conflict if the request has not started or has already ended.","inputSchema":{"type":"object","required":["requestId"],"properties":{"requestId":{"type":"string","format":"uuid"}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
         json!({"name":"workspace_browse","description":"Browse one level of allowlisted folders and .code-workspace files before opening a workspace. Omit path to list allowed roots.","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true}}),
         json!({"name":"workspace_create_from_folder","description":"Atomically create a workspace file containing an existing allowlisted folder; never overwrites files.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"folder":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0},"discardChanges":{"type":"boolean"}},"required":["path","folder","expectedRevision"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}}),
         json!({"name":"workspace_close","description":"Close the active workspace without stopping processes or deleting files. Dirty state requires explicit discardChanges=true; save first to retain changes.","inputSchema":{"type":"object","properties":{"expectedRevision":{"type":"integer","minimum":0},"discardChanges":{"type":"boolean"}},"required":["expectedRevision"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}}),
@@ -357,6 +358,12 @@ pub async fn handle(
                     )),
                     Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
                 }
+            } else if name == "workspace_pick_cancel" {
+                let authenticated = security::authenticated(&headers, &state);
+                match serde_json::from_value::<devflow_core::workspace::WorkspacePickCancelRequest>(arguments) {
+                    Ok(request) => Ok(tool_result(call_core(state, move |e| e.workspace.cancel_local_pick(request, authenticated)).await)),
+                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
             } else if name == "workspace_browse" {
                 match serde_json::from_value::<devflow_core::workspace::WorkspaceBrowseRequest>(
                     arguments,
@@ -551,7 +558,7 @@ mod tests {
     fn workspace_tools_advertise_revision_and_required_paths() {
         let catalog = tools();
         let tools = catalog["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 35);
+        assert_eq!(tools.len(), 36);
         for name in [
             "workspace_terminal",
             "workspace_share_create",

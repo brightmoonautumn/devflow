@@ -35,10 +35,13 @@ export interface WorkspaceBrowse { path: string | null; parent: string | null; e
 export function browseWorkspace(path?: string, signal?: AbortSignal) {
   return request<WorkspaceBrowse>(`/api/workspace/browse${path ? `?${new URLSearchParams({ path })}` : ''}`, { signal })
 }
-export function pickWorkspaceLocation(kind: 'workspace_file' | 'folder', expectedRevision: number) {
+export function pickWorkspaceLocation(kind: 'workspace_file' | 'folder', expectedRevision: number, requestId: string) {
   return request<{ path: string | null }>('/api/workspace/pick', {
-    method: 'POST', body: JSON.stringify({ kind, expectedRevision }), signal: AbortSignal.timeout(190000),
+    method: 'POST', body: JSON.stringify({ kind, expectedRevision, requestId }), signal: AbortSignal.timeout(190000),
   })
+}
+export function cancelWorkspacePick(requestId: string) {
+  return request<{ path: null }>('/api/workspace/pick/cancel', { method: 'POST', body: JSON.stringify({ requestId }) })
 }
 export interface WorkspaceFile {
   path: string; content: string; revision: number; readonly: boolean; readonlyReason: string | null
@@ -109,6 +112,9 @@ export async function request<T>(url: string, options: RequestInit = {}, retry =
       throw new ApiError('backend_outdated', '当前运行的后端尚不支持系统选择窗口，请重新编译并重启 DevFlow 后端后重试。')
     }
     const body = await response.text()
+    if (url === '/api/workspace/pick' && response.status === 422 && body.includes('unknown field') && body.includes('requestId')) {
+      throw new ApiError('backend_outdated', '当前后端尚不支持可取消的系统选择窗口，请更新并重启 DevFlow。')
+    }
     let value: { code?: string; message?: string } = {}
     try { value = JSON.parse(body) ?? {} } catch { /* Axum extraction failures return plain text. */ }
     if (response.status === 422 && body.includes('unknown variant') && /`(?:close|create_from_folder|remove_folder|open_recent|restart)`/.test(body)) {

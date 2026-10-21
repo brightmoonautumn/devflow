@@ -66,6 +66,11 @@ impl From<std::io::Error> for WorkspaceError {
         error(code, value.to_string())
     }
 }
+fn validate_picker_id(id: &str) -> Result<()> {
+    uuid::Uuid::parse_str(id).map_err(|_| error("invalid_request", "选择请求标识无效"))?;
+    Ok(())
+}
+
 fn error(code: &'static str, message: impl Into<String>) -> WorkspaceError {
     WorkspaceError {
         code,
@@ -185,6 +190,13 @@ pub enum WorkspacePickKind {
 pub struct WorkspacePickRequest {
     pub kind: WorkspacePickKind,
     pub expected_revision: u64,
+    #[serde(default)]
+    pub request_id: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspacePickCancelRequest {
+    pub request_id: String,
 }
 #[derive(Debug, Serialize)]
 pub struct WorkspacePickResult {
@@ -202,7 +214,7 @@ pub struct WorkspaceService {
     terminals: std::sync::Arc<Mutex<terminal::TerminalRegistry>>,
     roots: Vec<PathBuf>,
     local_grants: std::sync::Arc<Mutex<LocalGrants>>,
-    picker: std::sync::Arc<Mutex<()>>,
+    picker: std::sync::Arc<super::picker::PickerRegistry>,
     state: std::sync::Arc<Mutex<State>>,
     discovery: std::sync::Arc<Mutex<HashMap<PathBuf, (Instant, Discovery)>>>,
     recent_path: std::sync::Arc<Mutex<Option<PathBuf>>>,
@@ -226,7 +238,7 @@ impl WorkspaceService {
             terminals: std::sync::Arc::new(Mutex::new(terminal::TerminalRegistry::default())),
             roots: canonical,
             local_grants: std::sync::Arc::new(Mutex::new(LocalGrants::default())),
-            picker: std::sync::Arc::new(Mutex::new(())),
+            picker: std::sync::Arc::new(super::picker::PickerRegistry::default()),
             state: std::sync::Arc::new(Mutex::new(State::default())),
             discovery: std::sync::Arc::new(Mutex::new(HashMap::new())),
             recent_path: std::sync::Arc::new(Mutex::new(None)),
@@ -266,15 +278,25 @@ impl WorkspaceService {
         if !authenticated {
             return Err(error("unauthorized", "需要有效的访问令牌"));
         }
-        let _picker = self
-            .picker
-            .try_lock()
-            .map_err(|_| error("conflict", "已有一个系统选择窗口，请先完成选择"))?;
+        if let Some(id) = &request.request_id {
+            validate_picker_id(id)?;
+        }
+        let picker = self.picker.start(request.request_id.clone())?;
         if self.lock()?.revision != request.expected_revision {
             return Err(error("conflict", "工作区已修改，请刷新后重试"));
         }
-        let selection = super::picker::pick(request.kind)?;
-        self.accept_local_selection(request, selection)
+        let selection = picker.pick(request.kind)?;
+        picker.finish(
+            || self.accept_local_selection(request, selection),
+            || WorkspacePickResult { path: None },
+        )
+    }
+
+    pub fn cancel_local_pick(&self, request: WorkspacePickCancelRequest, authenticated: bool) -> Result<WorkspacePickResult> {
+        if !authenticated { return Err(error("unauthorized", "需要有效的访问令牌")); }
+        validate_picker_id(&request.request_id)?;
+        self.picker.cancel(&request.request_id)?;
+        Ok(WorkspacePickResult { path: None })
     }
 
     // Only the trusted OS picker calls this; no client-supplied path can grant access.
@@ -1278,6 +1300,7 @@ mod tests {
         WorkspacePickRequest {
             kind,
             expected_revision,
+            request_id: None,
         }
     }
 
@@ -1396,6 +1419,35 @@ mod tests {
             "outside_roots"
         );
         assert!(service.catalog().unwrap().allowed_roots.is_empty());
+    }
+
+    #[test]
+    fn native_picker_cancel_requires_authentication_and_matching_request() {
+        let service = WorkspaceService::new(vec![], None).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let picker = service.picker.start(Some(id.clone())).unwrap();
+        let request = || WorkspacePickCancelRequest { request_id: id.clone() };
+        assert_eq!(service.cancel_local_pick(request(), false).unwrap_err().code, "unauthorized");
+        assert_eq!(service.cancel_local_pick(WorkspacePickCancelRequest { request_id: uuid::Uuid::new_v4().to_string() }, true).unwrap_err().code, "conflict");
+        service.cancel_local_pick(request(), true).unwrap();
+        let fixture = Fixture::new();
+        let result = picker.finish(
+            || service.accept_local_selection(pick_request(WorkspacePickKind::Folder, 0), Some(path(&fixture.0))),
+            || WorkspacePickResult { path: None },
+        ).unwrap();
+        assert!(result.path.is_none());
+        assert!(service.catalog().unwrap().allowed_roots.is_empty());
+        drop(picker);
+        assert_eq!(service.cancel_local_pick(request(), true).unwrap_err().code, "conflict");
+        assert_eq!(service.cancel_local_pick(WorkspacePickCancelRequest { request_id: "bad-id".into() }, true).unwrap_err().code, "invalid_request");
+    }
+
+    #[test]
+    fn native_picker_request_remains_backward_compatible() {
+        let request: WorkspacePickRequest = serde_json::from_value(json!({ "kind": "folder", "expectedRevision": 0 })).unwrap();
+        assert!(request.request_id.is_none());
+        let service = WorkspaceService::new(vec![], None).unwrap();
+        assert_eq!(service.pick_local(WorkspacePickRequest { request_id: Some("bad-id".into()), ..request }, true).unwrap_err().code, "invalid_request");
     }
 
     struct Fixture(PathBuf);
