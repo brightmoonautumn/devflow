@@ -11,7 +11,7 @@ import './workspace.css'
 
 const kindNames = { maven: 'Maven', node: 'Node.js', maven_and_node: 'Maven + Node.js' }
 type Filter = 'all' | 'maven' | 'node'
-type PendingAction = { type: 'start' | 'stop'; settledAt?: number }
+type PendingAction = { type: 'start' | 'stop' | 'restart'; settledAt?: number }
 type Props = {
   query: string
   onQueryChange: (query: string) => void
@@ -48,7 +48,11 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
     setPendingActions(current => {
       const completed = Object.keys(current).filter(path => {
         const settledAt = current[path].settledAt
-        return settledAt !== undefined && (!monitoringEnabled || !!runtime.error || (runtime.snapshot?.sampledAt ?? 0) * 1000 > settledAt)
+        if (settledAt === undefined) return false
+        if (!monitoringEnabled || runtime.error) return true
+        if ((runtime.snapshot?.sampledAt ?? 0) * 1000 <= settledAt) return false
+        const metrics = runtime.snapshot?.projects.find(value => metricsKey(value) === path)
+        return current[path].type !== 'restart' || metrics?.managedState !== 'starting'
       })
       if (!completed.length) return current
       const next = { ...current }
@@ -56,12 +60,12 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
       return next
     })
   }, [runtime.snapshot, runtime.error, monitoringEnabled, pendingActions])
-  async function changeProjectState(project: Project, type: 'start' | 'stop') {
+  async function changeProjectState(project: Project, type: 'start' | 'stop' | 'restart') {
     if (submitting.current.has(projectKey(project)) || pendingActions[projectKey(project)]) return
     submitting.current.add(projectKey(project))
     setPendingActions(current => ({ ...current, [projectKey(project)]: { type } }))
     try {
-      await handleProjectAction(project, type === 'start' ? '启动项目' : '停止项目')
+      await handleProjectAction(project, type === 'start' ? '启动项目' : type === 'restart' ? '重启项目' : '停止项目')
     } finally {
       submitting.current.delete(projectKey(project))
       setPendingActions(current => ({ ...current, [projectKey(project)]: { type, settledAt: Date.now() } }))
@@ -118,24 +122,29 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
     if (!project) return null
     const running = row.status === 'running'
     const pending = pendingActions[projectKey(project)]
-    const starting = pending?.type === 'start' || metricsByPath.get(projectKey(project))?.managedState === 'starting'
+    const starting = pending?.type !== 'restart' && (pending?.type === 'start' || metricsByPath.get(projectKey(project))?.managedState === 'starting')
     const stopping = pending?.type === 'stop'
-    const transitioning = starting || stopping
+    const restarting = pending?.type === 'restart'
+    const transitioning = starting || stopping || restarting
     const ready = monitoringEnabled && !runtime.error && metricsByPath.has(projectKey(project))
-    const action = stopping ? '停止中…' : starting ? '启动中…' : ready ? running ? '停止' : '启动' : runtime.error || !monitoringEnabled ? '状态未知' : '读取中'
-    const buttonTone = ready ? stopping || (running && !starting) ? 'is-stop' : 'is-start' : ''
+    const action = restarting ? '重启中…' : stopping ? '停止中…' : starting ? '启动中…' : ready ? running ? '停止' : '启动' : runtime.error || !monitoringEnabled ? '状态未知' : '读取中'
+    const buttonTone = ready ? stopping || restarting || (running && !starting) ? 'is-stop' : 'is-start' : ''
     const actionTitle = stopping ? '正在停止项目进程树' : starting ? pending ? '正在提交启动请求' : '构建 / 启动中，点击取消启动' : !ready ? '等待有效运行状态' : running ? '停止项目进程树' : '使用已保存配置或默认配置启动'
     return (<div className="ws-row-actions">
-      {!readOnlyShare && <button className={`ws-launch ${transitioning ? 'is-pending' : ''} ${buttonTone}`} disabled={!ready || !!pending} aria-busy={transitioning} aria-label={`${project.name} ${action}${starting && !pending ? '，点击取消启动' : ''}`} title={actionTitle} onClick={() => void changeProjectState(project, running || starting ? 'stop' : 'start')}>
-        {transitioning ? <LoaderCircle size={13} className="spinning" aria-hidden="true" /> : running ? <Circle size={10} fill="currentColor" aria-hidden="true" /> : <Play size={12} fill="currentColor" aria-hidden="true" />}
-        <span>{action}</span>
-      </button>}<div className="ws-menu-anchor">
+      {!readOnlyShare && <>
+      {(running && !starting || restarting) && <button className={`ws-launch is-restart ${restarting ? 'is-pending' : ''}`} disabled={!ready || !!pending} aria-busy={restarting} aria-label={`${project.name} ${restarting ? '重启中' : '重启'}`} title="使用已保存配置或默认配置重启服务" onClick={() => void changeProjectState(project, 'restart')}>
+        {restarting ? <LoaderCircle size={13} className="spinning" aria-hidden="true" /> : <RefreshCw size={13} aria-hidden="true" />}<span>{restarting ? '重启中…' : '重启'}</span>
+      </button>}
+      <button className={`ws-launch ${transitioning ? 'is-pending' : ''} ${buttonTone}`} disabled={!ready || !!pending} aria-busy={starting || stopping} aria-label={`${project.name} ${restarting ? '停止' : action}${starting && !pending ? '，点击取消启动' : ''}`} title={actionTitle} onClick={() => void changeProjectState(project, running || starting ? 'stop' : 'start')}>
+        {starting || stopping ? <LoaderCircle size={13} className="spinning" aria-hidden="true" /> : running || restarting ? <Circle size={10} fill="currentColor" aria-hidden="true" /> : <Play size={12} fill="currentColor" aria-hidden="true" />}
+        <span>{restarting ? '停止' : action}</span>
+      </button></>}<div className="ws-menu-anchor">
           <button className="ws-icon-button" aria-label={`${project.name} 更多操作`} title="更多操作" aria-expanded={menu === projectKey(project)} aria-controls={menu === projectKey(project) ? 'workspace-project-actions' : undefined} onClick={event => { menuTrigger.current = event.currentTarget; setMenu(menu === projectKey(project) ? null : projectKey(project)) }}><MoreHorizontal size={17} /></button>
           {menu === projectKey(project) && <div id="workspace-project-actions" className="ws-menu" aria-label={`${project.name} 操作`} onKeyDown={event => { if (event.key === 'Escape') { setMenu(null); menuTrigger.current?.focus(); event.stopPropagation() } }}>
             <button autoFocus onClick={() => { setMenu(null); handleProjectAction(project, '运行输出') }}><Terminal size={14} />查看运行输出</button>
-            {!readOnlyShare && <button onClick={() => { setMenu(null); handleProjectAction(project, '启动配置') }}><Settings2 size={14} />启动配置</button>}
+            {!readOnlyShare && <button disabled={!!pending} onClick={() => { setMenu(null); handleProjectAction(project, '启动配置') }}><Settings2 size={14} />启动配置</button>}
             {!readOnlyShare && project.kind !== 'node' && <button onClick={() => { setMenu(null); handleProjectAction(project, 'JVM 诊断') }}><Activity size={14} />JVM 诊断</button>}
-            {!readOnlyShare && project.kind !== 'node' && <button disabled={!running || !ready} onClick={() => { setMenu(null); handleProjectAction(project, 'Arthas 挂载') }}><PlugZap size={14} />快速挂载 Arthas</button>}
+            {!readOnlyShare && project.kind !== 'node' && <button disabled={!running || !ready || !!pending} onClick={() => { setMenu(null); handleProjectAction(project, 'Arthas 挂载') }}><PlugZap size={14} />快速挂载 Arthas</button>}
           </div>}
         </div></div>)
   }

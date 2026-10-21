@@ -1,6 +1,7 @@
 //! Process observations and managed Java execution shared by HTTP and MCP.
 pub mod java;
 pub mod node;
+pub mod managed;
 mod ports;
 mod presentation;
 pub(crate) mod process;

@@ -172,6 +172,7 @@ dependencies = [
  "devflow-core",
  "serde",
  "serde_json",
+ "sysinfo",
  "tokio",
  "tower-http",
  "tracing",

@@ -120,6 +120,19 @@ impl DevFlowEngine {
                 self.java
                     .start(project, jvm_args, args, profiles, main_class)
             }
+            JavaOperation::Restart { jvm_args, args, profiles, main_class, pid } => {
+                let external = pid.map(target).transpose()?;
+                let metrics = observed.projects.iter().find(|m| m.project_path == project.path);
+                let managed = metrics.and_then(|m| m.managed_state.as_deref())
+                    .is_some_and(|state| matches!(state, "starting" | "running"));
+                if !managed && metrics.is_some_and(|m| m.java_pids.len() > 1) {
+                    return Err(workspace::WorkspaceError {
+                        code: "conflict",
+                        message: "检测到多个关联进程，请先停止外部服务，再启动".into(),
+                    });
+                }
+                self.java.restart(project, jvm_args, args, profiles, main_class, external)
+            }
             JavaOperation::Stop { pid } => self.java.stop(&project, pid.map(target).transpose()?),
             JavaOperation::Attach { pid } => {
                 let identity = target(pid)?;
@@ -151,6 +164,15 @@ impl DevFlowEngine {
             .projects
             .iter()
             .find(|p| p.project_path == project.path && p.node_script == project.node_script);
+        let target = |pid: u32| -> Result<(u32, u64), workspace::WorkspaceError> {
+            if !metrics.is_some_and(|m| m.node_pids.contains(&pid)) {
+                return Err(workspace::WorkspaceError {
+                    code: "conflict",
+                    message: "进程不属于所选服务或已退出".into(),
+                });
+            }
+            runtime::node::node_identity(pid)
+        };
         let result = match request.operation {
             runtime::node::NodeOperation::Start {
                 package_manager,
@@ -165,18 +187,20 @@ impl DevFlowEngine {
                 self.node
                     .start(project, request.script, package_manager, args)
             }
+            runtime::node::NodeOperation::Restart { package_manager, args, pid } => {
+                let external = pid.map(target).transpose()?;
+                let managed = metrics.and_then(|m| m.managed_state.as_deref())
+                    .is_some_and(|state| matches!(state, "starting" | "running"));
+                if !managed && metrics.is_some_and(|m| m.node_pids.len() > 1) {
+                    return Err(workspace::WorkspaceError {
+                        code: "conflict",
+                        message: "检测到多个关联进程，请先停止外部服务，再启动".into(),
+                    });
+                }
+                self.node.restart(project, request.script, package_manager, args, external)
+            }
             runtime::node::NodeOperation::Stop { pid } => {
-                let target = pid
-                    .map(|pid| {
-                        if !metrics.is_some_and(|m| m.node_pids.contains(&pid)) {
-                            return Err(workspace::WorkspaceError {
-                                code: "conflict",
-                                message: "进程不属于所选服务或已退出".into(),
-                            });
-                        }
-                        runtime::node::node_identity(pid)
-                    })
-                    .transpose()?;
+                let target = pid.map(target).transpose()?;
                 self.node.stop(&project, target)
             }
         };

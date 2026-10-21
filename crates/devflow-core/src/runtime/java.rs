@@ -1,6 +1,7 @@
 //! Java execution shared by HTTP/MCP. Arguments never pass through a shell.
 pub use super::process::{LogLine, ProcessOutput as JavaOutput};
-use super::process::{Run, configure, execute, identity, kill_tree, process_system, reader};
+use super::process::{Run, configure, identity, kill_tree, process_system, reader};
+use super::managed::{self, CommandSpec, LaunchPlan};
 use crate::workspace::{DetectedProject, ProjectKind, WorkspaceError};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -40,6 +41,17 @@ pub enum JavaOperation {
         #[serde(default)]
         profiles: Vec<String>,
         main_class: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Restart {
+        #[serde(default)]
+        jvm_args: Vec<String>,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        profiles: Vec<String>,
+        main_class: Option<String>,
+        pid: Option<u32>,
     },
     Stop {
         pid: Option<u32>,
@@ -263,8 +275,10 @@ pub fn java_identity(pid: u32) -> Result<(u32, u64)> {
 }
 impl JavaService {
     pub(crate) fn managed_identity(&self, project: &DetectedProject) -> Option<(u32, u64)> {
-        let runs = self.runs.lock().unwrap();
-        let run = runs.get(&key(project))?.lock().unwrap();
+        let mut runs = self.runs.lock().unwrap();
+        managed::restore_into(&mut runs, "java", &key(project)).ok()?;
+        let mut run = runs.get(&key(project))?.lock().unwrap();
+        managed::refresh(&mut run).ok()?;
         if matches!(run.state.as_str(), "starting" | "running") {
             run.pid
         } else {
@@ -279,18 +293,20 @@ impl JavaService {
         run_id: Option<&str>,
     ) -> Result<JavaOutput> {
         java_project(project)?;
-        let runs = self.runs.lock().unwrap();
-        Ok(runs.get(&key(project)).map_or_else(
-            || Run::new("external").output(0),
+        let mut runs = self.runs.lock().unwrap();
+        managed::restore_into(&mut runs, "java", &key(project))?;
+        runs.get(&key(project)).map_or_else(
+            || Ok(Run::new("external").output(0)),
             |run| {
-                let run = run.lock().unwrap();
-                run.output(if run_id == Some(run.id.as_str()) {
+                let mut run = run.lock().unwrap();
+                managed::refresh(&mut run)?;
+                Ok(run.output(if run_id == Some(run.id.as_str()) {
                     after
                 } else {
                     0
-                })
+                }))
             },
-        ))
+        )
     }
     pub fn start(
         &self,
@@ -300,13 +316,45 @@ impl JavaService {
         profiles: Vec<String>,
         main: Option<String>,
     ) -> Result<JavaOutput> {
+        self.launch(project, jvm, args, profiles, main, None)
+    }
+    pub fn restart(
+        &self,
+        project: DetectedProject,
+        jvm: Vec<String>,
+        args: Vec<String>,
+        profiles: Vec<String>,
+        main: Option<String>,
+        external: Option<(u32, u64)>,
+    ) -> Result<JavaOutput> {
+        self.launch(project, jvm, args, profiles, main, Some(external))
+    }
+    fn launch(
+        &self,
+        project: DetectedProject,
+        jvm: Vec<String>,
+        args: Vec<String>,
+        profiles: Vec<String>,
+        main: Option<String>,
+        restart: Option<Option<(u32, u64)>>,
+    ) -> Result<JavaOutput> {
         java_project(&project)?;
         validate_args(&jvm, &args, &profiles)?;
         let main = main
             .or_else(|| (project.main_classes.len() == 1).then(|| project.main_classes[0].clone()))
             .filter(|m| project.main_classes.contains(m))
             .ok_or_else(|| error("main_class_required", "请选择项目启动主类"))?;
+        let root = Path::new(&project.path).canonicalize()?;
+        let cp = std::env::temp_dir().join(format!("devflow-{}.classpath", uuid::Uuid::new_v4()));
+        let build = maven_command(&root, &cp)?;
+        let mut java = java_command()?;
+        java.args(jvm).arg("-Dfile.encoding=UTF-8");
+        if let Some(external) = restart {
+            self.stop(&project, external)?;
+        }
         let mut runs = self.runs.lock().unwrap();
+        managed::restore_into(&mut runs, "java", &key(&project))?;
+        if let Some(run) = runs.get(&key(&project)) { managed::refresh(&mut run.lock().unwrap())?; }
         if runs
             .get(&key(&project))
             .is_some_and(|run| matches!(run.lock().unwrap().state.as_str(), "starting" | "running"))
@@ -319,73 +367,13 @@ impl JavaService {
                 "运行记录已达上限，请重启 DevFlow 清理历史记录",
             ));
         }
-        let run = Arc::new(Mutex::new(Run::new("starting")));
-        runs.insert(key(&project), run.clone());
-        run.lock()
-            .unwrap()
-            .log("system", "正在准备 Maven 编译和运行依赖…");
+        let run = Arc::new(Mutex::new(managed::launch("java", &key(&project), LaunchPlan::Java {
+            build: CommandSpec::from(&build), java: CommandSpec::from(&java), root,
+            classpath_file: cp, main, args, profiles,
+        })?));
+        run.lock().unwrap().log("system", "独立服务宿主正在准备 Maven 编译和运行依赖…");
         let result = run.lock().unwrap().output(0);
-        thread::spawn(move || {
-            let cp =
-                std::env::temp_dir().join(format!("devflow-{}.classpath", uuid::Uuid::new_v4()));
-            let outcome = (|| -> Result<Option<i32>> {
-                let root = Path::new(&project.path).canonicalize()?;
-                let code = execute(maven_command(&root, &cp)?, &run, "starting")?;
-                if code != Some(0) {
-                    return Err(error(
-                        "build_failed",
-                        format!("Maven 准备失败，退出码 {code:?}；请查看上方输出"),
-                    ));
-                }
-                let dependencies = fs::read_to_string(&cp)?;
-                let classes = root.join("target/classes").canonicalize()?;
-                if !classes.starts_with(&root) {
-                    return Err(error("outside_workspace", "编译输出超出项目目录"));
-                }
-                let classpath = format!(
-                    "{}{}{}",
-                    crate::workspace::display_path(&classes),
-                    if cfg!(windows) { ";" } else { ":" },
-                    dependencies.trim()
-                );
-                let mut command = java_command()?;
-                command
-                    .args(jvm)
-                    .arg("-Dfile.encoding=UTF-8")
-                    .arg("-cp")
-                    .arg(classpath)
-                    .arg(main)
-                    .args(args)
-                    .current_dir(&root);
-                if !profiles.is_empty() {
-                    command.arg(format!("--spring.profiles.active={}", profiles.join(",")));
-                }
-                run.lock()
-                    .unwrap()
-                    .log("system", "编译完成，正在启动 Java 进程…");
-                execute(command, &run, "running")
-            })();
-            let _ = fs::remove_file(cp);
-            let mut state = run.lock().unwrap();
-            match outcome {
-                Ok(code) => {
-                    state.exit = code;
-                    state.state = if state.cancelled || code == Some(0) {
-                        "stopped"
-                    } else {
-                        "failed"
-                    }
-                    .into();
-                    state.log("system", format!("进程退出：{code:?}"));
-                }
-                Err(err) => {
-                    state.state = if state.cancelled { "stopped" } else { "failed" }.into();
-                    state.log("system", err.message);
-                }
-            }
-            state.pid = None;
-            state.arthas_url = None;
-        });
+        runs.insert(key(&project), run);
         Ok(result)
     }
     pub fn stop(
@@ -395,11 +383,19 @@ impl JavaService {
     ) -> Result<JavaOutput> {
         java_project(project)?;
         let mut runs = self.runs.lock().unwrap();
+        managed::restore_into(&mut runs, "java", &key(project))?;
         let run = runs
             .entry(key(project))
             .or_insert_with(|| Arc::new(Mutex::new(Run::new("external"))))
             .clone();
         let mut state = run.lock().unwrap();
+        managed::refresh(&mut state)?;
+        if state.managed.is_some() && matches!(state.state.as_str(), "starting" | "running") {
+            managed::stop(&mut state)?;
+            state.arthas_url = None;
+            state.log("system", "已停止独立运行的 Java 服务进程树。");
+            return Ok(state.output(0));
+        }
         let target = if matches!(state.state.as_str(), "starting" | "running") {
             state.pid
         } else {
@@ -439,6 +435,7 @@ impl JavaService {
         drop(listener);
         drop(telnet_listener);
         let mut runs = self.runs.lock().unwrap();
+        managed::restore_into(&mut runs, "java", &key(project))?;
         let run = runs
             .entry(key(project))
             .or_insert_with(|| Arc::new(Mutex::new(Run::new("external"))))
@@ -524,26 +521,40 @@ impl JavaService {
     }
 }
 
-impl Drop for JavaService {
-    fn drop(&mut self) {
-        if let Ok(runs) = self.runs.lock() {
-            for run in runs.values() {
-                if let Ok(mut state) = run.lock() {
-                    if matches!(state.state.as_str(), "starting" | "running") {
-                        state.cancelled = true;
-                        if let Some(pid) = state.pid {
-                            let _ = kill_tree(pid);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn restart_rejects_invalid_options_without_stopping_current_run() {
+        let project = DetectedProject {
+            name: "中文服务".into(),
+            kind: crate::workspace::ProjectKind::Maven,
+            path: r"D:\工作区 空格\服务".into(),
+            markers: vec![], main_classes: vec!["example.Application".into()],
+            launch_scripts: vec!["dev".into()], node_script: None,
+            node_selector: None,
+        };
+        let service = JavaService::default();
+        let run = Arc::new(Mutex::new(Run::new("running")));
+        let runtime_key = key(&project);
+        service.runs.lock().unwrap().insert(runtime_key, run.clone());
+        let result = service.restart(project.clone(), vec!["-jar".into()], vec![], vec![], None, None);
+        assert_eq!(result.err().unwrap().code, "invalid_arguments");
+        let result = service.restart(project, vec![], vec![], vec![], Some("removed.Main".into()), None);
+        assert_eq!(result.err().unwrap().code, "main_class_required");
+        let state = run.lock().unwrap();
+        assert_eq!(state.state, "running");
+        assert!(!state.cancelled);
+    }
+    #[test]
+    fn restart_request_keeps_launch_options_and_optional_pid() {
+        let request: JavaRequest = serde_json::from_value(serde_json::json!({
+            "projectPath": "D:/工作区 空格/服务", "expectedRevision": 7,
+            "operation": { "type": "restart", "mainClass": "example.Application", "jvmArgs": ["-Xmx512m"], "args": ["--name=中文 空格"], "profiles": ["dev"], "pid": 42 }
+        })).unwrap();
+        assert!(matches!(request.operation, JavaOperation::Restart { pid: Some(42), jvm_args, args, profiles, main_class: Some(_) } if jvm_args == vec!["-Xmx512m"] && args == vec!["--name=中文 空格"] && profiles == vec!["dev"]));
+    }
+
     #[test]
     fn validates_launch_options() {
         assert!(

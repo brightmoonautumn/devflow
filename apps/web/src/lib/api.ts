@@ -112,7 +112,7 @@ export async function request<T>(url: string, options: RequestInit = {}, retry =
     const body = await response.text()
     let value: { code?: string; message?: string } = {}
     try { value = JSON.parse(body) ?? {} } catch { /* Axum extraction failures return plain text. */ }
-    if (response.status === 422 && body.includes('unknown variant') && /`(?:close|create_from_folder|remove_folder|open_recent)`/.test(body)) {
+    if (response.status === 422 && body.includes('unknown variant') && /`(?:close|create_from_folder|remove_folder|open_recent|restart)`/.test(body)) {
       throw new ApiError('backend_outdated', '当前运行的后端版本尚不支持此操作，请重新编译并重启 DevFlow 后端后重试。')
     }
     throw new ApiError(value.code ?? 'request_failed', value.message ?? `HTTP ${response.status}`)
@@ -165,14 +165,15 @@ export function getDevFlowMetrics(signal: AbortSignal) { return request<DevFlowM
 export interface JavaOptions { mainClasses: string[]; profiles: string[] }
 export interface JavaLogLine { sequence: number; stream: string; text: string }
 export interface JavaOutput { runId: string; state: string; pid: number | null; exitCode: number | null; lines: JavaLogLine[]; nextCursor: number; truncated: boolean; arthasUrl: string | null; attaching: boolean }
-export type JavaOperation = { type: 'start'; jvmArgs: string[]; args: string[]; profiles: string[]; mainClass: string } | { type: 'stop'; pid?: number } | { type: 'attach'; pid: number }
+type JavaLaunchOptions = { jvmArgs: string[]; args: string[]; profiles: string[]; mainClass: string }
+export type JavaOperation = ({ type: 'start' } & JavaLaunchOptions) | ({ type: 'restart'; pid?: number } & JavaLaunchOptions) | { type: 'stop'; pid?: number } | { type: 'attach'; pid: number }
 export function getJavaOptions(projectPath: string, signal?: AbortSignal) { return request<JavaOptions>(`/api/runtime/java/options?${new URLSearchParams({ projectPath })}`, { signal }) }
 export function getJavaOutput(projectPath: string, after: number, runId: string, signal: AbortSignal) { return request<JavaOutput>(`/api/runtime/java/output?${new URLSearchParams({ projectPath, after: String(after), runId })}`, { signal }) }
 export function executeJava(projectPath: string, expectedRevision: number, operation: JavaOperation) { return request<JavaOutput>('/api/runtime/java', { method: 'POST', body: JSON.stringify({ projectPath, expectedRevision, operation }) }) }
 
 export type PackageManager = 'npm' | 'pnpm' | 'yarn'
 export interface NodeOptions { scripts: string[]; packageManager: PackageManager }
-export type NodeOperation = { type: 'start'; packageManager?: PackageManager; args: string[] } | { type: 'stop'; pid?: number }
+export type NodeOperation = { type: 'start' | 'restart'; pid?: number; packageManager?: PackageManager; args: string[] } | { type: 'stop'; pid?: number }
 function nodeParams(project: Project) { return { projectPath: project.path, ...(project.nodeScript ? { script: project.nodeScript } : {}) } }
 export function getNodeOptions(project: Project, signal?: AbortSignal) { return request<NodeOptions>(`/api/runtime/node/options?${new URLSearchParams(nodeParams(project))}`, { signal }) }
 export function getNodeOutput(project: Project, after: number, runId: string, signal: AbortSignal) { return request<JavaOutput>(`/api/runtime/node/output?${new URLSearchParams({ ...nodeParams(project), after: String(after), runId })}`, { signal }) }

@@ -16,6 +16,7 @@
   --ws-dim: #85858f;
   --ws-accent: #a6bfff;
   --ws-accent-bg: #262e40;
+  --ws-editor-selection: #264f78;
   --ws-primary: #3977d5;
   --ws-primary-hover: #2d68c0;
   --ws-primary-ink: #fff;
@@ -47,6 +48,7 @@
   --ws-dim: #636b75;
   --ws-accent: #4268b9;
   --ws-accent-bg: #edf1fb;
+  --ws-editor-selection: #b7d2ff;
   --ws-green: #47765c;
   --ws-green-bg: #eaf3ed;
   --ws-error-bg: #fff1f2;
@@ -152,6 +154,9 @@
 .ws-launch:disabled { color: var(--ws-dim); cursor: default; opacity: .6; }
 .workspace-shell .ws-launch.is-pending { opacity: 1; cursor: progress; }
 .ws-launch.is-pending svg { color: currentColor; }
+.workspace-shell .ws-launch.is-restart { color: var(--ws-surface); background: var(--ws-accent); border-color: var(--ws-accent); font-weight: 600; }
+.workspace-shell .ws-launch.is-restart:hover { filter: brightness(1.08); background: var(--ws-accent); }
+.ws-launch.is-restart svg { color: inherit; }
 .ws-launch:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 3px; }
 .ws-menu-anchor { position: relative; }
 .ws-menu { position: absolute; right: 0; top: 35px; z-index: 3; width: 190px; padding: 5px; border: 1px solid var(--ws-border); background: var(--ws-surface); border-radius: 9px; box-shadow: var(--ws-shadow); }

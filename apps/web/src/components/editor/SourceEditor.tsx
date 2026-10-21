@@ -9,6 +9,7 @@ import { tags } from '@lezer/highlight'
 import { loadEditorLanguage } from './editorLanguages'
 import { editorPhrases } from './editorPhrases'
 import { editorSearch } from './editorSearch'
+import { editorSelection } from './editorSelection'
 import './source-editor.css'
 
 export const colors = syntaxHighlighting(HighlightStyle.define([
@@ -71,7 +72,7 @@ export default function SourceEditor({ path, value, readonly, location, onChange
       parent: host.current,
       doc: initial.current,
       extensions: [
-        basicSetup, editorPhrases, editorSearch, colors, language.of([]), attribution.current.of([]),
+        basicSetup, editorPhrases, editorSearch, editorSelection, colors, language.of([]), attribution.current.of([]),
         EditorView.domEventHandlers({ scroll: () => { setMenu(null); return false } }),
         /\.(?:md|markdown)$/i.test(path) ? EditorView.lineWrapping : [],
         EditorState.tabSize.of(2),
@@ -98,7 +99,6 @@ export default function SourceEditor({ path, value, readonly, location, onChange
           'button.df-line-author': { cursor: 'pointer' },
           'button.df-line-author:hover, button.df-line-author:focus-visible': { color: 'var(--ws-ink)', textDecoration: 'underline' },
           '.cm-cursor': { borderLeftColor: 'var(--ws-ink)' },
-          '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': { backgroundColor: 'var(--ws-accent-bg) !important' },
           '.cm-panels, .cm-tooltip': { backgroundColor: 'var(--ws-surface)', color: 'var(--ws-ink)', borderColor: 'var(--ws-border)' },
           '&.cm-focused': { outline: 'none' },
         }),

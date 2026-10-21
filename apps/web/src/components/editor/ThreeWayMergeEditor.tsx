@@ -7,6 +7,7 @@ import { colors } from './SourceEditor'
 import { loadEditorLanguage } from './editorLanguages'
 import { editorPhrases } from './editorPhrases'
 import { editorSearch } from './editorSearch'
+import { editorSelection } from './editorSelection'
 
 type Range = { from: number; to: number }
 const highlight = StateEffect.define<Range[]>()
@@ -46,7 +47,7 @@ export default function ThreeWayMergeEditor({ path, local, incoming, value, rang
     const labels = ['本地 · 当前分支', '合并结果 · 可编辑', '远端 · 上游分支']
     const editors = data.map((doc, index) => {
       const language = new Compartment()
-      const extensions = [basicSetup, editorPhrases, editorSearch, colors, language.of([]), highlights,
+      const extensions = [basicSetup, editorPhrases, editorSearch, editorSelection, colors, language.of([]), highlights,
         keymap.of([...defaultKeymap, ...historyKeymap, { key: 'Mod-s', preventDefault: true, run: () => { if (index === 1) callbacks.current.onSave(); return true } }]),
         EditorView.contentAttributes.of({ 'aria-label': `${labels[index]} ${path}`, spellcheck: 'false' }),
         EditorView.updateListener.of(update => { if (index === 1 && update.docChanged) callbacks.current.onChange(update.state.doc.toString()) }),
@@ -62,7 +63,6 @@ export default function ThreeWayMergeEditor({ path, local, incoming, value, rang
           '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--font-mono)', lineHeight: '1.7' },
           '.cm-gutters': { backgroundColor: 'var(--ws-bg)', color: 'var(--ws-dim)', borderColor: 'var(--ws-border)' },
           '.cm-content': { padding: '8px 0' }, '.cm-cursor': { borderLeftColor: 'var(--ws-ink)' },
-          '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': { backgroundColor: 'var(--ws-accent-bg) !important' },
           '.merge-conflict-line': { backgroundColor: 'color-mix(in srgb,var(--tree-orange) 13%,transparent)' },
           '&.cm-focused': { outline: 'none' },
         }),

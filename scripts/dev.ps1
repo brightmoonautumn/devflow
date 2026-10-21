@@ -59,8 +59,16 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Frontend exited with code $LASTEXITCODE." }
 } finally {
     if ($backend -and -not $backend.HasExited) {
-        # Stop only the process tree started by this script, including cargo's server child.
-        & taskkill /PID $backend.Id /T /F | Out-Null
+        # Stop the API and cargo only. /T would also kill independent runtime
+        # hosts and the Java/Node services launched through the workbench.
+        foreach ($api in @(Get-CimInstance Win32_Process -Filter "Name = 'devflow.exe' AND ParentProcessId = $($backend.Id)")) {
+            if ($api.CreationDate -lt $backend.StartTime) { continue }
+            $currentApi = Get-CimInstance Win32_Process -Filter "ProcessId = $($api.ProcessId)"
+            if ($currentApi -and $currentApi.Name -eq 'devflow.exe' -and $currentApi.ParentProcessId -eq $backend.Id -and $currentApi.CreationDate -eq $api.CreationDate) {
+                Stop-Process -Id $currentApi.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+        }
+        if (-not $backend.HasExited) { $backend.Kill() }
     }
     Pop-Location
 }

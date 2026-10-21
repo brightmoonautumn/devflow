@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::{
     collections::VecDeque,
     io::Read,
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -41,6 +41,8 @@ pub(crate) struct Run {
     pub(crate) id: String,
     pub(crate) state: String,
     pub(crate) pid: Option<(u32, u64)>,
+    pub(crate) worker: Option<(u32, u64)>,
+    pub(crate) managed: Option<super::managed::ManagedRun>,
     pub(crate) cancelled: bool,
     pub(crate) exit: Option<i32>,
     pub(crate) logs: VecDeque<LogLine>,
@@ -54,6 +56,8 @@ impl Run {
             id: uuid::Uuid::new_v4().to_string(),
             state: state.into(),
             pid: None,
+            worker: None,
+            managed: None,
             cancelled: false,
             exit: None,
             logs: VecDeque::new(),
@@ -112,8 +116,9 @@ pub(crate) fn process_system() -> System {
     s
 }
 pub(crate) fn identity(pid: u32) -> Option<(u32, u64)> {
-    process_system()
-        .process(Pid::from_u32(pid))
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true, ProcessRefreshKind::nothing());
+    system.process(Pid::from_u32(pid))
         .map(|p| (pid, p.start_time()))
 }
 pub(crate) fn kill_tree(root: (u32, u64)) -> Result<()> {
@@ -142,7 +147,7 @@ pub(crate) fn kill_tree(root: (u32, u64)) -> Result<()> {
     }
     // Stop the root first so a build/launcher cannot create more children.
     let mut fresh = System::new();
-    for (pid, started) in tree {
+    for &(pid, started) in &tree {
         let pid = Pid::from_u32(pid);
         fresh.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
         if let Some(p) = fresh.process(pid) {
@@ -165,7 +170,22 @@ pub(crate) fn kill_tree(root: (u32, u64)) -> Result<()> {
             }
         }
     }
-    Ok(())
+    // Termination is asynchronous on Windows. Do not release ports to a new
+    // launch until every captured process has exited (or its PID was reused).
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let remaining = tree.iter().find(|(pid, started)| {
+            let pid = Pid::from_u32(*pid);
+            fresh.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+            fresh.process(pid).is_some_and(|p| p.start_time() == *started
+                && p.status() != sysinfo::ProcessStatus::Zombie)
+        });
+        let Some((pid, _)) = remaining else { return Ok(()); };
+        if std::time::Instant::now() >= deadline {
+            return Err(error("conflict", format!("PID {pid} 尚未退出，请稍后重试")));
+        }
+        thread::sleep(Duration::from_millis(40));
+    }
 }
 pub(crate) fn configure(command: &mut Command) {
     command
@@ -213,25 +233,33 @@ pub(crate) fn reader(
         }
     })
 }
-pub(crate) fn execute(
-    mut command: Command,
-    run: &Arc<Mutex<Run>>,
-    phase: &str,
-) -> Result<Option<i32>> {
-    configure(&mut command);
-    let mut state = run.lock().unwrap();
-    if state.cancelled {
-        return Err(error("cancelled", "运行已取消"));
+
+#[cfg(all(test, windows))]
+mod restart_cleanup_tests {
+    use super::*;
+
+    #[test]
+    fn stopping_waits_for_windows_launcher_and_child_exit() {
+        let mut command = Command::new("cmd.exe");
+        command.args(["/D", "/C", "ping -n 60 127.0.0.1 >nul"]);
+        configure(&mut command);
+        let mut child = command.spawn().unwrap();
+        let root = identity(child.id()).unwrap();
+        let mut descendants = Vec::new();
+        for _ in 0..50 {
+            let system = process_system();
+            descendants = system.processes().iter()
+                .filter(|(_, p)| p.parent() == Some(Pid::from_u32(root.0)))
+                .map(|(pid, p)| (pid.as_u32(), p.start_time())).collect();
+            if !descendants.is_empty() { break; }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let result = kill_tree(root);
+        let _ = child.wait();
+        // Cleanup takes place before assertions, including on a slow test host.
+        assert!(result.is_ok());
+        assert!(!descendants.is_empty(), "expected ping child process");
+        assert_ne!(identity(root.0), Some(root));
+        for pid in descendants { assert_ne!(identity(pid.0), Some(pid)); }
     }
-    let mut child: Child = command.spawn()?;
-    state.pid = identity(child.id());
-    state.state = phase.into();
-    drop(state);
-    let out = reader(child.stdout.take().unwrap(), run.clone(), "stdout");
-    let err = reader(child.stderr.take().unwrap(), run.clone(), "stderr");
-    let status = child.wait()?;
-    let _ = out.join();
-    let _ = err.join();
-    run.lock().unwrap().pid = None;
-    Ok(status.code())
 }

@@ -6,6 +6,7 @@ import { defaultKeymap } from '@codemirror/commands'
 import { getChunks, MergeView, unifiedMergeView } from '@codemirror/merge'
 import { colors } from './SourceEditor'
 import { loadEditorLanguage } from './editorLanguages'
+import { editorSelection } from './editorSelection'
 import './git-diff-editor.css'
 
 // Upstream falls back to a coarser comparison when this budget is exhausted.
@@ -50,13 +51,12 @@ export default function GitDiffEditor({ path, before, after, beforeLabel = 'HEAD
       '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--font-mono)', lineHeight: '1.7' },
       '.cm-content': { padding: '10px 0' },
       '.cm-gutters': { color: 'var(--ws-dim)', backgroundColor: 'var(--ws-bg)', borderColor: 'var(--ws-border)' },
-      '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': { backgroundColor: 'var(--ws-accent-bg) !important' },
       '.cm-cursor': { borderLeftColor: 'var(--ws-ink)' },
       '&.cm-focused': { outline: 'none' },
     })
     // Read-only views need selection and navigation, not edit history,
     // completion or the rest of basicSetup.
-    const extensions = [lineNumbers(), highlightSpecialChars(), drawSelection(), keymap.of(defaultKeymap), colors, theme,
+    const extensions = [lineNumbers(), highlightSpecialChars(), drawSelection(), editorSelection, keymap.of(defaultKeymap), colors, theme,
       EditorState.readOnly.of(true), EditorView.editable.of(false),
       EditorView.contentAttributes.of({ 'aria-label': `只读差异 ${path}`, tabindex: '0' })]
     const view = split ? new MergeView({ parent: host.current,

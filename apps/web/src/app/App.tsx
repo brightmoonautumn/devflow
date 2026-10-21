@@ -214,17 +214,27 @@ export function App() {
     if (title === '启动配置') { setLaunchProject(project); return }
     setTerminalOpen(false)
     setPanel({ title: title === 'JVM 诊断' ? 'JVM 诊断 / Arthas' : '运行输出', project: project.name, runtimeProject: project, description: '' })
-    if (title !== '启动项目' && title !== '停止项目' && title !== 'Arthas 挂载') return
+    if (title !== '启动项目' && title !== '重启项目' && title !== '停止项目' && title !== 'Arthas 挂载') return
     if (pendingProjectActions.current.has(projectKey(project)) || !data) return
     pendingProjectActions.current.add(projectKey(project))
     try {
       if (project.kind === 'node') {
-        if (title === '启动项目') {
+        if (title === '启动项目' || title === '重启项目') {
           const config = readNodeLaunchConfig(project)
           const options = await getNodeOptions(project, AbortSignal.timeout(10000))
           const script = project.nodeScript ?? (options.scripts.includes(config.script) ? config.script : options.scripts[0])
           if (!script) throw new Error('未发现可用启动脚本，请刷新工作区。')
-          await executeNode(project, data.revision, { type: 'start', packageManager: config.manager === 'auto' ? undefined : config.manager, args: config.args.split(/\r?\n/).map(value => value.trim()).filter(Boolean) }, script)
+          let pid: number | undefined
+          if (title === '重启项目') {
+            const snapshot = await getRuntime(AbortSignal.timeout(10000))
+            const metrics = snapshot.projects.find(value => metricsKey(value) === projectKey(project))
+            if (!['starting', 'running'].includes(metrics?.managedState ?? '')) {
+              const pids = metrics?.nodePids ?? []
+              if (pids.length !== 1) throw new Error(pids.length ? '检测到多个关联进程，请先停止外部服务，再启动。' : '未检测到该服务的运行进程。')
+              pid = pids[0]
+            }
+          }
+          await executeNode(project, data.revision, { type: title === '重启项目' ? 'restart' : 'start', pid, packageManager: config.manager === 'auto' ? undefined : config.manager, args: config.args.split(/\r?\n/).map(value => value.trim()).filter(Boolean) }, script)
         } else if (title === '停止项目') {
           const snapshot = await getRuntime(AbortSignal.timeout(10000))
           const metrics = snapshot.projects.find(value => metricsKey(value) === projectKey(project))
@@ -237,14 +247,24 @@ export function App() {
         }
         return
       }
-      if (title === '启动项目') {
+      if (title === '启动项目' || title === '重启项目') {
         const config = readJavaLaunchConfig(project)
         const options = await getJavaOptions(project.path, AbortSignal.timeout(10000))
         if (!options.mainClasses.includes(config.main)) {
           if (options.mainClasses.length !== 1) throw new Error('请从更多操作中的“启动配置”选择启动主类后重试。')
           config.main = options.mainClasses[0]
         }
-        await executeJava(project.path, data.revision, javaStartOperation(config))
+        let pid: number | undefined
+        if (title === '重启项目') {
+          const snapshot = await getRuntime(AbortSignal.timeout(10000))
+          const metrics = snapshot.projects.find(value => metricsKey(value) === projectKey(project))
+          if (!['starting', 'running'].includes(metrics?.managedState ?? '')) {
+            const pids = metrics?.javaPids ?? []
+            if (pids.length !== 1) throw new Error(pids.length ? '检测到多个关联进程，请先停止外部服务，再启动。' : '未检测到该服务的运行进程。')
+            pid = pids[0]
+          }
+        }
+        await executeJava(project.path, data.revision, { ...javaStartOperation(config), type: title === '重启项目' ? 'restart' : 'start', pid })
         return
       }
       const runtime = await getRuntime(AbortSignal.timeout(10000))

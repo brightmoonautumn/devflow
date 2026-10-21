@@ -33,8 +33,17 @@ pub async fn call_core<T: Send + 'static>(
         })?
 }
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--devflow-runtime-worker")) {
+        let directory = std::env::args_os().nth(2).ok_or("Missing runtime worker directory")?;
+        devflow_core::runtime::managed::run_worker(std::path::Path::new(&directory))?;
+        return Ok(());
+    }
+    serve()
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
