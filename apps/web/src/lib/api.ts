@@ -119,6 +119,9 @@ export async function request<T>(url: string, options: RequestInit = {}, retry =
 }
 export function getWorkspaceCatalog(signal?: AbortSignal) { return request<WorkspaceCatalog>('/api/workspace/catalog', { signal }) }
 export function executeWorkspace(operation: WorkspaceOperation, expectedRevision: number, discardChanges = false) {
+  if (!window.dispatchEvent(new Event('devflow-git-update-before-close', { cancelable: true }))) {
+    return Promise.reject(new ApiError('conflict', '请先保存或放弃合并草稿，并等待 Git 更新任务完成，再更改工作区。'))
+  }
   return request<WorkspaceResponse>('/api/workspace', { method: 'POST', body: JSON.stringify({ operation, expectedRevision, discardChanges }) })
 }
 
@@ -126,6 +129,9 @@ export interface ProjectRuntime {
   nodeScript?: string
   nodePids?: number[]
   javaPids?: number[]
+  primaryPids?: number[]
+  processes?: { pid: number; parentPid: number | null; name: string; role: 'primary' | 'launcher' | 'auxiliary' }[]
+  listeners?: { pid: number; port: number; purpose: string; purposeSource: 'command_line' | 'unknown' }[] | null
   listeningPorts?: number[] | null
   portError?: string | null
   managedState?: 'starting' | 'running' | 'stopped' | 'failed'

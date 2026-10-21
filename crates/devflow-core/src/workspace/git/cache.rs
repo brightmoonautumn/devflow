@@ -97,6 +97,7 @@ struct Entry {
 struct State {
     scope: String, generation: u64, topology: Option<(Instant, Vec<Repository>, Vec<String>)>, topology_dirty: bool,
     metadata: HashMap<PathBuf, Metadata>, entries: HashMap<PathBuf, Entry>, watcher_error: Option<String>,
+    fetched: HashMap<PathBuf, (String, u64)>,
 }
 pub(crate) struct GitCache {
     id: String, state: Mutex<State>, changed: Condvar, pub topology_gate: Mutex<()>,
@@ -107,6 +108,17 @@ impl Default for GitCache {
     fn default() -> Self { Self::with_resources(Arc::new(Resources::default())) }
 }
 impl GitCache {
+    pub(super) fn fetched_at(&self, root: &Path, upstream: &str) -> Option<u64> {
+        self.state.lock().ok()?.fetched.get(root).filter(|(target, _)| target == upstream).map(|(_, time)| *time)
+    }
+    pub(super) fn remember_fetch(&self, generation: u64, root: &Path, upstream: String, time: u64) {
+        if let Ok(mut state) = self.state.lock() {
+            if state.generation == generation {
+                if state.fetched.len() >= 128 { state.fetched.clear(); }
+                state.fetched.insert(root.to_path_buf(), (upstream, time));
+            }
+        }
+    }
     pub fn with_resources(resources: Arc<Resources>) -> Self {
         Self { id: uuid::Uuid::new_v4().to_string(), state: Mutex::new(State::default()), changed: Condvar::new(), topology_gate: Mutex::new(()), watcher: Mutex::new(None), resources, created: Instant::now() }
     }

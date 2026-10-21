@@ -14,10 +14,10 @@ pub struct GitMutationRequest { pub expected_revision: u64, pub selections: Vec<
 pub struct GitCommitRequest { pub expected_revision: u64, pub selections: Vec<Selection>, pub message: String }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GitCommitApplyRequest { pub expected_revision: u64, pub plan_id: String }
+pub struct GitCommitApplyRequest { pub expected_revision: u64, pub plan_id: String, #[serde(default)] pub push: bool }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RepoOutcome { pub repository: String, pub paths: Vec<String>, pub commit: Option<String>, pub error: Option<WorkspaceError> }
+pub struct RepoOutcome { pub repository: String, pub paths: Vec<String>, pub commit: Option<String>, pub error: Option<WorkspaceError>, pub pushed: bool, pub push_error: Option<WorkspaceError> }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitOutcome { pub results: Vec<RepoOutcome> }
@@ -135,7 +135,7 @@ impl WorkspaceService {
                 }
                 Ok(())
             })();
-            results.push(RepoOutcome { repository: repo.repo.root, paths: completed_paths, commit: None, error: result.err() });
+            results.push(RepoOutcome { repository: repo.repo.root, paths: completed_paths, commit: None, error: result.err(), pushed: false, push_error: None });
         }
         Ok(GitOutcome { results })
     }
@@ -183,10 +183,14 @@ impl WorkspaceService {
         let plan = stored.as_ref().ok_or_else(|| error("conflict", "提交预览已失效，请重新预览"))?;
         if plan.id != request.plan_id || plan.revision != request.expected_revision || plan.created.elapsed() > Duration::from_secs(300) { return Err(error("conflict", "提交预览过期或工作区已改变")); }
         for repo in &plan.repos { preflight(self, repo, request.expected_revision)?; }
+        // Validate every destination before creating any local commits.
+        let targets = if request.push {
+            plan.repos.iter().map(|repo| super::push::target(&repo.root)).collect::<Result<Vec<_>>>()?
+        } else { Vec::new() };
         let plan = stored.take().ok_or_else(|| error("conflict", "提交预览已失效"))?;
         let _invalidate = cache::Invalidate { cache: &self.git_cache, roots: plan.repos.iter().map(|repo| repo.root.clone()).collect() };
         let mut results = Vec::new();
-        for repo in plan.repos {
+        for (index, repo) in plan.repos.into_iter().enumerate() {
             let paths = selection_paths(&repo);
             let result = (|| -> Result<String> {
                 preflight(self, &repo, request.expected_revision)?;
@@ -205,8 +209,14 @@ impl WorkspaceService {
                 Ok(text(&checked(&repo.root, &["rev-parse", "--verify", "HEAD"])?)?.trim().to_owned())
             })();
             match result {
-                Ok(commit) => results.push(RepoOutcome { repository: repo.repo.root, paths, commit: Some(commit), error: None }),
-                Err(err) => { results.push(RepoOutcome { repository: repo.repo.root, paths: Vec::new(), commit: None, error: Some(err) }); break; }
+                Ok(commit) => {
+                    let push_result = if request.push {
+                        self.git_repository(&repo.repo.root, request.expected_revision)
+                            .and_then(|_| super::push::send(&repo.root, &commit, &targets[index]))
+                    } else { Ok(()) };
+                    results.push(RepoOutcome { repository: repo.repo.root, paths, commit: Some(commit), error: None, pushed: request.push && push_result.is_ok(), push_error: push_result.err() });
+                },
+                Err(err) => { results.push(RepoOutcome { repository: repo.repo.root, paths: Vec::new(), commit: None, error: Some(err), pushed: false, push_error: None }); break; }
             }
         }
         Ok(GitOutcome { results })

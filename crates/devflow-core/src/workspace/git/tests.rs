@@ -1,5 +1,15 @@
 use super::*;
+#[path = "update_tests.rs"]
+mod update_tests;
+#[path = "overview_tests.rs"]
+mod overview_tests;
 use operations::{Mutation, Selection};
+
+#[test]
+fn legacy_commit_apply_defaults_to_local_only() {
+    let request: GitCommitApplyRequest = serde_json::from_str(r#"{"expectedRevision":1,"planId":"preview"}"#).unwrap();
+    assert!(!request.push);
+}
 
 #[test]
 #[ignore = "requires Git; uses only UUID-scoped temporary repositories"]
@@ -144,7 +154,73 @@ fn selection(repo: &GitRepository, paths: &[&str]) -> Selection {
 }
 fn commit(service: &WorkspaceService, revision: u64, repo: &GitRepository, paths: &[&str]) -> GitOutcome {
     let preview = service.git_commit_preview(GitCommitRequest { expected_revision: revision, selections: vec![selection(repo, paths)], message: "测试选择提交".into() }, true).unwrap();
-    service.git_commit_apply(GitCommitApplyRequest { expected_revision: revision, plan_id: preview.plan_id }, true).unwrap()
+    service.git_commit_apply(GitCommitApplyRequest { expected_revision: revision, plan_id: preview.plan_id, push: false }, true).unwrap()
+}
+
+#[test]
+#[ignore = "requires Git; uses only UUID-scoped local repositories, no network"]
+fn commit_and_push_preserves_local_commit_on_rejection_and_retries_without_recommit() {
+    let fixture = Fixture::new();
+    let root = fixture.init("推送 中文 空格");
+    let bare = fixture.0.join("remote.git");
+    fixture.git(&fixture.0, &["init", "--bare", bare.to_str().unwrap()]);
+    fixture.git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
+    fixture.git(&root, &["push", "-u", "origin", "main"]);
+    let service = fixture.service(&root); let revision = service.snapshot().unwrap().revision;
+    fs::write(root.join("a.txt"), "本次提交\n").unwrap();
+    let repo = repository_status(&service, &root).unwrap();
+    let preview = service.git_commit_preview(GitCommitRequest { expected_revision: revision, selections: vec![selection(&repo, &["a.txt"])], message: "提交并推送".into() }, true).unwrap();
+    let result = service.git_commit_apply(GitCommitApplyRequest { expected_revision: revision, plan_id: preview.plan_id, push: true }, true).unwrap();
+    assert!(result.results[0].pushed);
+    let head = result.results[0].commit.as_ref().unwrap();
+    assert_eq!(fixture.git(&bare, &["rev-parse", "refs/heads/main"]).trim(), head);
+
+    // A second clone advances the remote so the next push is non-fast-forward.
+    let other = fixture.0.join("other");
+    fixture.git(&fixture.0, &["clone", "--branch", "main", bare.to_str().unwrap(), other.to_str().unwrap()]);
+    fixture.configure(&other);
+    fs::write(other.join("b.txt"), "remote change\n").unwrap();
+    fixture.git(&other, &["commit", "-am", "remote advance"]);
+    fixture.git(&other, &["push", "origin", "main"]);
+    let remote_head = fixture.git(&bare, &["rev-parse", "refs/heads/main"]);
+    fs::write(root.join("a.txt"), "推送失败但保留本地\n").unwrap();
+    let repo = repository_status(&service, &root).unwrap();
+    let preview = service.git_commit_preview(GitCommitRequest { expected_revision: revision, selections: vec![selection(&repo, &["a.txt"])], message: "local retained".into() }, true).unwrap();
+    let result = service.git_commit_apply(GitCommitApplyRequest { expected_revision: revision, plan_id: preview.plan_id, push: true }, true).unwrap();
+    let item = &result.results[0];
+    assert!(item.error.is_none() && item.push_error.is_some() && !item.pushed);
+    let local_head = item.commit.clone().unwrap();
+    assert_eq!(fixture.git(&root, &["rev-parse", "HEAD"]).trim(), local_head);
+    assert_eq!(fixture.git(&bare, &["rev-parse", "refs/heads/main"]), remote_head);
+    assert!(service.git_push(GitPushRequest { expected_revision: revision, repository: display_path(&root), expected_head: local_head.clone() }, false).is_err());
+    assert!(service.git_push(GitPushRequest { expected_revision: revision + 1, repository: display_path(&root), expected_head: local_head.clone() }, true).is_err());
+    let outside = fixture.init("outside workspace");
+    assert!(service.git_push(GitPushRequest { expected_revision: revision, repository: display_path(&outside), expected_head: local_head.clone() }, true).is_err());
+    let wrong = service.git_push(GitPushRequest { expected_revision: revision, repository: display_path(&root), expected_head: "0".repeat(40) }, true).unwrap();
+    assert!(wrong.results[0].push_error.is_some());
+    // Restore only this temporary bare ref to permit retrying the same local SHA.
+    fixture.git(&bare, &["update-ref", "refs/heads/main", head]);
+    let retry = service.git_push(GitPushRequest { expected_revision: revision, repository: display_path(&root), expected_head: local_head.clone() }, true).unwrap();
+    assert!(retry.results[0].pushed);
+    assert_eq!(fixture.git(&root, &["rev-parse", "HEAD"]).trim(), local_head);
+    assert_eq!(fixture.git(&bare, &["rev-parse", "refs/heads/main"]).trim(), local_head);
+}
+
+#[test]
+#[ignore = "requires Git; uses only UUID-scoped temporary repositories"]
+fn push_requires_upstream_before_commit_and_local_commit_remains_available() {
+    let fixture = Fixture::new(); let root = fixture.init("no upstream");
+    let service = fixture.service(&root); let revision = service.snapshot().unwrap().revision;
+    let old = fixture.git(&root, &["rev-parse", "HEAD"]);
+    fs::write(root.join("a.txt"), "selected\n").unwrap();
+    let repo = repository_status(&service, &root).unwrap();
+    let preview = service.git_commit_preview(GitCommitRequest { expected_revision: revision, selections: vec![selection(&repo, &["a.txt"])], message: "local only".into() }, true).unwrap();
+    assert!(service.git_commit_apply(GitCommitApplyRequest { expected_revision: revision, plan_id: preview.plan_id.clone(), push: true }, true).is_err());
+    assert_eq!(fixture.git(&root, &["rev-parse", "HEAD"]), old);
+    let result = service.git_commit_apply(GitCommitApplyRequest { expected_revision: revision, plan_id: preview.plan_id, push: false }, true).unwrap();
+    assert!(result.results[0].commit.is_some() && !result.results[0].pushed && result.results[0].push_error.is_none());
+    fixture.git(&root, &["checkout", "--detach"]);
+    assert!(push::target(&root).is_err());
 }
 
 #[test]
@@ -232,7 +308,7 @@ fn edits_after_preview_invalidate_commit_even_when_porcelain_code_stays_the_same
     let preview = service.git_commit_preview(GitCommitRequest { expected_revision: revision, selections: vec![selection(&repo, &["a.txt"])], message: "preview".into() }, true).unwrap();
     let head = fixture.git(&root, &["rev-parse", "HEAD"]);
     fs::write(root.join("a.txt"), "draft two\n").unwrap();
-    assert!(service.git_commit_apply(GitCommitApplyRequest { expected_revision: revision, plan_id: preview.plan_id }, true).is_err());
+    assert!(service.git_commit_apply(GitCommitApplyRequest { expected_revision: revision, plan_id: preview.plan_id, push: false }, true).is_err());
     assert_eq!(fixture.git(&root, &["rev-parse", "HEAD"]), head);
 }
 

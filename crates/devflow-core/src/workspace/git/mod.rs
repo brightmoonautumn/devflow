@@ -4,10 +4,19 @@ use super::*;
 mod command;
 pub(super) mod cache;
 mod operations;
+mod push;
+pub use push::GitPushRequest;
+mod update;
+pub use update::*;
+pub(super) use update::UpdateJob;
 mod blame;
 pub use blame::*;
 mod history;
 pub use history::*;
+mod overview;
+pub use overview::*;
+mod remote;
+pub use remote::*;
 #[cfg(test)]
 mod tests;
 use command::{checked, literal, run, text};
@@ -55,6 +64,23 @@ fn fingerprint(bytes: &[u8]) -> String {
 }
 
 impl WorkspaceService {
+    pub(super) fn git_merge_active_path(&self, path: &Path) -> bool {
+        for directory in path.ancestors().skip(1) {
+            let marker = directory.join(".git");
+            if !marker.exists() { continue; }
+            if let Some(metadata) = self.git_cache.metadata(directory) { return metadata.git_dir.join("MERGE_HEAD").is_file(); }
+            if marker.is_dir() { return marker.join("MERGE_HEAD").is_file(); }
+            // Linked worktrees/submodules use a small gitdir pointer, not a directory.
+            let mut pointer = String::new();
+            if let Ok(file) = fs::File::open(marker) {
+                if file.take(32768).read_to_string(&mut pointer).is_ok() {
+                    if let Some(location) = pointer.trim().strip_prefix("gitdir: ") { return directory.join(location).join("MERGE_HEAD").is_file(); }
+                }
+            }
+            return false;
+        }
+        false
+    }
     fn git_roots(&self, revision: u64, authenticated: bool) -> Result<Vec<PathBuf>> {
         if !authenticated { return Err(error("unauthorized", "需要有效的访问令牌")); }
         let state = self.lock()?;
@@ -246,7 +272,8 @@ fn repository_status_display(service: &WorkspaceService, root: &Path, metadata: 
         }
     }
     let blocked = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"].iter().find(|name| metadata.join(name).exists())
-        .map(|_| "仓库处于合并、变基或拣选过程中，请先在 Git/IDE 中完成该操作".into());
+        .map(|name| if *name == "MERGE_HEAD" { "仓库正在合并，请打开 Update / Merge 页面解决冲突并完成或中止合并".into() }
+            else { "仓库处于变基或拣选过程中，请先在 Git/IDE 中完成该操作".into() });
     let mut version_bytes = bytes;
     for change in &changes {
         for path in change.original_path.iter().chain(std::iter::once(&change.path)) {

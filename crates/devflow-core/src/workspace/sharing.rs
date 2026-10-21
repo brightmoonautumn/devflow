@@ -40,6 +40,8 @@ pub enum ShareReadRequest {
     GitStatus { #[serde(default)] force: bool },
     GitRepositories { #[serde(default)] force: bool },
     GitBlame { path: String },
+    GitHistoryOverview { #[serde(default)] repositories: Vec<String>, reference: Option<String>, query: Option<String>, limit: Option<usize>, cursor: Option<String> },
+    GitSync { #[serde(default)] repositories: Vec<String> },
     GitHistory { repository: String, #[serde(default)] skip: usize, limit: Option<usize>, reference: Option<String>, query: Option<String>, version: Option<String> },
     GitHistoryCommit { repository: String, commit: String, parent: Option<String> },
     GitHistoryDiff { repository: String, commit: String, parent: Option<String>, path: String },
@@ -138,6 +140,8 @@ impl crate::DevFlowEngine {
             ShareReadRequest::Runtime => json!(self.runtime_snapshot_for(workspace)?),
             ShareReadRequest::Metrics => json!(self.runtime.self_snapshot()?),
             ShareReadRequest::GitBlame { path } => json!(workspace.git_blame(GitBlameRequest { expected_revision: revision, path, content: None }, true)?),
+            ShareReadRequest::GitHistoryOverview { repositories, reference, query, limit, cursor } => json!(workspace.git_history_overview(GitHistoryOverviewRequest { expected_revision: revision, repositories, reference, query, limit, cursor }, true)?),
+            ShareReadRequest::GitSync { repositories } => json!(workspace.git_sync(GitSyncRequest { expected_revision: revision, repositories }, true)?),
             ShareReadRequest::GitHistory { repository, skip, limit, reference, query, version } => json!(workspace.git_history(GitHistoryRequest { expected_revision: revision, repository, skip, limit, reference, query, version }, true)?),
             ShareReadRequest::GitHistoryCommit { repository, commit, parent } => json!(workspace.git_history_commit(GitHistoryCommitRequest { expected_revision: revision, repository, commit, parent }, true)?),
             ShareReadRequest::GitHistoryDiff { repository, commit, parent, path } => json!(workspace.git_history_diff(GitHistoryDiffRequest { expected_revision: revision, repository, commit, parent, path }, true)?),
@@ -165,7 +169,7 @@ mod tests {
     use super::*;
     #[test]
     fn guest_protocol_cannot_deserialize_owner_actions() {
-        for action in ["write", "rollback", "commit", "mutate", "open", "replace", "execute", "share_create"] {
+        for action in ["write", "rollback", "commit", "mutate", "open", "replace", "execute", "share_create", "git_fetch", "git_push"] {
             assert!(serde_json::from_value::<ShareReadRequest>(json!({"type":action})).is_err());
         }
         assert!(serde_json::from_value::<ShareReadRequest>(json!({"type":"file","path":"a","operation":"delete"})).is_err());

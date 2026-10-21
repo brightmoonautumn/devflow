@@ -17,7 +17,7 @@ export function ProjectMetrics({ metrics, history }: { metrics: ProjectRuntime; 
       <MetricChart label="内存" value={formatMemory(metrics.memoryBytes)} values={memory} tone="memory" hint={`最近 ${memory.length} 次采样`} />
       <MetricChart label="CPU" value={metrics.cpuPercent == null ? '采样中' : `${metrics.cpuPercent.toFixed(1)}%`} values={cpu} tone="cpu" hint={`最近 ${cpu.length} 次采样`} />
     </div>
-    <div className="project-metric-meta"><span title={metrics.pids.join(', ')}>PID {metrics.pids.join(', ')}</span><span>已运行 {uptime}</span></div>
+    <div className="project-metric-meta"><span title={metrics.primaryPids === undefined ? '请更新并重启 DevFlow 后端以识别主进程' : '辅助进程可展开项目详情查看'}>主 PID {metrics.primaryPids?.length ? metrics.primaryPids.join(', ') : metrics.primaryPids === undefined ? '后端需更新' : metrics.managedState === 'starting' ? '等待应用启动' : '未识别'}</span><span>已运行 {uptime}</span></div>
   </section>
 }
 

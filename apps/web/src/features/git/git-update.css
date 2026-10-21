@@ -1,0 +1,45 @@
+.git-update-page{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:var(--ws-bg);color:var(--ws-ink);font-size:12px;container:git-update / inline-size}
+.git-update-page.is-expanded{position:fixed;inset:12px;z-index:1200;border:1px solid var(--ws-border);border-radius:6px;box-shadow:0 10px 60px #0006}
+.git-update-toolbar,.merge-session,.merge-file-heading,.merge-block-controls,.merge-file-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 10px;border-bottom:1px solid var(--ws-border);flex-shrink:0}
+.git-update-toolbar>strong{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.git-update-toolbar>.df-select{flex:1;min-width:100px;max-width:340px}
+.git-update-status{margin:0;padding:8px 12px;color:var(--ws-muted);white-space:pre-wrap;overflow-wrap:anywhere;max-height:100px;overflow:auto;flex-shrink:0}
+.git-update-list{overflow:auto;padding:12px;min-height:0}
+.git-update-list>p{color:var(--ws-muted);line-height:1.7;margin:0 0 12px}
+.git-update-repository{display:flex;align-items:flex-start;gap:9px;border-bottom:1px solid var(--ws-subtle-border);padding:12px 2px}
+.git-update-repository input{accent-color:var(--ws-accent);margin-top:3px}
+.git-update-repository>span{display:flex;flex-direction:column;gap:5px;min-width:0}
+.git-update-repository small{color:var(--ws-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.git-update-repository em{font-style:normal;color:var(--tree-orange);line-height:1.6}
+.git-update-list>.df-button{margin-top:16px}
+.merge-session>span{color:var(--ws-muted);flex:1}
+.merge-workspace{display:flex;flex:1;min-width:0;min-height:0;overflow:hidden}
+.merge-files{width:190px;flex-shrink:0;border-right:1px solid var(--ws-border);overflow:auto;background:var(--ws-surface)}
+.merge-files>button{display:flex;flex-direction:column;gap:4px;width:100%;text-align:left;background:none;color:var(--ws-ink);font:inherit;padding:8px 10px;border-bottom:1px solid var(--ws-subtle-border)}
+.merge-files>button:hover,.merge-files>button.is-active{background:var(--ws-active)}
+.merge-files>button>span{width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.merge-files small,.merge-files>p{font-size:11px;color:var(--ws-muted)}
+.merge-files>p{padding:8px}
+.merge-main{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.merge-file-heading>strong{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.merge-block-controls{gap:4px;font-size:11px}
+.merge-block-controls .df-button,.merge-file-actions .df-button{min-height:25px;padding:3px 7px;font-size:11px}
+.merge-block-controls>span{margin-right:6px;color:var(--ws-muted)}
+.merge-base{margin:0;padding:10px;max-height:160px;overflow:auto;border-bottom:1px solid var(--ws-border);font:12px/1.7 var(--font-mono);flex-shrink:0}
+.merge-editor{display:flex;flex:1;flex-direction:column;min-width:0;min-height:150px;overflow:hidden}
+.merge-editor-options{display:flex;justify-content:flex-end;gap:12px;padding:4px 8px;border-bottom:1px solid var(--ws-subtle-border);color:var(--ws-muted);font-size:11px}
+.merge-editor-options label{display:flex;align-items:center;gap:4px}
+.merge-pane-switch{display:none;gap:4px}
+.merge-pane-switch>button{background:none;color:var(--ws-muted);padding:3px 8px;font:inherit;border-radius:3px}
+.merge-pane-switch>button[aria-pressed=true]{background:var(--ws-accent-bg);color:var(--ws-accent)}
+.merge-columns{display:grid;grid-template-columns:1fr 1.2fr 1fr;flex:1;min-width:0;min-height:0}
+.merge-column{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.merge-column+.merge-column{border-left:1px solid var(--ws-border)}
+.merge-column>h3{margin:0;padding:6px 8px;font-size:11px;font-weight:500;color:var(--ws-muted);border-bottom:1px solid var(--ws-subtle-border);background:var(--ws-surface)}
+.merge-code{flex:1;position:relative;min-width:0;min-height:0;overflow:hidden}
+.merge-code>.cm-editor{position:absolute;inset:0}
+.merge-file-actions{border-top:1px solid var(--ws-border);border-bottom:0;justify-content:flex-end}
+.merge-finish{display:flex;flex-direction:column;gap:7px;padding:10px 12px;border-top:1px solid var(--ws-border);flex-shrink:0;max-height:230px;overflow:auto}
+.merge-finish>.df-button{align-self:flex-end}
+@container git-update (max-width:1050px){.merge-files{width:150px}.merge-columns{grid-template-columns:1fr}.merge-column{display:none}.merge-column.is-selected{display:flex;border:0}.merge-pane-switch{display:flex}.merge-editor-options{justify-content:space-between}}
+@container git-update (max-width:600px){.merge-workspace{flex-direction:column}.merge-files{display:flex;width:auto;max-height:95px;min-height:40px;border-right:0;border-bottom:1px solid var(--ws-border);flex-shrink:0}.merge-files>button{width:160px;flex-shrink:0}.merge-files>p{margin:0}.git-update-toolbar{gap:5px}.git-update-toolbar>.df-select{max-width:none}.merge-block-controls{max-height:112px;overflow:auto}}

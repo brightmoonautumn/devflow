@@ -31,6 +31,38 @@ pub(crate) fn response<T: serde::Serialize>(result: Result<T, WorkspaceError>) -
 pub async fn health() -> Json<Value> {
     Json(json!({"status":"ok","name":"devflow","version":env!("CARGO_PKG_VERSION")}))
 }
+pub async fn git_update_check(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitUpdateRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_update_check(request, authenticated)).await)
+}
+pub async fn git_update_start(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitUpdateRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_update_start(request, authenticated)).await)
+}
+pub async fn git_update_progress(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitUpdateProgressRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_update_progress(request, authenticated)).await)
+}
+pub async fn git_merge_status(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitMergeRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_merge_status(request, authenticated)).await)
+}
+pub async fn git_merge_file(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitMergeRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_merge_file(request, authenticated)).await)
+}
+pub async fn git_merge_resolve(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitResolveRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_merge_resolve(request, authenticated)).await)
+}
+pub async fn git_merge_finish(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitMergeRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_merge_finish(request, authenticated)).await)
+}
+pub async fn git_merge_abort(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitMergeRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_merge_abort(request, authenticated)).await)
+}
 pub async fn git_repositories(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitStatusRequest>) -> ApiResult {
     let authenticated = security::authenticated(&headers, &state);
     response(call_core(state, move |engine| engine.workspace.git_repositories(request, authenticated)).await)
@@ -46,6 +78,18 @@ pub async fn git_diff(State(state): State<Arc<AppState>>, headers: HeaderMap, Js
 pub async fn git_blame(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitBlameRequest>) -> ApiResult {
     let authenticated = security::authenticated(&headers, &state);
     response(call_core(state, move |engine| engine.workspace.git_blame(request, authenticated)).await)
+}
+pub async fn git_history_overview(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitHistoryOverviewRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_history_overview(request, authenticated)).await)
+}
+pub async fn git_sync(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitSyncRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_sync(request, authenticated)).await)
+}
+pub async fn git_fetch(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitFetchRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_fetch(request, authenticated)).await)
 }
 pub async fn git_history(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitHistoryRequest>) -> ApiResult {
     let authenticated = security::authenticated(&headers, &state);
@@ -70,6 +114,10 @@ pub async fn git_commit_preview(State(state): State<Arc<AppState>>, headers: Hea
 pub async fn git_commit_apply(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitCommitApplyRequest>) -> ApiResult {
     let authenticated = security::authenticated(&headers, &state);
     response(call_core(state, move |engine| engine.workspace.git_commit_apply(request, authenticated)).await)
+}
+pub async fn git_push(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::GitPushRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.git_push(request, authenticated)).await)
 }
 pub async fn session(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({"token": state.api_token}))

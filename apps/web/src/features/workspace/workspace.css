@@ -213,15 +213,10 @@
 .ws-tree-scroll { flex: 1; overflow: auto; min-height: 0; padding: 6px 0 14px; }
 .ws-tree-scroll ul { list-style: none; padding: 0; margin: 0; }
 .ws-tree-scroll [role='treeitem'] { outline: none; cursor: pointer; }
-.ws-tree-row { display: flex; align-items: center; gap: 5px; min-height: 29px; padding-right: 9px; color: var(--ws-muted); font-size: var(--ws-font-body); }
-.ws-tree-row > svg { flex-shrink: 0; }
+.ws-tree-row { padding-right: 9px; }
 .ws-tree-row.is-unavailable .ws-tree-icon { color: var(--ws-dim); opacity: .6; }
-.ws-tree-row:hover { background: var(--ws-hover); }
 .ws-tree-scroll [role='treeitem'][aria-selected='true'] > .ws-tree-row { background: var(--ws-active); color: var(--ws-ink); }
 .ws-tree-scroll [role='treeitem']:focus-visible > .ws-tree-row { outline: 1px solid var(--ws-accent); outline-offset: -1px; }
-.ws-tree-chevron { display: flex; width: 13px; flex-shrink: 0; }
-.ws-tree-chevron .is-expanded { transform: rotate(90deg); }
-.ws-tree-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ws-tree-unavailable { display: flex; align-items: center; gap: 3px; flex-shrink: 0; margin-left: auto; color: var(--ws-error); font-size: var(--ws-font-caption); }
 .ws-tree-row.is-unavailable { color: var(--ws-dim); }
 .ws-tree-note { display: block; padding: 5px 12px 5px 30px; margin: 0; font-size: var(--ws-font-small); line-height: 1.7; color: var(--ws-dim); overflow-wrap: anywhere; cursor: default; }
@@ -480,5 +475,4 @@ body:has(.ws-bottom-panel.is-resizing) * { cursor: row-resize !important; }
 
 .ws-tree-segment { border: 0; border-radius: 3px; padding: 1px 2px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .ws-tree-segment:hover, .ws-tree-segment.is-selected { background: var(--ws-hover); color: var(--ws-ink); text-decoration: underline; text-underline-offset: 3px; }
-.ws-tree-separator { color: var(--ws-dim); margin: 0 1px; }
 .ws-explorer-heading .ws-icon-button[aria-pressed='true'] { color: var(--ws-accent); background: var(--ws-hover); }

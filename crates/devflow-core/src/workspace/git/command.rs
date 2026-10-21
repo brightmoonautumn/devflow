@@ -42,9 +42,13 @@ pub(super) fn executable() -> Result<PathBuf> {
 // All arguments originate from fixed core operations. User paths are literal
 // pathspecs, never command fragments. Read, write and hooks have bounded output.
 pub(super) fn run(root: &Path, args: &[&str], input: Option<Vec<u8>>, commit: bool) -> Result<Output> {
+    run_with_timeout(root, args, input, commit, Duration::from_secs(if commit { 120 } else { 15 }))
+}
+
+pub(super) fn run_with_timeout(root: &Path, args: &[&str], input: Option<Vec<u8>>, commit: bool, timeout: Duration) -> Result<Output> {
     let mut command = Command::new(executable()?);
     command.current_dir(root).args(["--no-pager", "-c", "color.ui=false", "-c", "core.quotePath=false", "-c", "core.fsmonitor=false"])
-        .args(args).env("GIT_TERMINAL_PROMPT", "0").env("GIT_EDITOR", "true").env("GIT_OPTIONAL_LOCKS", if commit { "1" } else { "0" })
+        .args(args).env("GIT_TERMINAL_PROMPT", "0").env("GCM_INTERACTIVE", "Never").env("GIT_EDITOR", "true").env("GIT_OPTIONAL_LOCKS", if commit { "1" } else { "0" })
         .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     for key in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"] { command.env_remove(key); }
     #[cfg(windows)]
@@ -57,7 +61,6 @@ pub(super) fn run(root: &Path, args: &[&str], input: Option<Vec<u8>>, commit: bo
     let errors = std::thread::spawn(move || { let mut bytes = Vec::new(); stderr.take(128 * 1024).read_to_end(&mut bytes).map(|_| bytes) });
     let writer = input.and_then(|bytes| process.0.stdin.take().map(|mut stdin| std::thread::spawn(move || stdin.write_all(&bytes))));
     let started = Instant::now();
-    let timeout = Duration::from_secs(if commit { 120 } else { 15 });
     let mut completed = None;
     let status = loop {
         if completed.is_none() { completed = process.0.try_wait()?; }
@@ -70,7 +73,7 @@ pub(super) fn run(root: &Path, args: &[&str], input: Option<Vec<u8>>, commit: bo
     };
     // Do not block a core worker forever if an unusual hook leaves descendants
     // holding inherited pipes after the Git parent has already exited.
-    let Some(status) = status else { return Err(error("git_timeout", "Git 操作或 hook 输出超时，已清理仍属于该 Git 进程的进程树；请刷新状态确认是否已产生提交")); };
+    let Some(status) = status else { return Err(error("git_timeout", "Git 操作或 hook 输出超时，已清理仍属于该 Git 进程的进程树；请刷新并确认仓库和任务的实际状态")); };
     if let Some(writer) = writer { let _ = writer.join(); }
     let bytes = output.join().map_err(|_| error("io_error", "Git 输出读取失败"))??;
     let stderr = errors.join().map_err(|_| error("io_error", "Git 错误读取失败"))??;

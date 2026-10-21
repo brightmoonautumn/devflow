@@ -22,7 +22,7 @@ pub struct GitHistoryDiffRequest {
 #[serde(rename_all = "camelCase")]
 pub struct HistoryCommit {
     pub id: String, pub parents: Vec<String>, pub author: String, pub email: String,
-    pub timestamp: i64, pub subject: String, pub refs: Vec<String>,
+    pub timestamp: i64, #[serde(default)] pub committed_timestamp: i64, pub subject: String, pub refs: Vec<String>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +35,7 @@ pub struct GitHistory {
 pub struct HistoryFile {
     pub path: String, pub status: String, pub submodule: bool, pub available: bool,
     pub reason: Option<String>,
+    pub linked_repository: Option<String>, pub linked_commit: Option<String>,
     #[serde(skip)] old_oid: String, #[serde(skip)] new_oid: String,
     #[serde(skip)] old_mode: String, #[serde(skip)] new_mode: String,
 }
@@ -61,18 +62,19 @@ fn parse_commits(bytes: &[u8]) -> Result<Vec<HistoryCommit>> {
     if bytes.is_empty() { return Ok(Vec::new()); }
     let mut fields: Vec<_> = bytes.split(|b| *b == 0).collect();
     if fields.last().is_some_and(|f| f.is_empty()) { fields.pop(); }
-    if fields.len() % 7 != 0 { return Err(error("git_failed", "Git 历史记录格式无效")); }
-    fields.chunks_exact(7).map(|row| {
+    if fields.len() % 8 != 0 { return Err(error("git_failed", "Git 历史记录格式无效")); }
+    fields.chunks_exact(8).map(|row| {
         let id = text(row[0])?.to_owned(); validate_oid(&id)?;
         Ok(HistoryCommit { id, parents: text(row[1])?.split_whitespace().map(str::to_owned).collect(),
             author: text(row[2])?.to_owned(), email: text(row[3])?.to_owned(),
             timestamp: text(row[4])?.parse().map_err(|_| error("git_failed", "Git 提交时间无效"))?,
-            subject: text(row[5])?.to_owned(), refs: text(row[6])?.split(", ").filter(|s| !s.is_empty()).map(str::to_owned).collect() })
+            subject: text(row[5])?.to_owned(), refs: text(row[6])?.split(", ").filter(|s| !s.is_empty()).map(str::to_owned).collect(),
+            committed_timestamp: text(row[7])?.parse().map_err(|_| error("git_failed", "Git 提交时间无效"))? })
     }).collect()
 }
-const FORMAT: &str = "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D";
+const FORMAT: &str = "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D%x00%ct";
 
-fn history_refs(root: &Path) -> Result<(String, Vec<String>, bool)> {
+pub(super) fn history_refs(root: &Path) -> Result<(String, Vec<String>, bool)> {
     // --all also visits stash/custom refs. Fingerprint every ref so those
     // changes cannot silently shift an in-progress pagination window.
     let refs = checked(root, &["for-each-ref", "--format=%(objectname) %(refname)"])?;
@@ -90,7 +92,7 @@ fn commit_metadata(service: &WorkspaceService, root: &Path, oid: &str) -> Result
     let key = format!("metadata:{root:?}:{oid}:{}", service.git_cache.content_epoch(root));
     if let Some(value) = service.git_cache.content_get::<(HistoryCommit, String)>(&key) { return Ok(value); }
     if text(&checked(root, &["cat-file", "-t", oid])?)?.trim() != "commit" { return Err(error("invalid_query", "所选对象不是提交")); }
-    let bytes = checked(root, &["show", "-s", "-z", "--no-show-signature", FORMAT, oid, "--"])?;
+    let bytes = checked(root, &["show", "-s", "-z", "--no-show-signature", "--decorate=full", FORMAT, oid, "--"])?;
     let commit = parse_commits(&bytes)?.into_iter().next().ok_or_else(|| error("not_found", "提交不存在"))?;
     let mut message = text(&checked(root, &["show", "-s", "--no-show-signature", "--format=%B", oid, "--"])?)?.to_owned();
     if message.len() > 256 * 1024 {
@@ -119,12 +121,12 @@ fn parse_files(bytes: &[u8]) -> Result<(Vec<HistoryFile>, bool)> {
         let old_mode = meta[0].trim_start_matches(':').to_owned(); let new_mode = meta[1].to_owned();
         let available = [&old_mode, &new_mode].iter().all(|mode| matches!(mode.as_str(), "000000" | "100644" | "100755" | "160000"));
         files.push(HistoryFile { path, status: meta[4].into(), submodule: old_mode == "160000" || new_mode == "160000", available,
-            reason: (!available).then(|| "符号链接或特殊对象不展开内容".into()),
+            reason: (!available).then(|| "符号链接或特殊对象不展开内容".into()), linked_repository: None, linked_commit: None,
             old_oid: meta[2].into(), new_oid: meta[3].into(), old_mode, new_mode });
     }
     Ok((files, false))
 }
-fn commit_files(service: &WorkspaceService, root: &Path, commit: &str, parent: Option<&str>) -> Result<(Vec<HistoryFile>, bool)> {
+fn commit_files(service: &WorkspaceService, root: &Path, commit: &str, parent: Option<&str>, revision: u64) -> Result<(Vec<HistoryFile>, bool)> {
     let mut args = vec!["diff-tree", "--no-commit-id", "--raw", "--no-abbrev", "-z", "-r", "--no-renames", "--no-ext-diff"];
     if let Some(parent) = parent { args.push(parent); } else { args.push("--root"); }
     args.extend([commit, "--"]);
@@ -135,6 +137,12 @@ fn commit_files(service: &WorkspaceService, root: &Path, commit: &str, parent: O
     let (mut files, truncated) = parse_files(&bytes)?;
     for file in &mut files {
         if let Err(err) = service.git_path(root, &file.path) { file.available = false; file.reason = Some(err.message); }
+        else if file.new_mode == "160000" {
+            // A gitlink belongs to another repository; navigate without changing its HEAD.
+            if let Ok(child) = service.git_path(root, &file.path).and_then(|path| service.git_repository(&display_path(&path), revision)) {
+                file.linked_repository = Some(display_path(&child)); file.linked_commit = Some(file.new_oid.clone());
+            }
+        }
     }
     Ok((files, truncated))
 }
@@ -167,7 +175,7 @@ impl WorkspaceService {
         if reference != "all" && reference != "HEAD" && !references.iter().any(|r| r == reference) { return Err(error("invalid_query", "请选择仓库已有分支或标签")); }
         let count = format!("--max-count={}", limit + 1); let skip = format!("--skip={}", request.skip);
         let grep = format!("--grep={}", request.query.as_deref().unwrap_or(""));
-        let mut args = vec!["log", "-z", "--topo-order", "--no-show-signature", FORMAT, &count, &skip, "--fixed-strings", "--regexp-ignore-case", &grep];
+        let mut args = vec!["log", "-z", "--topo-order", "--no-show-signature", "--decorate=full", FORMAT, &count, &skip, "--fixed-strings", "--regexp-ignore-case", &grep];
         if reference == "all" { args.push("--all"); if has_head { args.push("HEAD"); } } else { args.push(reference); }
         args.push("--");
         let mut commits = if !has_head && (reference == "HEAD" || references.is_empty()) { Vec::new() } else { parse_commits(&checked(&root, &args)?)? };
@@ -183,7 +191,7 @@ impl WorkspaceService {
         let root = self.git_repository(&request.repository, request.expected_revision)?;
         let (commit, message) = commit_metadata(self, &root, &request.commit)?;
         let parent = choose_parent(&commit, request.parent.as_deref())?;
-        let (files, truncated) = commit_files(self, &root, &commit.id, parent.as_deref())?;
+        let (files, truncated) = commit_files(self, &root, &commit.id, parent.as_deref(), request.expected_revision)?;
         self.git_roots(request.expected_revision, true)?;
         Ok(GitHistoryCommit { repository: display_path(&root), commit, parent, message, files, truncated })
     }
@@ -193,7 +201,7 @@ impl WorkspaceService {
         let root = self.git_repository(&request.repository, request.expected_revision)?;
         let (commit, _) = commit_metadata(self, &root, &request.commit)?;
         let parent = choose_parent(&commit, request.parent.as_deref())?;
-        let (files, _) = commit_files(self, &root, &commit.id, parent.as_deref())?;
+        let (files, _) = commit_files(self, &root, &commit.id, parent.as_deref(), request.expected_revision)?;
         let file = files.iter().find(|f| f.path == request.path).ok_or_else(|| error("not_found", "文件不在该提交的变更列表中"))?;
         if !file.available { return Err(error("invalid_path", file.reason.clone().unwrap_or_default())); }
         let mut diff = GitDiff { repository: display_path(&root), path: file.path.clone(), original_path: None, before: String::new(), after: String::new(), message: None, submodule: file.submodule };
@@ -213,9 +221,10 @@ mod tests {
     #[test]
     fn history_parsing_preserves_unicode_and_separates_nul_records() {
         let id = "a".repeat(40);
-        let bytes = format!("{id}\0\0中文作者\0a@example.test\01760800000\0更新 权限\0HEAD -> main, tag: v1\0");
+        let bytes = format!("{id}\0\0中文作者\0a@example.test\01760800000\0更新 权限\0HEAD -> main, tag: v1\01760800001\0");
         let commits = parse_commits(bytes.as_bytes()).unwrap();
         assert_eq!(commits.len(), 1); assert_eq!(commits[0].subject, "更新 权限");
+        assert_eq!(commits[0].committed_timestamp, 1760800001);
         assert_eq!(commits[0].refs.len(), 2); assert!(commits[0].parents.is_empty());
         assert!(validate_oid("--all").is_err()); assert!(validate_oid("../HEAD").is_err());
         assert!(parse_commits(b"invalid\0").is_err());

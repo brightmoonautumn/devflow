@@ -40,6 +40,15 @@ pub struct WorkspaceFile {
 }
 
 impl WorkspaceService {
+    pub(super) fn validate_merge_write(&self, state: &State, path: &Path) -> Result<()> {
+        let active_config = state.session.as_ref().and_then(|s| s.file.as_deref()) == Some(path);
+        let recent_config = self.recent_path.lock().map_err(|_| error("unavailable", "最近工作区记录暂不可用"))?
+            .as_ref().is_some_and(|record| comparison_path(record) == comparison_path(path));
+        if active_config || recent_config || (path.exists() && fs::metadata(path)?.permissions().readonly()) {
+            return Err(error("permission_denied", "此文件是受保护的工作区配置或为只读文件，请在外部工具处理"));
+        }
+        Ok(())
+    }
     pub fn copy_file(&self, request: WorkspaceFileReadRequest, authenticated: bool) -> Result<WorkspaceFileMutation> {
         if !authenticated { return Err(error("unauthorized", "需要有效的访问令牌")); }
         let state = self.lock()?;
@@ -118,7 +127,10 @@ impl WorkspaceService {
         let recent_config = self.recent_path.lock()
             .map_err(|_| error("unavailable", "最近工作区记录暂不可用"))?
             .as_ref().is_some_and(|record| comparison_path(record) == comparison_path(path));
-        let readonly_reason = if active_config {
+        let merge_active = self.git_merge_active_path(path);
+        let readonly_reason = if merge_active {
+            Some("仓库正在合并，请通过 Merge 页面保存解决结果".into())
+        } else if active_config {
             Some("当前工作区配置请通过工作区管理修改".into())
         } else if recent_config {
             Some("最近工作区记录由 DevFlow 自动维护".into())
@@ -145,6 +157,7 @@ impl WorkspaceService {
 
     pub fn write_file(&self, request: WorkspaceFileWriteRequest, authenticated: bool) -> Result<WorkspaceFile> {
         if !authenticated { return Err(error("unauthorized", "需要有效的访问令牌")); }
+        let _git = self.git_operations.read().map_err(|_| error("unavailable", "Git 操作锁不可用"))?;
         if request.content.len() > MAX_FILE_BYTES || request.expected_content.len() > MAX_FILE_BYTES {
             return Err(error("limit_exceeded", "文本文件最多支持 1 MiB"));
         }

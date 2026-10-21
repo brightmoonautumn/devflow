@@ -3,8 +3,11 @@ import { copyText } from '../../lib/clipboard'
 import { readOnlyShare } from '../../lib/access'
 import { useDialogs } from '../../components/form/BaseDialog'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement } from 'react'
-import { AlertCircle, Check, ChevronRight, ChevronsDownUp, Copy, FolderMinus, FolderPlus, LoaderCircle, MoreHorizontal, RefreshCw, Save, Settings2, Trash2, X } from 'lucide-react'
+import { AlertCircle, Check, ChevronsDownUp, Copy, FolderMinus, FolderPlus, LoaderCircle, MoreHorizontal, RefreshCw, Save, Settings2, Trash2, X } from 'lucide-react'
 import { TreeEntryIcon } from '../../components/files/TreeEntryIcon'
+import { FileTreeRow, TreeChevron, TreePathLabel, handleTreeNavigation } from '../../components/files/FileTreeRow'
+import { compactFolderChild, MAX_COMPACT_FOLDER_SEGMENTS } from '../../components/files/compactFolders'
+import { useCompactFolders } from '../../components/files/useCompactFolders'
 import { GitPanel } from '../git/GitPanel'
 import type { GitDiff } from '../git/api'
 import { WorkspaceSearch } from './WorkspaceSearch'
@@ -60,13 +63,16 @@ function TreeNode({ compact, scope, entry, root, level, revision, selected, copi
     let resolved: WorkspaceChildren | null = null
     try {
       // Probe only visible folders and their single-child chains, never entire subtrees.
-      for (let depth = 0; depth < 32; depth += 1) {
+      for (let depth = 0; depth < MAX_COMPACT_FOLDER_SEGMENTS; depth += 1) {
         const result = cache.current.get(current.path) ?? await getWorkspaceChildren(current.path, revision, controller.signal)
         if (controller.signal.aborted) return
         cache.current.set(current.path, result)
         resolved = result
-        const child = result.entries[0]
-        if (!compact || level === 1 || result.truncated || result.entries.length !== 1 || child.kind !== 'directory' || depth === 31 || chain.some(segment => viewPathKey(segment.path) === viewPathKey(child.path))) break
+        const child = compactFolderChild(chain, result.entries, {
+          enabled: compact && level > 1, truncated: result.truncated,
+          key: segment => viewPathKey(segment.path), isDirectory: segment => segment.kind === 'directory',
+        })
+        if (!child) break
         chain.push(child); current = child
       }
       // Publish the chain atomically so intermediate folders do not mount and probe again.
@@ -122,22 +128,7 @@ function TreeNode({ compact, scope, entry, root, level, revision, selected, copi
       const rect = element.querySelector('.ws-tree-row')!.getBoundingClientRect()
       onNodeMenu({ entry: activeEntry, root, level, revision, x: rect.left + 20, y: rect.bottom, target: element }); return
     }
-    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); toggle(); return }
-    if (event.key === 'ArrowRight') {
-      event.preventDefault(); event.stopPropagation()
-      if (expandable && !expanded) toggle()
-      else element.querySelector<HTMLElement>('[role="treeitem"]')?.focus()
-    } else if (event.key === 'ArrowLeft') {
-      event.preventDefault(); event.stopPropagation()
-      if (expanded) expand(false)
-      else element.parentElement?.closest<HTMLElement>('[role="treeitem"]')?.focus()
-    } else if (['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
-      event.preventDefault(); event.stopPropagation()
-      const nodes = Array.from(element.closest('[role="tree"]')?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? [])
-      const index = nodes.indexOf(element)
-      const next = event.key === 'Home' ? 0 : event.key === 'End' ? nodes.length - 1 : index + (event.key === 'ArrowDown' ? 1 : -1)
-      nodes[next]?.focus()
-    }
+    handleTreeNavigation(event, { expanded, expandable, onToggle: next => { if (next) onSelect(activeEntry.path); expand(next) }, onActivate: toggle })
   }
   const status = entry.status === 'blocked' ? '未授权' : entry.status === 'unsupported' ? '不支持' : '不可用'
   return <li role="treeitem" tabIndex={0} aria-label={label} aria-level={level} aria-selected={segments.some(segment => segment.path === selected)} aria-expanded={expandable ? expanded : undefined} aria-disabled={!available || undefined}
@@ -147,13 +138,13 @@ function TreeNode({ compact, scope, entry, root, level, revision, selected, copi
       event.preventDefault(); onSelect(activeEntry.path)
       onNodeMenu({ entry: activeEntry, root, level, revision, x: event.clientX, y: event.clientY, target: event.currentTarget })
     }} onClick={event => { event.stopPropagation(); event.currentTarget.focus(); toggle() }}>
-    <div className={`ws-tree-row ${available ? '' : 'is-unavailable'}`} data-copy-path={activeEntry.path} style={{ paddingLeft: 9 + (level - 1) * 14 }} title={`${activeEntry.path}${entry.message ? `\n${entry.message}` : ''}\n悬停时按 C 复制绝对路径`}>
-      <span className="ws-tree-chevron">{expandable && <ChevronRight size={13} className={expanded ? 'is-expanded' : ''} />}</span>
+    <FileTreeRow className={`ws-tree-row ${available ? '' : 'is-unavailable'}`} data-copy-path={activeEntry.path} style={{ paddingLeft: 9 + (level - 1) * 14 }} title={`${activeEntry.path}${entry.message ? `\n${entry.message}` : ''}\n悬停时按 C 复制绝对路径`}>
+      <TreeChevron expanded={expanded} expandable={expandable} />
       {loading ? <LoaderCircle size={16} aria-hidden="true" className="ws-tree-icon spinning" /> : <TreeEntryIcon name={segments[segments.length - 1].name} directory={directory} expanded={expanded} root={level === 1} />}
-      <span className="ws-tree-label">{segments.length === 1 ? entry.name : segments.map((segment, index) => <span key={segment.path}>{index > 0 && <span className="ws-tree-separator" aria-hidden="true">/</span>}<button type="button" tabIndex={-1} className={`ws-tree-segment ${segment.path === selected ? 'is-selected' : ''}`} data-copy-path={segment.path} title={`${segment.path}\nAlt+←/→ 切换路径段；悬停时按 C 复制`} onClick={event => { event.stopPropagation(); event.currentTarget.closest<HTMLElement>('[role="treeitem"]')?.focus(); toggle(segment) }} onContextMenu={event => {
+      <TreePathLabel segments={segments} renderSegment={segments.length === 1 ? undefined : segment => <button type="button" tabIndex={-1} className={`ws-tree-segment ${segment.path === selected ? 'is-selected' : ''}`} data-copy-path={segment.path} title={`${segment.path}\nAlt+←/→ 切换路径段；悬停时按 C 复制`} onClick={event => { event.stopPropagation(); event.currentTarget.closest<HTMLElement>('[role="treeitem"]')?.focus(); toggle(segment) }} onContextMenu={event => {
         event.preventDefault(); event.stopPropagation(); onSelect(segment.path)
         onNodeMenu({ entry: segment, root, level, revision, x: event.clientX, y: event.clientY, target: event.currentTarget.closest<HTMLElement>('[role="treeitem"]')! })
-      }}>{segment.name}</button></span>)}</span>{!available && <span className="ws-tree-unavailable"><AlertCircle size={12} />{status}</span>}
+      }}>{segment.name}</button>} />{!available && <span className="ws-tree-unavailable"><AlertCircle size={12} />{status}</span>}
       <button className={`ws-tree-copy ${copiedPath === activeEntry.path ? 'is-copied' : ''}`} aria-label={`复制 ${activeEntry.name} 的绝对路径`} title={copiedPath === activeEntry.path ? '路径已复制' : '复制绝对路径 · 悬停时按 C'} onClick={event => { event.stopPropagation(); void onCopy(activeEntry.path) }}>
         {copiedPath === activeEntry.path ? <Check size={14} /> : <Copy size={14} />}
       </button>
@@ -161,7 +152,7 @@ function TreeNode({ compact, scope, entry, root, level, revision, selected, copi
         event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onSelect(entry.path)
         onNodeMenu({ entry, root, level, revision, x: rect.left, y: rect.bottom, target: event.currentTarget })
       }}><MoreHorizontal size={14} /></button>}
-    </div>
+    </FileTreeRow>
     {((expanded && !empty) || !!error) && <ul role="group">
       {expanded && children?.entries.map(child => <MemoTreeNode compact={compact} scope={scope} key={child.path} entry={child} root={root} level={level + 1} revision={revision} selected={selected} copiedPath={copiedPath} onCopy={onCopy} onSelect={onSelect} onOpenFile={onOpenFile} onNodeMenu={onNodeMenu} />)}
       {expanded && loading && <li role="none" className="ws-tree-note">正在读取…</li>}
@@ -178,8 +169,13 @@ function clampWidth(width: number) { return Math.round(Math.max(200, Math.min(ma
 export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigure, onAddFolder, onSave, onClose, onOpenFile, onOpenDiff, onOpenHistory }: { data: WorkspaceResponse | null; open: boolean; view: 'explorer' | 'search' | 'git'; onOpenDiff: (diff: GitDiff) => void; onOpenHistory: () => void; onChange: (data: WorkspaceResponse) => void; onRefresh: () => void; onConfigure: () => void; onAddFolder: () => void; onSave: () => void; onClose: () => void; onOpenFile: (path: string, pinned?: boolean, line?: number, column?: number) => void }) {
   const dialogs = useDialogs()
   const scope = workspaceViewKey(data)
-  const [compact, setCompact] = useState(() => { try { return localStorage.getItem('devflow.explorer.compactFolders') !== 'false' } catch { return true } })
+  const [compact, setCompact] = useCompactFolders()
   const [generation, setGeneration] = useState(0)
+  useEffect(() => {
+    const changed = () => setGeneration(current => current + 1)
+    window.addEventListener('devflow-git-updated', changed)
+    return () => window.removeEventListener('devflow-git-updated', changed)
+  }, [])
   const [selected, setSelected] = useState<string | null>(null)
   const [menu, setMenu] = useState<NodeMenu | null>(null)
   const [removing, setRemoving] = useState(false)
@@ -298,7 +294,6 @@ export function WorkspaceTree({ data, open, view, onChange, onRefresh, onConfigu
       {!readOnlyShare && data?.dirty && <button className="ws-icon-button" aria-label="保存工作区更改" title="保存工作区更改" onClick={onSave}><Save size={14} /></button>}
       <button className="ws-icon-button" aria-label="紧凑文件夹" title="紧凑文件夹：合并连续单子目录" aria-pressed={compact} onClick={() => {
         const next = !compact; setCompact(next); setMenu(null)
-        try { localStorage.setItem('devflow.explorer.compactFolders', String(next)) } catch { /* Preference storage is optional. */ }
       }}><Settings2 size={14} /></button>
       <button className="ws-icon-button" aria-label="刷新目录树" title="刷新目录树" onClick={() => setGeneration(current => current + 1)}><RefreshCw size={14} /></button>
       <button className="ws-icon-button" aria-label="折叠所有文件夹" title="折叠所有文件夹" onClick={() => { if (scope) writeViewState(scope, { expanded: [] }); setGeneration(current => current + 1) }}><ChevronsDownUp size={14} /></button>

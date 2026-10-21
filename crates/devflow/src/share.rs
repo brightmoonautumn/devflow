@@ -73,7 +73,7 @@ async fn read(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(reque
 }
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/api/shared/read", post(read))
+        .route("/api/shared/read", post(read).layer(axum::extract::DefaultBodyLimit::max(64 * 1024)))
         .route("/share", get(|| async { axum::response::Redirect::temporary("/share/") }))
         .route_service("/share/", ServeFile::new("apps/web/dist/index.html"))
         .nest_service("/assets", ServeDir::new("apps/web/dist/assets"))

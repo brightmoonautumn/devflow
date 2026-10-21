@@ -5,6 +5,7 @@ import { projectKey, metricsKey, type Project, type WorkspaceResponse } from '..
 import TaskRows, { type TaskRow } from '../../components/beautiful-ui/task-rows'
 import { useRuntimeMetrics } from '../runtime/useRuntimeMetrics'
 import { ProjectMetrics } from '../runtime/ProjectMetrics'
+import { useServiceRecency } from './useServiceRecency'
 import '../../components/beautiful-ui/theme.css'
 import './workspace.css'
 
@@ -37,6 +38,11 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
   }, [menu])
   const projects = data?.projects ?? []
   const runtime = useRuntimeMetrics(monitoringEnabled && projects.length > 0)
+  const { lastUsed, rememberService } = useServiceRecency(runtime.snapshot)
+  function handleProjectAction(project: Project, title: string) {
+    rememberService(projectKey(project))
+    return onAction(project, title)
+  }
   useEffect(() => {
     // Wait for a sample taken after the mutation, rather than showing cached state.
     setPendingActions(current => {
@@ -55,7 +61,7 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
     submitting.current.add(projectKey(project))
     setPendingActions(current => ({ ...current, [projectKey(project)]: { type } }))
     try {
-      await onAction(project, type === 'start' ? '启动项目' : '停止项目')
+      await handleProjectAction(project, type === 'start' ? '启动项目' : '停止项目')
     } finally {
       submitting.current.delete(projectKey(project))
       setPendingActions(current => ({ ...current, [projectKey(project)]: { type, settledAt: Date.now() } }))
@@ -71,6 +77,9 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
     const observed = !!metrics?.pids.length || metrics?.managedState === 'starting' || metrics?.managedState === 'running'
     const caption = !monitoringEnabled || runtime.error ? '运行指标暂不可用' : !metrics ? '正在读取运行状态…' : metrics.managedState === 'starting' ? '构建 / 启动中' : observed ? undefined : metrics.managedState === 'failed' ? '启动失败或异常退出' : '未检测到进程'
     const listeningPorts = metrics?.listeningPorts
+    const listeners = metrics?.listeners
+    const auxiliary = metrics?.processes?.filter(process => process.role !== 'primary') ?? []
+    const listenerText = (listener: NonNullable<typeof listeners>[number]) => `${listener.port} · PID ${listener.pid} · ${listener.purpose}${listener.purposeSource === 'command_line' ? '（启动参数）' : ''}`
     const portError = metrics && listeningPorts === undefined
       ? '当前后端未返回端口字段，请重新编译并重启 DevFlow 后端。'
       : metrics?.portError ?? (listeningPorts === null ? '后端未提供端口采集结果，请更新并重启 DevFlow 后端后重试。' : undefined)
@@ -83,24 +92,28 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
       amount: kindNames[project.kind],
       status: observed ? 'running' : metrics && monitoringEnabled && !runtime.error ? 'idle' : 'unknown',
       caption,
-      metadata: showPorts ? <span className="ws-service-ports" title={listeningPorts?.length ? `TCP 监听端口：${listeningPorts.join('、')}。包括本机关联进程的业务、调试及诊断端口，与启动工具无关。` : portError}>
-        {listeningPorts?.length ? <><Network size={11} aria-hidden="true" />{listeningPorts.slice(0, 3).map(port => <span key={port} className="ws-port-badge" aria-label={`TCP 端口 ${port}`}>{port}</span>)}{listeningPorts.length > 3 && <span className="ws-port-more" aria-label={`另外 ${listeningPorts.length - 3} 个端口`}>+{listeningPorts.length - 3}</span>}</> : <span className="ws-port-empty">{portStatus}</span>}
+      metadata: showPorts ? <span className="ws-service-ports" title={listeners?.length ? listeners.map(listenerText).join('\n') : portError}>
+        {listeners?.length ? <><Network size={11} aria-hidden="true" />{listeners.slice(0, 2).map(listener => <span key={`${listener.pid}:${listener.port}`} className="ws-port-badge" title={listenerText(listener)} aria-label={`TCP ${listenerText(listener)}`}>{listener.port} · PID {listener.pid} · {listener.purpose}</span>)}{listeners.length > 2 && <span className="ws-port-more" aria-label={`另外 ${listeners.length - 2} 个监听项，展开详情查看`}>+{listeners.length - 2}</span>}</>
+          : listeningPorts?.length ? <><Network size={11} aria-hidden="true" />{listeningPorts.slice(0, 3).map(port => <span key={port} className="ws-port-badge" title="请更新并重启 DevFlow 后端以获取端口归属及用途">{port} · 归属 / 用途未知</span>)}</>
+          : <span className="ws-port-empty">{portStatus}</span>}
       </span> : undefined,
       content: metrics && observed ? <ProjectMetrics metrics={metrics} history={runtime.history} /> : undefined,
       icon: <span className={`ws-project-symbol ${project.kind === 'node' ? 'is-node' : ''} ${observed && monitoringEnabled && !runtime.error ? metrics?.managedState === 'starting' ? 'is-starting' : 'is-running' : ''}`} title={observed && monitoringEnabled && !runtime.error ? metrics?.managedState === 'starting' ? '构建 / 启动中' : '运行中' : undefined}>{project.kind === 'node' ? <Box size={19} strokeWidth={1.6} /> : <Coffee size={19} strokeWidth={1.6} />}</span>,
       details: [
         { label: '项目目录', meta: project.path },
-        ...(showPorts && listeningPorts?.length ? [{ label: 'TCP 监听端口', meta: listeningPorts.join(' · ') }] : []),
+        ...(showPorts && listeners?.length ? listeners.map(listener => ({ label: `TCP ${listener.port} · PID ${listener.pid}`, meta: `${listener.purpose}${listener.purposeSource === 'command_line' ? '（依据启动参数）' : '（未获得用途依据）'}` })) : showPorts && listeningPorts?.length ? [{ label: 'TCP 监听端口', meta: `${listeningPorts.join(' · ')}（后端需更新以获取归属及用途）` }] : []),
         ...(showPorts && portError ? [{ label: '端口检测', meta: portError }] : []),
-        ...(metrics?.pids.length ? [{ label: '关联 PID', meta: metrics.pids.join(' · ') }] : []),
+        ...auxiliary.map(process => ({ label: `${process.role === 'launcher' ? '启动器' : '辅助进程'} PID ${process.pid}`, meta: `${process.name} · 父 PID ${process.parentPid ?? '未知'}` })),
+        ...(metrics?.processes === undefined && metrics?.pids.length ? [{ label: '关联进程（旧后端）', meta: metrics.pids.join(' · ') }] : []),
         { label: '识别文件', meta: project.markers.join(' · ') },
         ...(project.mainClasses?.length ? [{ label: '启动主类', meta: project.mainClasses.join(' · ') }] : []),
         ...(project.launchScripts?.length ? [{ label: '启动脚本', meta: project.launchScripts.join(' · ') }] : []),
       ],
     }
   })
-  // Stable sorting keeps the workspace order within each runtime group.
-  rows.sort((left, right) => Number(right.status === 'running') - Number(left.status === 'running'))
+  // Running services stay first; unused services and equal timestamps retain workspace order.
+  rows.sort((left, right) => Number(right.status === 'running') - Number(left.status === 'running')
+    || (left.status === 'running' ? 0 : lastUsed(right.key) - lastUsed(left.key)))
   const projectsByPath = new Map(filtered.map(project => [projectKey(project), project]))
   function renderProjectActions(row: TaskRow) {
     const project = projectsByPath.get(row.key)
@@ -121,10 +134,10 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
       </button>}<div className="ws-menu-anchor">
           <button className="ws-icon-button" aria-label={`${project.name} 更多操作`} title="更多操作" aria-expanded={menu === projectKey(project)} aria-controls={menu === projectKey(project) ? 'workspace-project-actions' : undefined} onClick={event => { menuTrigger.current = event.currentTarget; setMenu(menu === projectKey(project) ? null : projectKey(project)) }}><MoreHorizontal size={17} /></button>
           {menu === projectKey(project) && <div id="workspace-project-actions" className="ws-menu" aria-label={`${project.name} 操作`} onKeyDown={event => { if (event.key === 'Escape') { setMenu(null); menuTrigger.current?.focus(); event.stopPropagation() } }}>
-            <button autoFocus onClick={() => { setMenu(null); onAction(project, '运行输出') }}><Terminal size={14} />查看运行输出</button>
-            {!readOnlyShare && <button onClick={() => { setMenu(null); onAction(project, '启动配置') }}><Settings2 size={14} />启动配置</button>}
-            {!readOnlyShare && project.kind !== 'node' && <button onClick={() => { setMenu(null); onAction(project, 'JVM 诊断') }}><Activity size={14} />JVM 诊断</button>}
-            {!readOnlyShare && project.kind !== 'node' && <button disabled={!running || !ready} onClick={() => { setMenu(null); onAction(project, 'Arthas 挂载') }}><PlugZap size={14} />快速挂载 Arthas</button>}
+            <button autoFocus onClick={() => { setMenu(null); handleProjectAction(project, '运行输出') }}><Terminal size={14} />查看运行输出</button>
+            {!readOnlyShare && <button onClick={() => { setMenu(null); handleProjectAction(project, '启动配置') }}><Settings2 size={14} />启动配置</button>}
+            {!readOnlyShare && project.kind !== 'node' && <button onClick={() => { setMenu(null); handleProjectAction(project, 'JVM 诊断') }}><Activity size={14} />JVM 诊断</button>}
+            {!readOnlyShare && project.kind !== 'node' && <button disabled={!running || !ready} onClick={() => { setMenu(null); handleProjectAction(project, 'Arthas 挂载') }}><PlugZap size={14} />快速挂载 Arthas</button>}
           </div>}
         </div></div>)
   }
@@ -134,7 +147,7 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
       <div className="ws-filters" role="group" aria-label="项目类型">{(['all', 'maven', 'node'] as const).map(kind => <button key={kind} aria-pressed={filter === kind} onClick={() => setFilter(kind)}>{kind === 'all' ? '全部' : kind === 'maven' ? 'Maven' : 'Node.js'}</button>)}</div>
     </div>
     <div className="ws-project-list" aria-busy={loading}>
-      {rows.length > 0 && <TaskRows variant="Cards" className="ws-service-cards" rows={rows} activeRowKey={outputProjectKey} labels={{ completed: '已完成', failed: '失败' }} renderActions={renderProjectActions} onActivateRow={row => { const project = projectsByPath.get(row.key); if (project) onAction(project, '运行输出') }} />}
+      {rows.length > 0 && <TaskRows variant="Cards" className="ws-service-cards" rows={rows} activeRowKey={outputProjectKey} labels={{ completed: '已完成', failed: '失败' }} renderActions={renderProjectActions} onActivateRow={row => { const project = projectsByPath.get(row.key); if (project) handleProjectAction(project, '运行输出') }} />}
       {filtered.length === 0 && <div className="ws-empty"><div className="ws-empty-icon">{projects.length ? <Search size={24} strokeWidth={1.4} /> : <FolderOpen size={26} strokeWidth={1.4} />}</div><h2>{projects.length ? '没有匹配的服务' : loading ? '正在读取工作区…' : data?.workspaceFile && !data.folders.length ? '工作区还没有文件夹' : data?.workspaceRoot ? '还没有发现可启动服务' : '从一个工作区开始'}</h2><p>{projects.length ? '试试其他名称，或调整项目类型。' : data?.workspaceFile && !data.folders.length ? '添加本地文件夹到工作区，保存后也可以在 VS Code 中打开。' : data?.workspaceRoot ? '只列出具有真实 Java 启动入口或 Node.js 启动脚本的工程。' : '配置本地项目目录，让项目井然有序。'}</p>{projects.length ? <button className="ws-outline-button" onClick={() => { setQuery(''); setFilter('all') }}><X size={13} />清除筛选</button> : !loading && !readOnlyShare && <button className="ws-outline-button" onClick={onConfigure}><FolderOpen size={14} />{data?.workspaceFile && !data.folders.length ? '添加文件夹' : '配置工作区'}</button>}</div>}
     </div>
   </section>

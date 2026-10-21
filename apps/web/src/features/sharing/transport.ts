@@ -19,6 +19,7 @@ export async function shareRequest<T>(url: string, options: RequestInit): Promis
   else if (method === 'POST' && path === '/api/workspace/git/blame') read = { type: 'git_blame', path: body.path }
   else if (method === 'POST' && path === '/api/workspace/git/repositories') read = { type: 'git_repositories', force: body.force === true }
   else if (method === 'POST' && path === '/api/workspace/git/status') read = { type: 'git_status', force: body.force === true }
+  else if (method === 'POST' && ['/api/workspace/git/history/overview', '/api/workspace/git/sync'].includes(path)) { const { expectedRevision: _, ...fields } = body; read = { ...fields, type: path.endsWith('/overview') ? 'git_history_overview' : 'git_sync' } }
   else if (method === 'POST' && ['/api/workspace/git/history', '/api/workspace/git/history/commit', '/api/workspace/git/history/diff'].includes(path)) { const { expectedRevision: _, ...fields } = body; read = { ...fields, type: path.endsWith('/commit') ? 'git_history_commit' : path.endsWith('/diff') ? 'git_history_diff' : 'git_history' } }
   else if (method === 'POST' && path === '/api/workspace/git/diff') read = { type: 'git_diff', repository: body.repository, version: body.version, path: body.path }
   else throw new Error('当前分享为只读模式。')

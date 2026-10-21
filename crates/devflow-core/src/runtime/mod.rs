@@ -2,6 +2,7 @@
 pub mod java;
 pub mod node;
 mod ports;
+mod presentation;
 pub(crate) mod process;
 use crate::workspace::{DetectedProject, ProjectKind, detect_projects};
 use serde::Serialize;
@@ -23,6 +24,9 @@ pub struct ProjectRuntime {
     pub node_pids: Vec<u32>,
     pub pids: Vec<u32>,
     pub java_pids: Vec<u32>,
+    pub primary_pids: Vec<u32>,
+    pub processes: Vec<ProjectProcess>,
+    pub listeners: Option<Vec<ProjectListener>>,
     pub listening_ports: Option<Vec<u16>>,
     pub port_error: Option<String>,
     pub memory_bytes: Option<u64>,
@@ -30,6 +34,24 @@ pub struct ProjectRuntime {
     pub uptime_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub managed_state: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectProcess {
+    pub pid: u32,
+    pub parent_pid: Option<u32>,
+    pub name: String,
+    pub role: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectListener {
+    pub pid: u32,
+    pub port: u16,
+    pub purpose: String,
+    pub purpose_source: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -273,16 +295,34 @@ impl RuntimeService {
             sampled_at,
             projects: aggregate_with_managed(&projects, &observations, sampled_at, cores, managed),
         };
-        apply_listeners(&mut snapshot.projects, ports::listeners());
+        apply_listeners_with_processes(&mut snapshot.projects, ports::listeners(), &observations);
         sampler.cached = Some((Instant::now(), cache_key, snapshot.clone()));
         Ok(snapshot)
     }
 }
 
+#[cfg(test)]
 fn apply_listeners(projects: &mut [ProjectRuntime], listeners: io::Result<ports::Listeners>) {
+    apply_listeners_with_processes(projects, listeners, &[]);
+}
+
+fn apply_listeners_with_processes(projects: &mut [ProjectRuntime], listeners: io::Result<ports::Listeners>, processes: &[Observation]) {
+    let by_pid: HashMap<u32, &Observation> = processes.iter().map(|process| (process.pid, process)).collect();
     for project in projects {
         match &listeners {
             Ok(listeners) => {
+                let mut details = Vec::new();
+                for pid in &project.pids {
+                    if let Some(ports) = listeners.get(pid) {
+                        for port in ports {
+                            let process = by_pid.get(pid).copied();
+                            let (purpose, source) = presentation::port_purpose(process, *port);
+                            details.push(ProjectListener { pid: *pid, port: *port, purpose: purpose.into(), purpose_source: source.into() });
+                        }
+                    }
+                }
+                details.sort_by_key(|listener| (listener.port, listener.pid));
+                project.listeners = Some(details);
                 let ports: std::collections::BTreeSet<_> = project
                     .pids
                     .iter()
@@ -294,6 +334,7 @@ fn apply_listeners(projects: &mut [ProjectRuntime], listeners: io::Result<ports:
                 project.port_error = None;
             }
             Err(err) => {
+                project.listeners = None;
                 project.listening_ports = None;
                 project.port_error = Some(err.to_string());
             }
@@ -620,6 +661,7 @@ fn aggregate_with_managed(
                 .map(|p| p.pid)
                 .collect();
             java_pids.sort_unstable();
+            let (primary_pids, process_details) = presentation::process_details(&members, project, managed);
             let has_members = !members.is_empty();
             let memory = members
                 .iter()
@@ -643,6 +685,9 @@ fn aggregate_with_managed(
                 listening_ports: None,
                 port_error: None,
                 java_pids,
+                primary_pids,
+                processes: process_details,
+                listeners: None,
                 pids,
                 memory_bytes: (has_members && memory > 0).then_some(memory),
                 cpu_percent: has_members
@@ -719,12 +764,44 @@ mod tests {
         );
         assert_eq!(metrics[0].listening_ports, None);
         assert_eq!(metrics[0].port_error.as_deref(), Some("采集超时"));
+        assert!(metrics[0].listeners.is_none());
         let json = serde_json::to_value(&metrics[0]).unwrap();
         assert!(json["listeningPorts"].is_null());
         assert_eq!(json["portError"], "采集超时");
         apply_listeners(&mut metrics, Ok(HashMap::new()));
         assert_eq!(metrics[0].listening_ports, Some(vec![]));
+        assert!(metrics[0].listeners.as_ref().unwrap().is_empty());
         assert_eq!(metrics[0].port_error, None);
+    }
+
+    #[test]
+    fn listener_details_keep_pid_ownership_and_only_label_evidenced_purposes() {
+        let projects = vec![project("app", "d:/code/app")];
+        let mut main = process(10, None, "java.exe", "d:/code/app/app.jar");
+        main.args.push("--server.port=8001".into());
+        let child = process(11, Some(10), "worker.exe", "");
+        let processes = [main, child];
+        let mut metrics = aggregate(&projects, &processes, 20, 1);
+        apply_listeners_with_processes(&mut metrics, Ok(ports::parse_windows_listeners(
+            "TCP 0.0.0.0:8001 0.0.0.0:0 LISTENING 10\n\
+             TCP [::]:8001 [::]:0 LISTENING 10\n\
+             TCP 127.0.0.1:8001 0.0.0.0:0 LISTENING 11\n\
+             TCP [::]:50051 [::]:0 LISTENING 10"
+        )), &processes);
+        let details = metrics[0].listeners.as_ref().unwrap();
+        assert_eq!(details.len(), 3);
+        assert_eq!((details[0].pid, details[0].port, details[0].purpose.as_str()), (10, 8001, "应用服务"));
+        assert_eq!((details[1].pid, details[1].port, details[1].purpose.as_str()), (11, 8001, "用途未知"));
+        assert_eq!((details[2].pid, details[2].port, details[2].purpose_source.as_str()), (10, 50051, "unknown"));
+        assert_eq!(metrics[0].primary_pids, vec![10]);
+        assert_eq!(metrics[0].listening_ports, Some(vec![8001, 50051]));
+        let json = serde_json::to_value(&metrics[0]).unwrap();
+        assert_eq!(json["primaryPids"], serde_json::json!([10]));
+        assert_eq!(json["processes"][1]["name"], "worker.exe");
+        assert!(json["processes"][0].get("args").is_none());
+        let exited = aggregate(&projects, &[], 21, 1);
+        assert!(exited[0].primary_pids.is_empty());
+        assert!(exited[0].processes.is_empty());
     }
 
     #[test]
@@ -747,6 +824,7 @@ mod tests {
         assert_eq!(metrics[0].pids, vec![10, 11]);
         assert_eq!(metrics[0].memory_bytes, Some(2048));
         assert_eq!(metrics[0].listening_ports, Some(vec![15005, 18080]));
+        assert_eq!(metrics[0].primary_pids, vec![10]);
         let stale = vec![("app".into(), 10, 9)];
         assert!(
             aggregate_with_managed(&projects, &processes, 20, 1, &stale)[0]
@@ -818,7 +896,7 @@ mod tests {
         );
         assert_eq!(runtime.self_snapshot().unwrap().pid, first.pid);
     }
-    fn project(name: &str, root: &str) -> RuntimeProject {
+    pub(super) fn project(name: &str, root: &str) -> RuntimeProject {
         RuntimeProject {
             path: name.into(),
             node_script: None,
@@ -829,7 +907,7 @@ mod tests {
             main_classes: Vec::new(),
         }
     }
-    fn process(pid: u32, parent: Option<u32>, name: &str, arg: &str) -> Observation {
+    pub(super) fn process(pid: u32, parent: Option<u32>, name: &str, arg: &str) -> Observation {
         Observation {
             pid,
             parent,

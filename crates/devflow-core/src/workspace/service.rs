@@ -31,7 +31,9 @@ mod replace;
 pub use replace::{ReplacePreviewRequest, ReplaceApplyRequest, ReplacePreview, ReplaceOutcome};
 #[path = "git/mod.rs"]
 mod git;
-pub use git::{GitBlameRequest, GitBlame, BlameCommit, BlameRange, GitHistoryRequest, GitHistoryCommitRequest, GitHistoryDiffRequest, GitHistory, GitHistoryCommit, GitHistoryDiff, HistoryCommit, HistoryFile, GitStatusRequest, GitDiffRequest, GitMutationRequest, GitCommitRequest, GitCommitApplyRequest, GitStatus, GitDiff, GitOutcome, GitCommitPreview};
+pub use git::{GitBlameRequest, GitBlame, BlameCommit, BlameRange, GitHistoryRequest, GitHistoryCommitRequest, GitHistoryDiffRequest, GitHistory, GitHistoryCommit, GitHistoryDiff, HistoryCommit, HistoryFile, GitStatusRequest, GitDiffRequest, GitMutationRequest, GitCommitRequest, GitCommitApplyRequest, GitPushRequest, GitStatus, GitDiff, GitOutcome, GitCommitPreview};
+pub use git::{GitHistoryOverviewRequest, GitHistoryOverview, OverviewCommit, GitSyncRequest, GitSync, GitSyncInfo, GitFetchRequest};
+pub use git::{GitUpdateRequest, GitUpdateProgressRequest, GitMergeRequest, GitResolveRequest, GitUpdateInfo, GitUpdateProgress, GitMergeState, GitConflictContent};
 #[path = "sharing.rs"]
 mod sharing;
 pub use sharing::{ShareCreateRequest, ShareRevokeRequest, ShareInvitation, ShareCreated, ShareReadRequest};
@@ -204,6 +206,7 @@ pub struct WorkspaceService {
     git_operations: std::sync::Arc<std::sync::RwLock<()>>,
     git_cache: std::sync::Arc<git::cache::GitCache>,
     git_plan: std::sync::Arc<Mutex<Option<git::CommitPlan>>>,
+    git_update: std::sync::Arc<Mutex<Option<git::UpdateJob>>>,
     shares: std::sync::Arc<Mutex<HashMap<String, sharing::ShareGrant>>>,
 }
 
@@ -230,6 +233,7 @@ impl WorkspaceService {
             git_operations: std::sync::Arc::new(std::sync::RwLock::new(())),
             git_cache: std::sync::Arc::new(git::cache::GitCache::default()),
             git_plan: std::sync::Arc::new(Mutex::new(None)),
+            git_update: std::sync::Arc::new(Mutex::new(None)),
             shares: std::sync::Arc::new(Mutex::new(HashMap::new())),
         };
         if let Some(path) = initial {

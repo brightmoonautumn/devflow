@@ -19,3 +19,8 @@ Vditor 挂载节点的 className 保持静态，加载可见状态放在独立�
 `GitDiffEditor` 隔离只读 CodeMirror Merge 及布局样式：固定视口、左右/行内切换、差异跳转、未变化区域折叠与有预算的差异计算。隐藏标签不切换布局，长行/大文本跳过语法解析。子模块 SHA 对比为业务侧轻量只读视图，不创建代码编辑器。参考 VS Code 的 Diff 视口及隐藏未变化区域交互，实际实现使用现有 CodeMirror 上游，未引入 Monaco。
 
 Diff 的可选 `onRevert(content, snapshot)` 回调提供差异块还原能力：中间箭头及工具栏只生成新文本，调用方负责校验、持久化和更新快照。`reverting` 控制重复点击；未传回调时不提供还原。只读模型不被第三方内置 revert 直接改写。
+
+
+### ThreeWayMergeEditor
+
+三方合并的纯编辑器边界：接收只读 local/incoming、可编辑 value、精确结果冲突范围和当前块；只通过 onChange/onSave 返回用户操作，不调用 Git 或写文件。三栏视图和窄屏面板切换、CodeMirror 编辑/撤销、标记高亮及比例关联滚动封装于组件。冲突解析、选择双方、保存及合并生命周期位于 features/git。重复代码无法唯一定位时不猜测源侧高亮；不承诺逐行对齐。

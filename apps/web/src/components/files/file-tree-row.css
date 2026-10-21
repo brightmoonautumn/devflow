@@ -1,0 +1,8 @@
+.file-tree-row { display: flex; align-items: center; gap: 5px; min-height: 29px; min-width: 0; color: var(--ws-muted); font-size: var(--ws-font-body); }
+.file-tree-row:hover { background: var(--ws-hover); }
+.file-tree-row > svg { flex-shrink: 0; }
+.file-tree-chevron { display: flex; align-items: center; justify-content: center; flex-shrink: 0; align-self: stretch; width: var(--file-tree-chevron-width, 13px); padding: 0; border: 0; background: none; color: inherit; cursor: pointer; }
+.file-tree-chevron .is-expanded { transform: rotate(90deg); }
+.file-tree-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-tree-separator { color: var(--ws-dim); margin: 0 1px; }
+[role="treeitem"]:focus-visible > .file-tree-row, .file-tree-row[role="treeitem"]:focus-visible { outline: 1px solid var(--ws-accent); outline-offset: -1px; }

@@ -13,6 +13,14 @@ Commit 面板可见且页面可见时，每 5 秒读取核心内存快照；后�
 - **Commit**：勾选文件、填写信息，生成只读预览，点击文件可在右侧 Diff 标签中查看；再次确认才提交。仅提交勾选路径的当前磁盘内容，保留未勾选文件已有的暂存内容。Git hooks、签名和过滤器仍遵循本机 Git 配置；不提供自动 Push、Amend、Shelf、冲突解决或行级提交。
 - **Diff**：HEAD 对比工作区磁盘快照；新增/删除文件一侧为空。宽编辑区使用 CodeMirror MergeView 左右对比，小于 680px 使用统一对比。复用现有语言加载和配色；不引入 Monaco。文本规范化 CRLF 为 LF，二进制、非 UTF-8 或任一侧超过 1 MiB 时只展示说明。预览比较的是磁盘内容，Git 过滤器和 hooks 可能影响最终提交对象。
 
+## 提交树紧凑目录与组件复用
+
+- 默认将连续单子目录合并为一行，例如 `src/main/java/ext/plus`；仓库和 Changes/Unversioned 分组独立，文件保持独立，遇到分叉、文件、截断或每行 32 个路径段的上限停止合并。判断依据是当前分组可见的变更文件，不查询真实磁盘兄弟项，不额外触发目录或 Git 扫描。
+- 文件管理和 Git 共用 `components/files/compactFolders.ts`、`FileTreeRow.tsx` 及样式：统一合并规则、树行、展开箭头、路径标签和方向键/Home/End/Enter/空格导航。文件管理保留路径段选择、复制与右键操作；Git 通过业务控件保留勾选、半选、变更状态、文件数量和 Diff。
+- 两处“紧凑文件夹”按钮共用 `useCompactFolders`，沿用已有浏览器偏好键，同页面即时同步。展开操作以原始目录路径记录整条合并链，关闭紧凑模式后可继续逐层操作；全部展开/折叠仍作用于仓库、分组和目录，后续刷新的新目录继续遵守全局默认状态。
+- 树拓扑按状态快照缓存，勾选、展开和输入提交信息不再重复构造变更目录树。合并保留原始节点引用，勾选范围、计数、Diff 和提交路径仍使用原始变更文件。此调整属于 Web 展示层，HTTP/MCP 的核心业务服务和权限检查保持共用。
+- 本轮仅修改源码和文档并检查差异，未执行编译、类型检查、构建或测试。待人工验收：截图中的长 Java 单路径、单文件目录、目录与文件混排、多分支目录、Changes/Unversioned 与多仓库隔离、父目录勾选和半选、Diff、模式切换、刷新后链条分叉、全部展开/折叠、截断列表、中文及 Windows 路径、明暗主题与 400–550px 分屏、文件管理逐段菜单/复制及两处键盘导航。
+
 ## 子模块与多仓库
 
 通过 Git 索引 mode `160000` 发现已初始化子模块，支持嵌套子模块及 `.git` 为文件的情况。父仓库仅显示 `pointerChanged` 的子模块引用更新行；只有子仓库未提交文件变化、HEAD 引用未改变的行不在父仓库展示，也不计入分组数量。子仓库仍独立显示其内部的文件改动，没有可展示变化的仓库分组自动隐藏。子仓库也可以作为显式工作区根目录，按规范路径去重后仍保留父子关系。
@@ -104,9 +112,9 @@ Git 树默认仅展开 Changes/Unversioned Files 两个分组，仓库与目录�
 
 Commit 顶部的 History 图标打开独立工具标签页，不占普通文件的 12 标签配额。页面参考 IDEA 的提交图 + 右侧文件/说明结构，使用现有主题与公共 BaseSelect、BaseInput、BaseButton、TreeEntryIcon。宽区域左右布局，小于 700px 改为上下布局，各面板独立滚动。切换标签保留当前历史列表、选中提交、详情与滚动；关闭历史标签、切换工作区 revision 或硬刷新后重新读取，不将 Git 对象写入浏览器持久缓存。
 
-- 仓库选择包含父仓库与已初始化子模块，分别查看各自历史。
-- 提交列表按 Git 拓扑顺序展示父子连线、主题、作者、时间和 HEAD/分支/标签引用；图最多显示 32 个轨道，更多轨道在边缘合并显示。每次按需读取 50 条，通过“加载更多”继续，不做定时全历史扫描。
-- 默认遍历本机全部引用与 HEAD，可选择当前 HEAD 或已有本地/远程跟踪分支、标签；不会 fetch，因此远程跟踪引用展示本地已知状态。“搜索提交信息”采用不区分大小写的字面量 message 搜索，提交表单后请求。
+- 首次打开默认聚合全部已发现、已授权的仓库（包含父仓库与已初始化子模块）。仓库筛选支持搜索、多选、全选、清空、仅看某仓库和该仓库及全部子仓库；用户手动选择在 sessionStorage 按工作区保存，仅存筛选偏好。Blame/子模块定位临时聚焦目标仓库，不覆盖手动偏好。
+- 聚合列表按各仓库下一条提交的 committer 时间交错展示，保留每个仓库内部的 Git 拓扑顺序；显示仓库短名和稳定色条、主题、作者、时间、HEAD/本地分支/远程跟踪分支/标签。身份与图节点均为“仓库 + SHA”，同 SHA 在不同仓库不合并，也不跨仓库连线。轨道不超过 32 时显示完整图；轨道更多时使用仓库标识总览并提示聚焦查看，550px 以下收起图并采用紧凑换行。每次 50 条，使用核心聚合游标继续，不定时扫描历史。
+- 默认遍历本机全部引用与 HEAD，多仓库可选择“全部分支”或各仓库“当前 HEAD”；聚焦单仓库后可选择具体本地/远程跟踪分支或标签。本地历史刷新不联网，独立 Fetch 操作获取上游状态，因此远程跟踪引用展示本机已知状态。“搜索提交信息”采用不区分大小写的字面量 message 搜索，提交表单后请求。
 - 选择提交，右上显示该提交相对父提交的变更文件树，右下显示说明、作者/邮箱、时间、SHA 和引用。合并提交默认对比第一个父提交，可切换直接父提交；根提交对比空树。文件树逐层展开。当前实现不做重命名相似度计算，重命名按删除 + 新增展示。
 - 点击历史文件打开共享 Diff 组件，左右标题明确标明父提交和所选提交，标签名称包含短 SHA；同一文件不同提交/父节点使用不同标签键。历史 Diff 读取不可变 Git blobs，工作区未保存或已修改内容不混入；无还原箭头或保存操作。子模块的历史指针复用左右 SHA 视图。
 
@@ -167,3 +175,85 @@ History 编译反馈修复：进程成功状态使用项目 Git Output 的 `code
 补充缓存预算、工作区切换、分享键隔离、子仓库事件失效的单测源码，以及默认忽略的临时 Git 仓库场景：目录查询不触发状态、快照复用、外部变更后旧版本 Diff/提交预览拒绝。按用户约定未编译、构建或运行测试；仅检查源码与差异空白。待验收多仓库首次分批显示、再次进入速度、外部修改自动更新、子模块提交后的父引用、监听失败兜底、分享撤销、工作区切换与内存稳定性。
 
 缓存编译警告修复：将 metadata、remember_metadata、topology、install、request、result 六个仅供 Git 模块使用的方法收窄为 `pub(super)`，与 Metadata/Repository 类型可见范围一致；不扩大内部类型暴露范围，不改变运行行为。按约定未重新编译或运行测试。
+
+
+## 删除标识与 Commit and Push
+
+- Changes 中 `kind=deleted` 的文件名增加删除线，文字和文件图标使用主题灰色，保留右侧 Git 状态、正常复选框及 Diff 点击行为；选中行仍可辨识删除。
+- 提交区并排提供主按钮 `Commit` 和次按钮 `Commit and Push…`，沿用所选文件的 Diff 预览确认。确认区明确显示是否推送；推送会包含该分支尚未推送的历史提交。普通 Commit 仍只在本地提交。
+- `POST /api/workspace/git/commit/apply` / MCP `workspace_git_commit_apply` 新增可选 `push`，默认 false，旧请求兼容。核心在创建任何提交前验证所有所选仓库的当前分支和唯一配置上游，缺失上游时不产生本地提交；不自动选择 origin 或创建远端分支。
+- 推送由 devflow-core 的同一服务执行，HTTP/MCP 仅适配。每个成功创建的提交使用完整 SHA 和显式上游 refspec，仅推送到已配置远端的一个分支；禁用 force、follow-tags、mirror 和递归子模块推送。发送前再次检查分支、上游和 HEAD；不自动 fetch、merge、修改远端配置或跳过 hooks。
+- 返回的各仓库结果新增 `pushed` 和 `pushError`，本地提交失败继续使用原有 `error`。推送失败保留本地提交 SHA 和已提交路径，提示失败原因；面板提供“重试 Push”，只重试已有提交，不再次生成 commit。重试状态仅在当前面板会话保留，重新打开后可使用 Git/IDE 或 MCP 继续推送。
+- 独立 `POST /api/workspace/git/push` / MCP `workspace_git_push` 接受 `{ expectedRevision, repository, expectedHead }`。使用相同认证、活动工作区成员与规范路径检查、Git 写锁、HEAD 检查及缓存失效；拒绝合并中仓库。只读分享无提交或推送入口。
+- 复用现有 Git 执行器，每次提交/推送命令最多 120 秒，输出有界，Windows 超时清理进程树。前端总请求预算覆盖最多 32 仓库分别提交和推送；超时或连接中断后应重新确认实际远端状态。
+- 新增默认忽略的本地临时仓库测试源码，覆盖中文/空格路径、bare 上游正常推送、非快进拒绝后保留本地提交、同 SHA 重试、错误 HEAD、认证/revision、缺失上游阻止提交以及普通 Commit 兼容；MCP 目录与 revision schema 检查同步更新。按约定未编译、构建或执行测试，仅检查源码和差异格式。待验收：删除/选中/明暗主题、双按钮和预览文案、多仓库部分成功、凭证/网络失败、未配置上游、非快进拒绝、重试、子模块独立推送及 Windows 超时清理。
+
+
+## Update Project 与三栏合并
+
+Git 面板顶部新增下载图标（Update Project），仓库行提供单仓库入口；打开独立的 Update / Merge 工具标签，不占普通文件标签配额。更新页列出各仓库当前分支、已配置的上游、本地阻塞原因和逐仓库结果。默认选择可更新仓库，用户确认范围后逐个执行；遇到冲突或失败暂停剩余仓库，已完成仓库不会回滚。更新前要求暂存区、已跟踪工作区（包含子模块状态）干净；未跟踪文件由 Git 自身检查覆盖风险。无上游、无提交、Detached HEAD、进行中的其他 Git 操作会阻止更新。不自动 Stash、Rebase、Push，不初始化或递归下载子模块。
+
+### 更新任务
+
+核心位于 `crates/devflow-core/src/workspace/git/update.rs`，由 WorkspaceService 同时提供 HTTP/MCP。检查生成包含本地 HEAD、分支、完整已跟踪状态、索引、上游名称及仓库配置的版本；启动必须回传。后台线程执行 Fetch 后再次校验本地版本和工作区 revision，再合并已获取的确定提交。Fetch 仅访问当前分支配置的远端和上游分支；能快进则快进，分叉且无冲突时由 Git 完成合并提交，保留 hooks/签名。获取阶段与合并阶段分别显示，不承诺网络百分比。
+
+进程内同时只允许一个更新任务，保留最近一个任务状态；阶段为 queued/fetching/merging/completed/conflicts/failed。Fetch 上限 180 秒，合并沿用 120 秒，复用现有输出预算和进程树清理；禁止终端提示和 GCM 交互，使用本机已有凭据，认证失败显示 Git 错误。未增加凭据输入表单。关闭/刷新浏览器不取消已经启动的 Git 进程；后台任务可通过 progress 继续查询。服务重启不恢复任务日志，但以 Git 实际 MERGE_HEAD/索引恢复合并现场。超时或传输中断后应刷新确认真实 Git 状态，不能认定工作区没有变化。
+
+### 冲突处理
+
+Git 面板显示 Merge Conflicts 分组。主区域宽屏三栏按“本地当前分支（只读）｜合并结果（可编辑）｜远端上游（只读）”排列；小于 1050px 切换本地/结果/远端面板，支持展开视图，400–550px 将文件列表放在顶部。普通文本的 Base/Local/Incoming 来自 Git 索引 1/2/3 阶段；缺少 Base 的双方新增冲突使用空 Base。中间初始内容为 Git 已自动合并的工作文件，冲突标记用于定位待处理块，支持 merge/diff3/zdiff3 和自定义标记长度。
+
+- 支持上一处/下一处、采用本地块/远端块、按明确顺序保留双方、手动编辑、撤销重做和共同祖先查看。
+- 关联滚动按滚动比例同步，不承诺 IDEA 级别的逐行空白补齐；源侧只在选中块能唯一定位时高亮，避免重复代码定位错误。结果区精确标记未解决块。
+- 不自动保存合并草稿。点击“保存并标记已解决”或结果区 Ctrl/Cmd+S，才写文件并仅暂存该冲突路径。保存前校验索引、HEAD、MERGE_HEAD 和变更文件快照；出现外部变化时拒绝写入，重新读取需要确认放弃草稿。
+- 文本每侧最多 1 MiB，保留工作文件的 UTF-8 BOM 和 LF/CRLF/CR；整文件采用某一侧时使用该侧 Git blob，并保留对应可执行模式。修改/删除冲突可选择缺失一侧来接受删除。
+- 二进制、非 UTF-8 或超过 1 MiB 的文件不提供文本编辑；每侧 blob/工作文件不超过 8 MiB 时可整文件选择本地或远端。超过预算、符号链接、子模块指针和复杂目录/重命名冲突引导外部处理。不会用空文本覆盖不支持的对象。
+- 单次合并最多 2000 个变更/冲突路径，索引和变更工作文件快照总预算 32 MiB。超过限制要求外部处理；不扫描依赖目录的未跟踪文件。
+
+所有冲突解决并暂存后，可检查提交信息并“完成合并”，提交整个合并索引，与现有部分文件 Commit 分开；存在未暂存修改或冲突时拒绝完成。提供“中止合并”，确认后执行 Git merge --abort，额外的非冲突未暂存修改会阻止中止，不使用 reset --hard；新建的无关未跟踪文件保留。对外部工具开始的合并也可读取现场，但应先检查整个合并暂存区再完成。
+
+更新前检查浏览器中的仓库文件草稿/读取/保存状态；更新期间锁定该仓库普通编辑器并暂停自动保存。工作文件合并期间由核心标记只读，只允许 Merge 专用保存；合并保存仍检查受保护工作区配置、只读权限和规范路径边界。更新结束和保存/完成/中止后刷新文件树、干净文件标签、Git 状态与 History。前端独立轮询任务状态，浏览器刷新后仍能发现进行中的任务；分享页面不显示入口，分享服务不开放以下端点。
+
+| HTTP POST（前缀 /api/workspace/git/） | MCP | 用途 |
+| --- | --- | --- |
+| update/check | workspace_git_update_check | expectedRevision、repository，检查本地更新条件并返回 version |
+| update/start | workspace_git_update_start | expectedRevision、repository、version，启动后台更新 |
+| update/progress | workspace_git_update_progress | expectedRevision，可选 jobId，返回最近任务或 null |
+| merge/status | workspace_git_merge_status | expectedRevision、repository，读取合并现场与版本 |
+| merge/file | workspace_git_merge_file | 同上，加 path，读取三方内容与结果 |
+| merge/resolve | workspace_git_merge_resolve | expectedRevision、repository、version、path、choice，edit 时加 content |
+| merge/finish | workspace_git_merge_finish | expectedRevision、repository、version，可选 message，提交合并索引 |
+| merge/abort | workspace_git_merge_abort | expectedRevision、repository、version，中止前需确认丢弃合并结果 |
+
+新增冲突阶段解析/中文路径/文本预算/冲突标记单测源码，以及默认忽略的真实 Git 临时仓库场景：快进、鉴权、本地脏状态和旧版本拒绝、Fetch 后冲突、重建服务后恢复、旧快照拒绝覆盖、完成合并双父提交、中止保留额外修改、修改/删除及未跟踪文件保留。按用户约定未编译、构建或运行测试；仅进行源码复核和差异空白检查。待用户验证：实际远端凭据与网络错误、多仓库暂停/结果、中文/空格路径、文本/删除/二进制冲突、CRLF/BOM、块操作与撤销、页面刷新恢复、外部 Git 修改、hook/签名失败、明暗主题和窄屏/展开。
+
+
+## 多仓库历史总览与上游状态
+
+### HTTP / MCP 共用核心
+
+| HTTP POST | MCP | 请求与行为 |
+| --- | --- | --- |
+| `/api/workspace/git/history/overview` | `workspace_git_history_overview` | expectedRevision，选填 repositories（空/省略为全部已发现仓库）、reference、query、limit、cursor；返回包含 repository 的 commits、nextCursor、references、warnings |
+| `/api/workspace/git/sync` | `workspace_git_sync` | expectedRevision，选填 repositories；只比较本机当前分支和上游引用，不扫描工作区、不联网；返回各仓库 branch/upstream/ahead/behind/version/canFetch/reason/lastFetchedAt |
+| `/api/workspace/git/fetch` | `workspace_git_fetch` | expectedRevision、repository、version（来自 sync）；只获取当前分支配置的上游；返回新的单仓库 sync 信息 |
+
+核心位于 `git/overview.rs` 和 `git/remote.rs`；旧单仓库 history、详情和 Diff 请求兼容。HTTP/MCP 都只调用 WorkspaceService，不在前端拼接各仓库的分页或计算同步业务规则。
+
+- 总览最多 64 仓库、每页 1–100 条（默认 50）。核心按批次使用最多 4 个有作用域的读线程；复用有界 Git CLI，无新依赖和递归项目扫描。各仓库保持单独 offset 和全 refs/HEAD 版本；游标绑定工作区 revision、规范仓库集合、分支与查询。读取末尾复查每个仓库的版本与授权，任何仓库引用变化都拒绝继续旧分页。
+- 每个仓库最多跳过 10000 条；达到边界时停止继续翻页并提示缩小搜索。聚合候选序列化内容预算 32 MiB、游标 32 KiB；每 4 仓库批次之间检查 90 秒预算，单个 Git 只读命令仍最多 15 秒，当前批次须等待其有界命令结束。预算不是硬实时或整个进程 RSS 上限。
+- 上游比较使用同一 refs 快照中的完整 SHA 计算 `ahead/behind`，不会把“获取到本机对象库”当成“已合并到本地分支”。页面明确显示“与已知上游一致”“↑ N 待推送”“↓ N 待更新”“↑ N ↓ N 已分叉”“未设置上游/Detached HEAD/状态未知”，颜色仅辅助表达；HEAD、本地和远程标签分别着色。
+- `lastFetchedAt` 仅记录当前会话中成功的显式 Fetch 或 Update Project 的 fetch 阶段，不推断其他 Git 工具的成功获取时间；未知时显示“获取时间未知”。记录按工作区缓存代次隔离，配置/目标变化后不套用旧时间，切换工作区或进程重启释放。
+- Fetch 要求认证、活动 workspace revision、规范仓库成员、上游检查版本及全局 Git 写锁。目标仅来自已配置远端和唯一上游分支，以显式 refspec 更新 `refs/remotes/*`；允许跟踪远端的强制改写，但不会更新本地分支。使用 atomic、no-tags、no-recurse-submodules，不合并、不 rebase、不 stash、不 push、不改远端配置。复用 120 秒 Git 网络命令超时、输出预算与 Windows 进程树清理。
+- 前端按仓库顺序执行 Fetch，显示当前进度，汇总成功和失败，失败仓库不遮蔽已完成的结果；全部结束后重读历史和本地上游状态。关闭/切换工作区会停止后续请求；已经进入核心的单次命令仍由自身超时结束。刷新本地历史和 Fetch 是两个明确的按钮。
+- 历史文件中的已初始化、已授权 gitlink 增加“查看子仓库提交”入口，打开指针记录的目标 SHA，不修改子仓库 HEAD；原先的指针 Diff 仍保留。本机尚无该目标对象时提示 Git 读取错误，不自动下载。Blame 定位和页外提交继续按所属仓库正确展示。
+- 只读分享增加封闭的 `git_history_overview`、`git_sync` 动作，继续使用邀请的独立工作区范围和撤销/过期检查；不开放 Fetch/Push。分享 read 请求体上限单独增加至 64 KiB 以容纳仓库筛选与游标，其余分享入口仍为 16 KiB。分享的 Fetch 时间与缓存按邀请隔离，未记录时显示未知。
+
+### 验证状态
+
+新增默认忽略的本地 UUID 临时仓库测试源码：相同 SHA 在两个仓库各自出现、连续聚合分页不漏不重且保持仓库内拓扑、跨仓库搜索、筛选/引用变化使游标失效、认证/revision/工作区边界；初始一致、远端前进但未 Fetch 时仍为旧快照、Fetch 后 behind、分叉、远端改写后只更新 tracking ref、HEAD/index/未提交磁盘内容保留、无效版本/目标分支缺失、Detached HEAD、未设置上游、gitlink 跳转不 checkout。同步补充 committer 时间解析、只读协议拒绝 Fetch/Push 与 MCP 工具目录 schema 测试源码。
+
+按项目约定未编译、构建或运行测试，也没有对用户仓库执行 Fetch/Push。仅阅读源码并检查差异格式。待用户编译验收：大量仓库加载与分页、筛选偏好/新仓库加入、相同 SHA 与分支标签颜色、单仓库图/多仓库总览、400–550px 明暗主题、Blame/子模块跳转、Fetch 成功/部分失败/超时、获取时间与上游状态、不改变本地工作区以及邀请只读权限。
+
+
+Update Project 编译反馈修复：刷新按钮的 Promise 回调改为 async 条件分支，有仓库时等待 loadMerge，空仓库时正常结束，统一返回 Promise<void>，消除空字符串与 GitMergeState 的联合返回类型引起的 TS2345。按约定未重新编译或运行测试。
