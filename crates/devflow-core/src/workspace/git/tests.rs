@@ -1,4 +1,44 @@
 use super::*;
+
+#[test]
+fn large_status_only_allocates_display_limit_and_one_overflow_entry() {
+    let mut bytes = b"# branch.oid (initial)\0# branch.head main\0".to_vec();
+    for index in 0..20_000 {
+        bytes.extend_from_slice(format!("? 中文目录/文件 {index}.txt\0").as_bytes());
+    }
+    let (head, branch, changes) = parse_status(&bytes).unwrap();
+    assert_eq!(head, None);
+    assert_eq!(branch, "main");
+    assert_eq!(changes.len(), MAX_STATUS_CHANGES + 1);
+    assert_eq!(changes[0].path, "中文目录/文件 0.txt");
+    assert!(changes.iter().all(|file| file.untracked));
+}
+
+#[test]
+#[ignore = "requires Git; uses only UUID-scoped temporary repositories"]
+fn adding_folder_file_selection_moves_only_those_files_out_of_untracked_after_refresh() {
+    let fixture = Fixture::new(); let root = fixture.init("添加 中文目录");
+    fs::create_dir_all(root.join("新目录/子目录")).unwrap();
+    fs::write(root.join("新目录/文件 一.txt"), "one\n").unwrap();
+    fs::write(root.join("新目录/子目录/文件 二.txt"), "two\n").unwrap();
+    fs::write(root.join("其他文件.txt"), "keep untracked\n").unwrap();
+    let service = fixture.service(&root); let revision = service.snapshot().unwrap().revision;
+    let read = || service.git_status(GitStatusRequest { expected_revision: revision, force: true }, true).unwrap();
+    let before = read(); let repo = &before.repositories[0];
+    let paths: Vec<_> = repo.changes.iter().filter(|file| file.untracked && file.path.starts_with("新目录/")).map(|file| file.path.as_str()).collect();
+    assert_eq!(paths.len(), 2);
+    let result = service.git_mutate(GitMutationRequest { expected_revision: revision, selections: vec![selection(repo, &paths)], operation: Mutation::Add }, true).unwrap();
+    assert!(result.results[0].error.is_none());
+    assert_eq!(result.results[0].paths.len(), 2);
+    let after = read(); let repo = &after.repositories[0];
+    assert_ne!(repo.version, before.repositories[0].version);
+    for path in paths {
+        let file = repo.changes.iter().find(|file| file.path == path).unwrap();
+        assert!(!file.untracked);
+        assert_eq!(file.kind, "added");
+    }
+    assert!(repo.changes.iter().any(|file| file.path == "其他文件.txt" && file.untracked));
+}
 #[path = "update_tests.rs"]
 mod update_tests;
 #[path = "overview_tests.rs"]

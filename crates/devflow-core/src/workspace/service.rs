@@ -17,6 +17,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "terminal.rs"]
+mod terminal;
+pub use terminal::{TerminalRequest, TerminalOperation, TerminalResponse, TerminalStreamPage};
+
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_FOLDERS: usize = 512;
 
@@ -196,6 +200,7 @@ struct LocalGrants {
 /// One instance is shared by HTTP and MCP; native selections grant session access.
 #[derive(Clone)]
 pub struct WorkspaceService {
+    terminals: std::sync::Arc<Mutex<terminal::TerminalRegistry>>,
     roots: Vec<PathBuf>,
     local_grants: std::sync::Arc<Mutex<LocalGrants>>,
     picker: std::sync::Arc<Mutex<()>>,
@@ -223,6 +228,7 @@ impl WorkspaceService {
             }
         }
         let service = Self {
+            terminals: std::sync::Arc::new(Mutex::new(terminal::TerminalRegistry::default())),
             roots: canonical,
             local_grants: std::sync::Arc::new(Mutex::new(LocalGrants::default())),
             picker: std::sync::Arc::new(Mutex::new(())),
@@ -603,6 +609,7 @@ impl WorkspaceService {
         if state.revision != request.expected_revision {
             return Err(error("conflict", "工作区已被其他入口修改，请刷新后重试"));
         }
+        let reset_terminals = !matches!(&request.operation, WorkspaceOperation::AddFolder { .. } | WorkspaceOperation::RemoveFolder { .. } | WorkspaceOperation::Save { .. });
         match request.operation {
             WorkspaceOperation::Close => {
                 check_discard(&state, request.discard_changes)?;
@@ -775,6 +782,9 @@ impl WorkspaceService {
             }
         }
         state.revision += 1;
+        // Switching workspaces closes all shells; editing folders retains only
+        // terminals whose original working directory remains authorized.
+        self.reconcile_terminals(&state, reset_terminals)?;
         self.git_cache.clear_scope();
         state.notice = self.persist_recent(&state).err().map(|err| format!("当前位置已打开，但记忆失败，下次重启可能无法恢复：{err}"));
         self.snapshot_of(&state)

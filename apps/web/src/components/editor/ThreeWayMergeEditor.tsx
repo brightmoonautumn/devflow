@@ -5,6 +5,8 @@ import { basicSetup } from 'codemirror'
 import { defaultKeymap, historyKeymap } from '@codemirror/commands'
 import { colors } from './SourceEditor'
 import { loadEditorLanguage } from './editorLanguages'
+import { editorPhrases } from './editorPhrases'
+import { editorSearch } from './editorSearch'
 
 type Range = { from: number; to: number }
 const highlight = StateEffect.define<Range[]>()
@@ -44,7 +46,7 @@ export default function ThreeWayMergeEditor({ path, local, incoming, value, rang
     const labels = ['本地 · 当前分支', '合并结果 · 可编辑', '远端 · 上游分支']
     const editors = data.map((doc, index) => {
       const language = new Compartment()
-      const extensions = [basicSetup, colors, language.of([]), highlights,
+      const extensions = [basicSetup, editorPhrases, editorSearch, colors, language.of([]), highlights,
         keymap.of([...defaultKeymap, ...historyKeymap, { key: 'Mod-s', preventDefault: true, run: () => { if (index === 1) callbacks.current.onSave(); return true } }]),
         EditorView.contentAttributes.of({ 'aria-label': `${labels[index]} ${path}`, spellcheck: 'false' }),
         EditorView.updateListener.of(update => { if (index === 1 && update.docChanged) callbacks.current.onChange(update.state.doc.toString()) }),

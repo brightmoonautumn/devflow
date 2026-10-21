@@ -11,6 +11,7 @@ import { javaStartOperation, readJavaLaunchConfig } from '../features/runtime/ja
 import { NodeLaunchDialog } from '../features/runtime/NodeLaunchDialog'
 import { readNodeLaunchConfig } from '../features/runtime/nodeLaunchConfig'
 import { JavaLaunchDialog } from '../features/runtime/JavaLaunchDialog'
+import { TerminalPanel } from '../features/terminal/TerminalPanel'
 import { RuntimeConsole } from '../features/runtime/RuntimeConsole'
 import { WorkspacePage } from '../features/workspace/WorkspacePage'
 import { WorkspaceManager, type WorkspaceManagerMode } from '../features/workspace/WorkspaceManager'
@@ -32,6 +33,7 @@ export function App() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [panel, setPanel] = useState<Panel | null>(null)
+  const [terminalOpen, setTerminalOpen] = useState(false)
   const [launchProject, setLaunchProject] = useState<Project | null>(null)
   const pendingProjectActions = useRef(new Set<string>())
   const [managingWorkspace, setManagingWorkspace] = useState<WorkspaceManagerMode | null>(null)
@@ -68,6 +70,16 @@ export function App() {
     }
     window.addEventListener('keydown', search)
     return () => { window.removeEventListener('keydown', search); clearTimeout(timer) }
+  }, [])
+  useEffect(() => {
+    if (readOnlyShare) return
+    const toggleTerminal = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.code === 'Backquote') {
+        event.preventDefault(); setTerminalOpen(value => !value)
+      }
+    }
+    window.addEventListener('keydown', toggleTerminal)
+    return () => window.removeEventListener('keydown', toggleTerminal)
   }, [])
   useEffect(() => {
     if (!readOnlyShare) return
@@ -150,7 +162,7 @@ export function App() {
   useEffect(() => {
     function dismiss(event: KeyboardEvent) {
       if (event.defaultPrevented) return
-      if (event.key === 'Escape') { setPanel(null); setWorkspaceMenu(false) }
+      if (event.key === 'Escape') { setTerminalOpen(false); setPanel(null); setWorkspaceMenu(false) }
     }
     window.addEventListener('keydown', dismiss)
     return () => window.removeEventListener('keydown', dismiss)
@@ -200,6 +212,7 @@ export function App() {
   async function projectAction(project: Project, title: string) {
     if (readOnlyShare && title !== '运行输出') return
     if (title === '启动配置') { setLaunchProject(project); return }
+    setTerminalOpen(false)
     setPanel({ title: title === 'JVM 诊断' ? 'JVM 诊断 / Arthas' : '运行输出', project: project.name, runtimeProject: project, description: '' })
     if (title !== '启动项目' && title !== '停止项目' && title !== 'Arthas 挂载') return
     if (pendingProjectActions.current.has(projectKey(project)) || !data) return
@@ -296,10 +309,11 @@ export function App() {
             <WorkspacePage key={data?.folders.map(folder => folder.path).join('|') ?? 'empty'} query={query} onQueryChange={setQuery} data={data} loading={loading} monitoringEnabled={connected} outputProjectKey={panel?.runtimeProject ? projectKey(panel.runtimeProject) : undefined} onRefresh={() => void load()} onConfigure={() => manage(hasWorkspace ? 'add_folder' : 'open')} onAction={projectAction} />
           </main>
         </FileWorkbench>
-        {panel && (panel.runtimeProject && data ? <RuntimeConsole key={projectKey(panel.runtimeProject)} project={panel.runtimeProject} revision={data.revision} title={panel.title} description={panel.description} onClose={() => setPanel(null)} /> : <ResizableBottomPanel title={panel.title} project={panel.project} description={panel.description} onClose={() => setPanel(null)} />)}
+        {!readOnlyShare && <TerminalPanel workspace={data} visible={terminalOpen} theme={theme} onClose={() => setTerminalOpen(false)} />}
+        {!terminalOpen && panel && (panel.runtimeProject && data ? <RuntimeConsole key={projectKey(panel.runtimeProject)} project={panel.runtimeProject} revision={data.revision} title={panel.title} description={panel.description} onClose={() => setPanel(null)} /> : <ResizableBottomPanel title={panel.title} project={panel.project} description={panel.description} onClose={() => setPanel(null)} />)}
       </div>
     </div>
-    <footer className="statusbar"><span className={`connection ${connected ? 'online' : ''}`}><i />{loading ? '正在连接' : connected ? readOnlyShare ? '分享已连接 · 只读' : '本地已连接' : '未连接'}</span><button className={panel ? 'selected' : ''} aria-expanded={panel !== null} onClick={() => setPanel(panel ? null : output)}><PanelBottom size={13} />运行输出</button>{error ? <div className="service-error" title={`连接失败：${error}`}><span role="status" aria-label={`连接失败：${error}`}>本地服务未连接</span><button disabled={loading} aria-label="重试连接本地服务" onClick={() => void load()}>{loading ? '连接中…' : '重试'}</button></div> : <span className="status-version">DevFlow · 0.1.0</span>}</footer>
+    <footer className="statusbar"><span className={`connection ${connected ? 'online' : ''}`}><i />{loading ? '正在连接' : connected ? readOnlyShare ? '分享已连接 · 只读' : '本地已连接' : '未连接'}</span><button className={panel && !terminalOpen ? 'selected' : ''} aria-expanded={panel !== null && !terminalOpen} onClick={() => { setTerminalOpen(false); setPanel(panel && !terminalOpen ? null : output) }}><PanelBottom size={13} />运行输出</button>{!readOnlyShare && <button className={terminalOpen ? 'selected' : ''} aria-expanded={terminalOpen} title="终端 · Ctrl+`" onClick={() => setTerminalOpen(value => !value)}><PanelBottom size={13} />终端</button>}{error ? <div className="service-error" title={`连接失败：${error}`}><span role="status" aria-label={`连接失败：${error}`}>本地服务未连接</span><button disabled={loading} aria-label="重试连接本地服务" onClick={() => void load()}>{loading ? '连接中…' : '重试'}</button></div> : <span className="status-version">DevFlow · 0.1.0</span>}</footer>
     {managingWorkspace && <WorkspaceManager key={managingWorkspace} mode={managingWorkspace} data={data} onChange={applyWorkspace} onRefresh={() => void load()} onClose={() => { setManagingWorkspace(null); workspaceTrigger.current?.focus() }} />}
     {launchProject && data && (launchProject.kind === 'node' ? <NodeLaunchDialog key={projectKey(launchProject)} project={launchProject} onClose={() => setLaunchProject(null)} /> : <JavaLaunchDialog key={projectKey(launchProject)} project={launchProject} onClose={() => setLaunchProject(null)} />)}
     {sharing && <ShareDialog workspace={data} onClose={() => setSharing(false)} />}

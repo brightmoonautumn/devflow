@@ -111,6 +111,7 @@ mod tests {
         for (path, body, expected) in [
             ("/api/session", "{}", "404"),
             ("/api/workspace", "{}", "404"),
+            ("/api/workspace/terminal/socket", "{}", "404"),
             ("/api/workspace/file", "{}", "404"),
             ("/api/workspace/git/commit/apply", "{}", "404"),
             ("/api/workspace/shares", "{}", "404"),

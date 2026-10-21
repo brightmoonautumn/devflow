@@ -1,3 +1,149 @@
+.workspace-shell .cm-editor .cm-panels-top {
+  border-bottom: 1px solid var(--ws-border);
+}
+.workspace-shell .cm-editor .cm-panel.df-search-panel {
+  position: relative;
+  padding: 0 32px;
+  background: var(--ws-surface);
+  color: var(--ws-muted);
+  font: var(--ws-font-small)/1.5 var(--font-ui);
+}
+.workspace-shell .cm-editor .df-search-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  min-height: 36px;
+  padding: 3px 0;
+}
+.workspace-shell .cm-editor .df-search-replace-row {
+  border-top: 1px solid var(--ws-subtle-border);
+}
+.workspace-shell .cm-editor .df-search-field {
+  display: flex;
+  flex: 1 1 200px;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 28px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+}
+.workspace-shell .cm-editor .df-search-field:focus-within {
+  border-color: var(--ws-accent);
+  background: var(--ws-bg);
+}
+.workspace-shell .cm-editor .df-search-label {
+  flex-shrink: 0;
+  padding: 0 6px;
+  color: var(--ws-dim);
+  font-size: var(--ws-font-caption);
+}
+.workspace-shell .cm-editor .df-search-input {
+  flex: 1;
+  width: 0;
+  min-width: 40px;
+  height: 26px;
+  padding: 3px 4px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ws-ink);
+  font: inherit;
+}
+.workspace-shell .cm-editor .df-search-input::placeholder {
+  color: var(--ws-dim);
+}
+.workspace-shell .cm-editor .df-search-field:has([aria-invalid=true]) {
+  border-color: var(--ws-error);
+}
+.workspace-shell .cm-editor .df-search-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding-left: 8px;
+  border-left: 1px solid var(--ws-subtle-border);
+}
+.workspace-shell .cm-editor .df-search-button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  margin: 0;
+  padding: 2px 7px;
+  border: 1px solid var(--ws-border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ws-muted);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.workspace-shell .cm-editor .df-search-option {
+  min-height: 22px;
+  padding: 1px 4px;
+  border-color: transparent;
+  font-size: var(--ws-font-caption);
+}
+.workspace-shell .cm-editor .df-search-option[aria-pressed=true] {
+  border-color: var(--ws-accent);
+  background: var(--ws-accent-bg);
+  color: var(--ws-accent);
+}
+.workspace-shell .cm-editor .df-search-arrow {
+  width: 26px;
+  padding: 0;
+  border-color: transparent;
+  font-size: 17px;
+}
+.workspace-shell .cm-editor .df-search-toggle,
+.workspace-shell .cm-editor .df-search-close {
+  position: absolute;
+  top: 5px;
+  width: 24px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  font-size: 20px;
+}
+.workspace-shell .cm-editor .df-search-toggle {
+  left: 4px;
+  font-size: 0;
+  line-height: 1;
+}
+.workspace-shell .cm-editor .df-search-toggle::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+}
+.workspace-shell .cm-editor .df-search-toggle[aria-expanded=true]::before {
+  transform: translateY(-2px) rotate(45deg);
+}
+.workspace-shell .cm-editor .df-search-close { right: 4px; }
+.workspace-shell .cm-editor .df-search-panel [hidden] { display: none; }
+.workspace-shell .cm-editor .df-search-button:hover {
+  background: var(--ws-hover);
+  color: var(--ws-ink);
+}
+.workspace-shell .cm-editor .df-search-button:focus-visible {
+  outline: 1px solid var(--ws-accent);
+  outline-offset: -1px;
+}
+.workspace-shell .cm-editor .cm-searchMatch {
+  background: var(--ws-accent-bg);
+}
+.workspace-shell .cm-editor .cm-searchMatch-selected {
+  background: var(--ws-accent-bg);
+  outline: 1px solid var(--ws-accent);
+  outline-offset: -1px;
+}
+
 .df-source-context-menu {
   position: fixed;
   z-index: 10000;

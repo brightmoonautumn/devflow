@@ -47,6 +47,7 @@ fn tools() -> Value {
     // Expand each schema independently; a single json! token-munching array
     // makes macro recursion grow with the total size of the tool catalog.
     let tools = vec![
+        json!({"name":"workspace_terminal","description":"Manage local owner interactive PTY terminals in active workspace folders. Requires owner authentication and current revision. Operations list/create/read/input/resize/close use the same core as Web UI. Input executes with the local user shell privileges, not a filesystem sandbox. Switching or closing workspaces closes terminals; removing a folder closes its terminals. Save/add-folder retains remaining sessions. Output data is a byte array preserving ANSI and UTF-8; read incrementally with nextCursor, reset renderer when truncated. Maximum 12 sessions, 1 MiB retained per session.","inputSchema":{"type":"object","properties":{"expectedRevision":{"type":"integer","minimum":0},"operation":{"oneOf":[{"type":"object","properties":{"type":{"const":"list"}},"required":["type"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"create"},"folder":{"type":"string"},"cols":{"type":"integer","minimum":2,"maximum":500},"rows":{"type":"integer","minimum":1,"maximum":300}},"required":["type","folder","cols","rows"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"read"},"id":{"type":"string"},"after":{"type":"integer","minimum":0}},"required":["type","id","after"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"input"},"id":{"type":"string"},"data":{"type":"string","maxLength":65536}},"required":["type","id","data"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"resize"},"id":{"type":"string"},"cols":{"type":"integer","minimum":2,"maximum":500},"rows":{"type":"integer","minimum":1,"maximum":300}},"required":["type","id","cols","rows"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"close"},"id":{"type":"string"}},"required":["type","id"],"additionalProperties":false}]}},"required":["expectedRevision","operation"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}}),
         json!({"name":"workspace_git_update_check","description":"Inspect local branch, upstream and clean-worktree readiness. No fetch. Pass version to update_start.","inputSchema":{"type":"object","properties":{"expectedRevision":{"type":"integer","minimum":0},"repository":{"type":"string"},"version":{"type":"string"}},"required":["expectedRevision","repository"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}),
         json!({"name":"workspace_git_update_start","description":"Start background fetch and merge of configured upstream. Requires clean index/worktree and check version; untracked collisions rejected by Git. Never pushes, stashes or rebases. Poll progress. Stop batches on conflicts/failure.","inputSchema":{"type":"object","properties":{"expectedRevision":{"type":"integer","minimum":0},"repository":{"type":"string"},"version":{"type":"string"}},"required":["expectedRevision","repository","version"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}}),
         json!({"name":"workspace_git_update_progress","description":"Read current background update phase/result; optional jobId. Not a cancellation endpoint.","inputSchema":{"type":"object","properties":{"expectedRevision":{"type":"integer","minimum":0},"jobId":{"type":"string"}},"required":["expectedRevision"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}),
@@ -132,7 +133,14 @@ pub async fn handle(
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-            if matches!(name, "workspace_share_create" | "workspace_share_list" | "workspace_share_revoke" | "workspace_share_read") {
+            if name == "workspace_terminal" {
+                let authenticated = security::authenticated(&headers, &state);
+                let result = call_core(state, move |engine| {
+                    let request = serde_json::from_value(arguments).map_err(|err: serde_json::Error| WorkspaceError { code: "invalid_query", message: err.to_string() })?;
+                    engine.workspace.terminal_execute(request, authenticated)
+                }).await;
+                Ok(tool_result(result))
+            } else if matches!(name, "workspace_share_create" | "workspace_share_list" | "workspace_share_revoke" | "workspace_share_read") {
                 let authenticated = security::authenticated(&headers, &state);
                 let network = state.share_network.clone();
                 let name = name.to_owned();
@@ -468,8 +476,9 @@ mod tests {
     fn workspace_tools_advertise_revision_and_required_paths() {
         let catalog = tools();
         let tools = catalog["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 56);
+        assert_eq!(tools.len(), 57);
         for name in [
+            "workspace_terminal",
             "workspace_git_update_check",
             "workspace_git_update_start",
             "workspace_git_update_progress",

@@ -23,6 +23,8 @@ use command::{checked, literal, run, text};
 pub use operations::{GitMutationRequest, GitCommitRequest, GitCommitApplyRequest, GitOutcome, GitCommitPreview};
 pub(super) use operations::CommitPlan;
 
+const MAX_STATUS_CHANGES: usize = 2000;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GitStatusRequest { pub expected_revision: u64, #[serde(default)] pub force: bool }
@@ -208,8 +210,9 @@ impl WorkspaceService {
     pub fn git_status(&self, request: GitStatusRequest, authenticated: bool) -> Result<GitStatus> {
         self.git_roots(request.expected_revision, authenticated)?;
         let (repositories, warnings) = self.git_catalog(request.expected_revision, request.force)?;
-        let old = self.git_cache.result(request.expected_revision, &repositories, warnings.clone(), Duration::ZERO)?;
-        let cold = old.repositories.iter().any(|repo| repo.version.is_empty());
+        // Inspect readiness under the cache lock instead of cloning a complete
+        // status response just to decide how long the first request should wait.
+        let cold = self.git_cache.is_cold(&repositories);
         self.git_cache.request(self, request.expected_revision, &repositories, request.force);
         let wait = if request.force { Duration::from_secs(30) } else if cold { Duration::from_secs(2) } else { Duration::ZERO };
         let value = self.git_cache.result(request.expected_revision, &repositories, warnings, wait)?;
@@ -259,9 +262,10 @@ fn repository_status_display(service: &WorkspaceService, root: &Path, metadata: 
     for path in untracked.split(|byte| *byte == 0).filter(|path| !path.is_empty()) {
         bytes.extend_from_slice(b"? "); bytes.extend_from_slice(path); bytes.push(0);
     }
+    drop(untracked);
     let (head, branch, mut changes) = parse_status(&bytes)?;
-    let mut truncated = changes.len() > 2000;
-    changes.truncate(2000);
+    let mut truncated = changes.len() > MAX_STATUS_CHANGES;
+    changes.truncate(MAX_STATUS_CHANGES);
     changes.retain(|change| {
         let valid = service.git_path(root, &change.path).is_ok() && change.original_path.as_ref().is_none_or(|old| service.git_path(root, old).is_ok());
         if !valid { truncated = true; } valid
@@ -290,7 +294,10 @@ fn parse_status(bytes: &[u8]) -> Result<(Option<String>, String, Vec<GitChange>)
     let mut head = None; let mut branch = String::new(); let mut changes = Vec::new();
     let mut records = bytes.split(|b| *b == 0).filter(|r| !r.is_empty());
     while let Some(record) = records.next() {
-        let line = text(record)?;
+        // One overflow entry signals truncation. Avoid allocating the rest of a
+        // large status output; its complete bytes still participate in versioning.
+        if changes.len() > MAX_STATUS_CHANGES { break; }
+        let line = std::str::from_utf8(record).map_err(|_| error("unsupported_file", "Git 路径或内容不是 UTF-8"))?;
         if let Some(oid) = line.strip_prefix("# branch.oid ") { if oid != "(initial)" { head = Some(oid.to_owned()); } continue; }
         if let Some(name) = line.strip_prefix("# branch.head ") { branch = name.to_owned(); continue; }
         if line.starts_with('#') || line.starts_with('!') { continue; }

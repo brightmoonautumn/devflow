@@ -78,8 +78,8 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
     const caption = !monitoringEnabled || runtime.error ? '运行指标暂不可用' : !metrics ? '正在读取运行状态…' : metrics.managedState === 'starting' ? '构建 / 启动中' : observed ? undefined : metrics.managedState === 'failed' ? '启动失败或异常退出' : '未检测到进程'
     const listeningPorts = metrics?.listeningPorts
     const listeners = metrics?.listeners
+    const displayPorts = [...new Set(listeningPorts ?? listeners?.map(listener => listener.port) ?? [])].sort((left, right) => left - right)
     const auxiliary = metrics?.processes?.filter(process => process.role !== 'primary') ?? []
-    const listenerText = (listener: NonNullable<typeof listeners>[number]) => `${listener.port} · PID ${listener.pid} · ${listener.purpose}${listener.purposeSource === 'command_line' ? '（启动参数）' : ''}`
     const portError = metrics && listeningPorts === undefined
       ? '当前后端未返回端口字段，请重新编译并重启 DevFlow 后端。'
       : metrics?.portError ?? (listeningPorts === null ? '后端未提供端口采集结果，请更新并重启 DevFlow 后端后重试。' : undefined)
@@ -92,10 +92,8 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
       amount: kindNames[project.kind],
       status: observed ? 'running' : metrics && monitoringEnabled && !runtime.error ? 'idle' : 'unknown',
       caption,
-      metadata: showPorts ? <span className="ws-service-ports" title={listeners?.length ? listeners.map(listenerText).join('\n') : portError}>
-        {listeners?.length ? <><Network size={11} aria-hidden="true" />{listeners.slice(0, 2).map(listener => <span key={`${listener.pid}:${listener.port}`} className="ws-port-badge" title={listenerText(listener)} aria-label={`TCP ${listenerText(listener)}`}>{listener.port} · PID {listener.pid} · {listener.purpose}</span>)}{listeners.length > 2 && <span className="ws-port-more" aria-label={`另外 ${listeners.length - 2} 个监听项，展开详情查看`}>+{listeners.length - 2}</span>}</>
-          : listeningPorts?.length ? <><Network size={11} aria-hidden="true" />{listeningPorts.slice(0, 3).map(port => <span key={port} className="ws-port-badge" title="请更新并重启 DevFlow 后端以获取端口归属及用途">{port} · 归属 / 用途未知</span>)}</>
-          : <span className="ws-port-empty">{portStatus}</span>}
+      metadata: showPorts ? <span className="ws-service-ports" title={portError}>
+        {displayPorts.length ? <><Network size={11} aria-hidden="true" />{displayPorts.slice(0, 3).map(port => <span key={port} className="ws-port-badge" aria-label={`TCP 端口 ${port}`}>{port}</span>)}{displayPorts.length > 3 && <span className="ws-port-more" aria-label={`另外 ${displayPorts.length - 3} 个端口，展开详情查看`}>+{displayPorts.length - 3}</span>}</> : <span className="ws-port-empty">{portStatus}</span>}
       </span> : undefined,
       content: metrics && observed ? <ProjectMetrics metrics={metrics} history={runtime.history} /> : undefined,
       icon: <span className={`ws-project-symbol ${project.kind === 'node' ? 'is-node' : ''} ${observed && monitoringEnabled && !runtime.error ? metrics?.managedState === 'starting' ? 'is-starting' : 'is-running' : ''}`} title={observed && monitoringEnabled && !runtime.error ? metrics?.managedState === 'starting' ? '构建 / 启动中' : '运行中' : undefined}>{project.kind === 'node' ? <Box size={19} strokeWidth={1.6} /> : <Coffee size={19} strokeWidth={1.6} />}</span>,

@@ -75,7 +75,8 @@ export function applyWorkspaceReplace(planId: string, expectedRevision: number) 
   return request<ReplaceOutcome>('/api/workspace/replace/apply', { method: 'POST', body: JSON.stringify({ planId, expectedRevision }) })
 }
 let session: Promise<string> | null = null
-function getToken() {
+export function getToken(refresh = false) {
+  if (refresh) session = null
   if (!session) session = fetch('/api/session', { headers: { 'X-DevFlow-Client': 'web' }, cache: 'no-store', signal: AbortSignal.timeout(10000) })
     .then(async response => {
       if (!response.ok) throw new Error(`无法连接本地服务（HTTP ${response.status}）`)
@@ -92,6 +93,7 @@ export async function request<T>(url: string, options: RequestInit = {}, retry =
   if (options.body) headers.set('Content-Type', 'application/json')
   const response = await fetch(url, { ...options, signal: options.signal ?? AbortSignal.timeout(15000), headers, cache: 'no-store' })
   if (response.status === 401 && retry) { session = null; return request<T>(url, options, false) }
+  if (url === '/api/workspace/terminal' && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) throw new ApiError('backend_outdated', '当前后端尚不支持交互终端，请更新并重启 DevFlow。')
   if (url.startsWith('/api/workspace/shares') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) throw new ApiError('backend_outdated', '当前后端尚不支持只读分享，请更新并重启后端。')
   if (url.startsWith('/api/workspace/git/') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) throw new ApiError('backend_outdated', '当前后端尚不支持 Git 管理，请更新并重启后端。')
   if (url.startsWith('/api/workspace/replace/') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) {

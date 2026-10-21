@@ -3,6 +3,8 @@
 业务通过 `FileEditor` 的 `path / value / readonly / location / onChange / onSave / onPosition / onOpenFile / toolbarContainer` 使用编辑能力，不依赖 CodeMirror、Vditor 的组件树、实例或事件类型。文件鉴权、版本检查、草稿和保存由工作区业务与既有共享核心处理。
 
 - 普通文本由 `SourceEditor` 封装 CodeMirror；语言加载归属 `editorLanguages.ts`。
+- CodeMirror 的 Ctrl/Cmd+F 查找替换栏由 `editorSearch.ts` 封装，固定于编辑区域顶部。默认显示查找、替换双行，左侧可收起替换行，查找输入框右侧提供大小写/全字/正则切换，右侧提供上下项导航、全选匹配和中文替换按钮；只读时隐藏替换入口。`source-editor.css` 统一适配明暗主题，窄编辑区域自动换行。
+- 普通源码与三方合并编辑器共用 `editorSearch.ts` 和 `editorPhrases.ts`，交互文案和辅助读屏提示使用中文。查询状态、匹配、替换和撤销沿用 CodeMirror 搜索命令；保留 Enter/Shift+Enter 导航、替换输入框 Enter 替换、Escape 关闭和内置搜索快捷键，中文输入法选词时不触发 Enter 操作。
 - `.md / .markdown` 由 `MarkdownEditor` 封装 Vditor，默认所见即所得文档编辑，支持源码和对照模式。对照时编辑源码，文档区域只读，窄面板自动上下排列；实例在切换模式时保留，源码、文档各自保留撤销历史。
 - 参考了 [Office Viewer 的 Markdown 接入](https://github.com/cweijan/vscode-office/blob/main/resource/markdown/index.js)：本地资源、禁用依赖缓存、输入回传和外部内容同步。Office Viewer 维护定制 Vditor；本项目直接使用 [Vditor 开源上游](https://github.com/Vanessa219/vditor) 的 npm 分发，未移植其 VS Code 协议或扩展源码。
 - `markdownRuntime.ts` 管理本地脚本与 Mermaid 全局 API 适配；按调用串行初始化与绘图，使用 strict 模式和 SVG 清洗。Vditor 负责表格、目录、任务列表、脚注、代码及 KaTeX；依赖的磁盘资源由 `apps/web/vditorAssets.ts` 白名单提供，并在构建时输出到 `vendor/vditor`，无需在线 CDN。只枚举一个已知字体目录，不递归遍历依赖目录。

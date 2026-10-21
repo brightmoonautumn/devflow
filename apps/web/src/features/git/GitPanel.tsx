@@ -1,6 +1,6 @@
 import { readOnlyShare } from '../../lib/access'
 import { useDialogs } from '../../components/form/BaseDialog'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { Download, GitMerge, History, ChevronRight, ChevronsDownUp, ChevronsUpDown, Plus, Settings2, RefreshCw, Undo2, X } from 'lucide-react'
 import { TreeEntryIcon } from '../../components/files/TreeEntryIcon'
 import { FileTreeRow, TreeChevron, TreePathLabel, handleTreeNavigation } from '../../components/files/FileTreeRow'
@@ -17,6 +17,28 @@ const key = (repo: GitRepository, path: string) => `${repo.root}\0${path}`
 const absolute = (root: string, path: string) => `${root.replace(/[\\/]$/, '')}/${path}`
 const visibleChange = (file: GitChange) => !file.submodule || file.pointerChanged
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error)
+const sameFields = (left: object, right: object) => {
+  const leftValues = left as Record<string, unknown>, rightValues = right as Record<string, unknown>
+  const keys = Object.keys(leftValues)
+  return keys.length === Object.keys(rightValues).length && keys.every(key => leftValues[key] === rightValues[key])
+}
+// Preserve unchanged repository/change arrays without serializing full snapshots.
+function reconcileStatus(previous: GitStatus | null, next: GitStatus): GitStatus {
+  if (!previous) return next
+  const byRoot = new Map(previous.repositories.map(repo => [repo.root, repo]))
+  let repositories = next.repositories.map(repo => {
+    const old = byRoot.get(repo.root)
+    if (!old) return repo
+    const changes = old.changes.length === repo.changes.length && old.changes.every((file, index) => sameFields(file, repo.changes[index])) ? old.changes : repo.changes
+    const value = { ...repo, changes }
+    return sameFields(old, value) ? old : value
+  })
+  if (repositories.length === previous.repositories.length && repositories.every((repo, index) => repo === previous.repositories[index])) repositories = previous.repositories
+  const warnings = next.warnings.length === previous.warnings.length && next.warnings.every((warning, index) => warning === previous.warnings[index]) ? previous.warnings : next.warnings
+  const value = { ...next, repositories, warnings }
+  return sameFields(previous, value) ? previous : value
+}
+type GitMenu = { repo: GitRepository; file: GitChange | null; paths: string[]; x: number; y: number }
 function Checkbox({ checked, mixed = false, disabled = false, label, onChange }: { checked: boolean; mixed?: boolean; disabled?: boolean; label: string; onChange: () => void }) {
   const ref = useRef<HTMLInputElement>(null)
   useEffect(() => { if (ref.current) ref.current.indeterminate = mixed }, [mixed])
@@ -24,6 +46,7 @@ function Checkbox({ checked, mixed = false, disabled = false, label, onChange }:
   return <input ref={ref} type="checkbox" checked={checked} disabled={disabled} aria-label={label} onChange={onChange} />
 }
 type Tree = { folders: Map<string, Tree>; files: GitChange[]; descendants: GitChange[] }
+type RepositoryTrees = { changes: Tree; untracked: Tree }
 const emptyTree = (): Tree => ({ folders: new Map(), files: [], descendants: [] })
 function treeOf(files: GitChange[]) {
   const root = emptyTree()
@@ -59,10 +82,19 @@ export function GitPanel({ workspace, active, onOpenDiff, onOpenHistory, onClose
   const [compact, setCompact] = useCompactFolders()
   const [status, setStatus] = useState<GitStatus | null>(null)
   // Reuse the change topology when only selection, expansion or presentation changes.
-  const trees = useMemo(() => new Map((status?.repositories ?? []).map(repo => [repo.root, {
-    changes: treeOf(repo.changes.filter(file => !file.untracked && visibleChange(file))),
-    untracked: treeOf(repo.changes.filter(file => file.untracked && visibleChange(file))),
-  }])), [status])
+  const treeCache = useRef(new Map<string, { files: GitChange[]; trees: RepositoryTrees }>())
+  const trees = useMemo(() => {
+    const next = new Map<string, { files: GitChange[]; trees: RepositoryTrees }>()
+    for (const repo of active ? status?.repositories ?? [] : []) {
+      const old = treeCache.current.get(repo.root)
+      next.set(repo.root, old && old.files === repo.changes ? old : { files: repo.changes, trees: {
+        changes: treeOf(repo.changes.filter(file => !file.untracked && visibleChange(file))),
+        untracked: treeOf(repo.changes.filter(file => file.untracked && visibleChange(file))),
+      } })
+    }
+    treeCache.current = next
+    return new Map([...next].map(([root, value]) => [root, value.trees]))
+  }, [status?.repositories, active])
   const [selected, setSelected] = useState(new Set<string>())
   const [message, setMessage] = useState('')
   const [messageDialogOpen, setMessageDialogOpen] = useState(false)
@@ -74,7 +106,7 @@ export function GitPanel({ workspace, active, onOpenDiff, onOpenHistory, onClose
   const [preview, setPreview] = useState<GitPreview | null>(null)
   const [pushAfterCommit, setPushAfterCommit] = useState(false)
   const [pendingPush, setPendingPush] = useState<{ repository: string; head: string }[]>([])
-  const [menu, setMenu] = useState<{ repo: GitRepository; file: GitChange; x: number; y: number } | null>(null)
+  const [menu, setMenu] = useState<GitMenu | null>(null)
   // Show the two change groups initially; repositories and directories open
   // one visible level at a time (a compact chain is one visible row).
   const [collapsed, setCollapsed] = useState(new Set<string>(['changes', 'untracked']))
@@ -94,25 +126,31 @@ export function GitPanel({ workspace, active, onOpenDiff, onOpenHistory, onClose
   activeRef.current = active
   current.current = status
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; diffController.current?.abort(); refreshing.current?.abort(); refreshing.current = null } }, [])
-  const refresh = useCallback(async (foreground = false, force = false) => {
+  const refresh = useCallback(async ({ foreground = false, force = foreground, replaceRequest = force }: { foreground?: boolean; force?: boolean; replaceRequest?: boolean } = {}): Promise<void> => {
     if (revision === undefined) return
-    if (refreshing.current && !force) { if (foreground) setLoading(true); return }
+    if (refreshing.current && !replaceRequest) { if (foreground) setLoading(true); return }
     refreshing.current?.abort()
     const controller = new AbortController()
-    refreshing.current = controller; setLoading(foreground || !current.current)
+    refreshing.current = controller; setLoading(foreground || force || !current.current)
     try {
-      const next = await gitRequest<GitStatus>('status', { expectedRevision: revision, force: foreground }, AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]))
+      const response = await gitRequest<GitStatus>('status', { expectedRevision: revision, force }, AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]))
       if (!mounted.current || controller.signal.aborted) return
       const previous = current.current
-      const changed = !previous || JSON.stringify(previous) !== JSON.stringify(next)
-      if (changed) {
+      const next = reconcileStatus(previous, response)
+      if (next !== previous) {
         setSelected(values => new Set([...values].filter(value => next.repositories.some(repo => previous?.repositories.find(old => old.root === repo.root)?.version === repo.version && repo.changes.some(file => key(repo, file.path) === value)))))
-        if (previous && JSON.stringify(previous.repositories.map(repo => [repo.root, repo.version])) !== JSON.stringify(next.repositories.map(repo => [repo.root, repo.version]))) setPreview(null)
+        if (previous && (previous.repositories.length !== next.repositories.length || previous.repositories.some(repo => !next.repositories.some(value => value.root === repo.root && value.version === repo.version)))) setPreview(null)
         setStatus(next)
       }
       refreshedAt.current = Date.now()
       current.current = next
-    } catch (error) { if (mounted.current && !controller.signal.aborted) setNotice(messageOf(error)) }
+    } catch (error) {
+      if (mounted.current && !controller.signal.aborted) {
+        const message = messageOf(error)
+        if (running.current) setNotice(old => [old, `Git 状态刷新失败：${message}。请手动刷新确认最新列表。`].filter(Boolean).join('\n'))
+        else setNotice(message)
+      }
+    }
     finally { if (refreshing.current === controller) { refreshing.current = null; if (mounted.current) setLoading(false) } }
   }, [revision])
   useEffect(() => {
@@ -130,11 +168,12 @@ export function GitPanel({ workspace, active, onOpenDiff, onOpenHistory, onClose
     return () => clearInterval(timer)
   }, [revision, refresh])
   useEffect(() => {
-    const changed = () => { if (!running.current) void refresh(false, true) }
+    const changed = () => { if (!running.current && activeRef.current) void refresh({ replaceRequest: true }) }
     window.addEventListener('devflow-files-replaced', changed)
     window.addEventListener('devflow-git-updated', changed)
     return () => { window.removeEventListener('devflow-files-replaced', changed); window.removeEventListener('devflow-git-updated', changed) }
   }, [refresh])
+  useEffect(() => { if (!active) setMenu(null) }, [active])
   function toggleCollapsed(id: string) {
     setCollapsed(old => { const next = new Set(old); if (next.has(id)) next.delete(id); else next.add(id); return next })
   }
@@ -164,16 +203,29 @@ export function GitPanel({ workspace, active, onOpenDiff, onOpenHistory, onClose
     }))
     if (!window.dispatchEvent(new CustomEvent('devflow-before-replace', { detail: paths, cancelable: true }))) throw new Error('所选文件正在编辑或保存，请等待自动保存完成后重试。')
   }
-  async function execute(action: () => Promise<void>) {
+  async function execute(action: () => Promise<void>, mutated = false) {
     if (running.current || gitLocked) return
     refreshing.current?.abort(); refreshing.current = null
     running.current = true; setBusy(true); setNotice(''); setMenu(null)
     try { await action() } catch (error) { if (mounted.current) { setNotice(messageOf(error)); setPreview(null) } }
-    finally { running.current = false; if (mounted.current) { setBusy(false); await refresh(false, true) } }
+    finally {
+      if (mounted.current) await refresh({ force: mutated, replaceRequest: true })
+      running.current = false
+      if (mounted.current) setBusy(false)
+    }
   }
-  function outcome(result: GitOutcome, rollback = false) {
+  function outcome(result: GitOutcome, rollback = false, added = false) {
     setPreview(null)
-    setNotice(result.results.map(item => `${item.repository.split(/[\\/]/).at(-1)}：${item.error ? item.error.message : item.commit ? `已提交 ${item.commit.slice(0, 8)}${item.pushError ? `；推送失败，本地提交已保留：${item.pushError.message}` : item.pushed ? '，已推送' : ''}` : '完成'}`).join('\n'))
+    setNotice(result.results.map(item => `${item.repository.split(/[\\/]/).at(-1)}：${item.error ? `${item.paths.length ? `已处理 ${item.paths.length} 个文件；` : ''}${item.error.message}` : item.commit ? `已提交 ${item.commit.slice(0, 8)}${item.pushError ? `；推送失败，本地提交已保留：${item.pushError.message}` : item.pushed ? '，已推送' : ''}` : added ? `已添加 ${item.paths.length} 个文件到 VCS（暂存区）` : rollback ? `已回滚 ${item.paths.length} 个文件` : '完成'}`).join('\n'))
+    if (added && result.results.some(item => item.paths.length)) {
+      setCollapsed(old => {
+        const next = new Set(old)
+        for (const id of ['changes', ...result.results.filter(item => item.paths.length).map(item => `changes:${item.repository}`)]) {
+          if (allCollapsed) next.add(id); else next.delete(id)
+        }
+        return next
+      })
+    }
     setPendingPush(old => {
       const next = old.filter(value => !result.results.some(item => item.repository === value.repository && (item.pushed || item.commit)))
       return [...next, ...result.results.filter(item => item.commit && item.pushError).map(item => ({ repository: item.repository, head: item.commit! }))]
@@ -187,10 +239,17 @@ export function GitPanel({ workspace, active, onOpenDiff, onOpenHistory, onClose
     }
   }
   async function mutate(operation: 'add' | 'rollback', items = selections(file => operation === 'add' ? file.untracked : !file.untracked && !file.submodule)) {
+    setMenu(null)
     if (!items.length) { setNotice(operation === 'add' ? '请先勾选未管理的文件。' : '请先勾选可回滚的普通文件。子模块指针需在子仓库处理。'); return }
+    if (items.some(item => item.paths.length > 500)) { setNotice('每个仓库一次最多添加或回滚 500 个文件，请展开目录后分批勾选。'); return }
     if (operation === 'rollback' && !await dialogs.confirm({ title: '回滚所选文件？', description: `以下文件的暂存区与工作区修改将回滚，无法撤销。新增文件仅取消管理并保留磁盘文件。\n${items.flatMap(item => item.paths.map(path => absolute(item.repository, path))).join('\n')}`, confirmText: '确认回滚', tone: 'danger' })) return
     if (!mounted.current) return
-    void execute(async () => { guard(items); outcome(await gitRequest<GitOutcome>('mutate', { expectedRevision: revision, selections: items, operation }), operation === 'rollback') })
+    void execute(async () => {
+      guard(items)
+      setNotice(operation === 'add' ? '正在添加所选文件到 VCS…' : '正在回滚所选文件…')
+      const result = await gitRequest<GitOutcome>('mutate', { expectedRevision: revision, selections: items, operation })
+      if (mounted.current) outcome(result, operation === 'rollback', operation === 'add')
+    }, true)
   }
   function prepare(push: boolean) {
     const items = selections()
@@ -209,7 +268,7 @@ export function GitPanel({ workspace, active, onOpenDiff, onOpenHistory, onClose
     void execute(async () => {
       guard(preview.repositories.map(repo => ({ repository: repo.repository, version: '', paths: repo.files.map(file => file.path) })))
       outcome(await gitRequest<GitOutcome>('commit/apply', { expectedRevision: revision, planId: preview.planId, push: pushAfterCommit }))
-    })
+    }, true)
   }
   function retryPush() {
     const items = [...pendingPush]
@@ -235,6 +294,10 @@ export function GitPanel({ workspace, active, onOpenDiff, onOpenHistory, onClose
       if (mounted.current && !controller.signal.aborted) onOpenDiff(diff)
     } catch (error) { if (!controller.signal.aborted && mounted.current) setNotice(messageOf(error)) }
   }
+  function openMenu(event: MouseEvent, repo: GitRepository, file: GitChange | null, paths: string[]) {
+    event.preventDefault(); event.stopPropagation()
+    setMenu({ repo, file, paths, x: Math.max(0, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(0, Math.min(event.clientY, window.innerHeight - 145)) })
+  }
   function renderTree(repo: GitRepository, tree: Tree, group: 'changes' | 'untracked', prefix = '', level = 1): ReactNode {
     return <>{[...tree.folders].map(([name, child]) => {
       const path = prefix ? `${prefix}/${name}` : name
@@ -254,16 +317,17 @@ export function GitPanel({ workspace, active, onOpenDiff, onOpenHistory, onClose
       return <div key={name} role="treeitem" tabIndex={0} aria-level={level} aria-label={segments.map(segment => segment.name).join('/')} aria-expanded={open}
         onKeyDown={event => handleTreeNavigation(event, { expanded: open, expandable: true, onToggle: expand, onActivate: () => expand(!open) })}>
         <FileTreeRow className="git-folder-row" title={tail.path}
+          onContextMenu={group === 'untracked' && !readOnlyShare ? event => openMenu(event, repo, null, available.filter(file => file.untracked && !file.submodule).map(file => file.path)) : undefined}
           leading={<><TreeChevron expanded={open} label={`${open ? '收起' : '展开'}目录 ${tail.path}`} onToggle={() => expand(!open)} />
             <Checkbox checked={available.length > 0 && checked === available.length} mixed={checked > 0 && checked < available.length} disabled={busy || !available.length || !!repo.blocked || repo.truncated} label={`选择 ${repo.name}/${tail.path} 下所有可选变更`} onChange={() => toggle(repo, child.descendants)} /></>}>
           <button className="git-tree-folder" aria-expanded={open} onClick={() => expand(!open)}><TreeEntryIcon name={tail.name} directory expanded={open} root={false} /><TreePathLabel segments={segments} /><small>{child.descendants.length} files</small></button>
-        </FileTreeRow><div className="git-indent" role="group" hidden={!open}>{renderTree(repo, tail.tree!, group, tail.path, level + 1)}</div>
+        </FileTreeRow>{open && <div className="git-indent" role="group">{renderTree(repo, tail.tree!, group, tail.path, level + 1)}</div>}
       </div>
     })}{tree.files.map(file => <FileTreeRow className={`git-file ${file.kind === 'deleted' ? 'is-deleted' : ''} ${file.selectable ? '' : 'is-disabled'} ${activeFile === key(repo, file.path) ? 'is-active' : ''}`} key={file.path}
       role="treeitem" tabIndex={0} aria-level={level} aria-selected={activeFile === key(repo, file.path)} aria-label={`${file.path.split('/').at(-1)}${file.kind === 'deleted' ? '（已删除）' : ''}`}
       onKeyDown={event => handleTreeNavigation(event, { expanded: false, expandable: false, onToggle: () => {}, onActivate: () => { void showDiff(repo, file) } })}
       title={`${file.originalPath ? `${file.originalPath} → ` : ''}${file.path}${file.reason ? `\n${file.reason}` : ''}`}
-      onContextMenu={event => { event.preventDefault(); setMenu({ repo, file, x: Math.max(0, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(0, Math.min(event.clientY, window.innerHeight - 145)) }) }}>
+      onContextMenu={event => openMenu(event, repo, file, [file.path])}>
       <Checkbox checked={selected.has(key(repo, file.path))} disabled={busy || !file.selectable || !!repo.blocked || repo.truncated} label={`选择 ${repo.name}/${file.path}`} onChange={() => { toggle(repo, [file]); void showDiff(repo, file) }} />
       <button aria-pressed={activeFile === key(repo, file.path)} onClick={() => void showDiff(repo, file)}><TreeEntryIcon name={file.path.split('/').at(-1) ?? file.path} directory={file.submodule} expanded={false} root={file.submodule} /><span>{file.path.split('/').at(-1)}</span><small>{file.submodule ? file.pointerChanged ? '引用更新' : '先提交子仓库' : file.status}</small></button>
     </FileTreeRow>)}</>
@@ -273,20 +337,37 @@ export function GitPanel({ workspace, active, onOpenDiff, onOpenHistory, onClose
     const repositories = status?.repositories.filter(repo => repo.changes.some(file => file.untracked === untracked && visibleChange(file))) ?? []
     const count = repositories.reduce((total, repo) => total + repo.changes.filter(file => file.untracked === untracked && visibleChange(file)).length, 0)
     const group = untracked ? 'untracked' : 'changes', open = !isCollapsed(group)
-    return <section className="git-section"><h3><button className="git-section-toggle" aria-expanded={open} onClick={() => toggleCollapsed(group)}><ChevronRight size={12} className={open ? 'is-expanded' : ''} /><span>{untracked ? 'Unversioned Files' : 'Changes'}</span><small>{count} files</small></button></h3><div hidden={!open}>{repositories.map(repo => {
+    return <section className="git-section"><h3><button className="git-section-toggle" aria-expanded={open} onClick={() => toggleCollapsed(group)}><ChevronRight size={12} className={open ? 'is-expanded' : ''} /><span>{untracked ? 'Unversioned Files' : 'Changes'}</span><small>{count} files</small></button></h3>{open && <div>{repositories.map(repo => {
       const files = repo.changes.filter(file => file.untracked === untracked && visibleChange(file)), available = files.filter(file => file.selectable)
       const checked = available.filter(file => selected.has(key(repo, file.path))).length
       const repoGroup = `${group}:${repo.root}`, repoOpen = !isCollapsed(repoGroup)
-      return <div key={repo.root} className="git-repository"><div className="git-repo-title" title={`${repo.root}${repo.parent ? `\n子仓库，父仓库：${repo.parent}\n先提交本仓库，再到父仓库提交引用更新` : ''}`}>
+      return <div key={repo.root} className="git-repository"><div className="git-repo-title" title={`${repo.root}${repo.parent ? `\n子仓库，父仓库：${repo.parent}\n先提交本仓库，再到父仓库提交引用更新` : ''}`}
+        onContextMenu={untracked && !readOnlyShare ? event => openMenu(event, repo, null, available.filter(file => file.untracked && !file.submodule).map(file => file.path)) : undefined}>
         <button className="git-repo-chevron" aria-label={`${repoOpen ? '收起' : '展开'} ${repo.name}`} aria-expanded={repoOpen} onClick={() => toggleCollapsed(repoGroup)}><ChevronRight size={12} className={repoOpen ? 'is-expanded' : ''} /></button>
         <Checkbox checked={available.length > 0 && checked === available.length} mixed={checked > 0 && checked < available.length} disabled={busy || !available.length || !!repo.blocked || repo.truncated} label={`选择仓库 ${repo.name} 的${untracked ? '未管理文件' : '变化'}`} onChange={() => toggle(repo, files)} />
         <button className="git-repo-toggle" aria-expanded={repoOpen} onClick={() => toggleCollapsed(repoGroup)}><TreeEntryIcon name={repo.name} directory expanded={repoOpen} root /><strong>{repo.name}</strong><small>{files.length} files</small><span className="git-branch">{repo.branch}</span>{repo.parent && <small className="git-parent-label">↳ {repo.parent.split(/[\\/]/).at(-1)}</small>}</button>{!readOnlyShare && <button className="ws-icon-button" disabled={busy} title="Update this repository" aria-label={`更新仓库 ${repo.name}`} onClick={() => openGitUpdate(repo.root)}><Download size={13} /></button>}
-      </div><div hidden={!repoOpen}>{repo.blocked && <p className="git-notice">{repo.blocked}</p>}{repo.truncated && <p className="git-notice">列表不完整，已禁用修改操作</p>}<div className="git-indent" role="tree" aria-label={`${repo.name} ${untracked ? '未管理文件' : '变更文件'}`}>{renderTree(repo, trees.get(repo.root)![group], group)}</div></div></div>
-    })}</div></section>
+      </div>{repoOpen && <div>{repo.blocked && <p className="git-notice">{repo.blocked}</p>}{repo.truncated && <p className="git-notice">列表不完整，已禁用修改操作</p>}<div className="git-indent" role="tree" aria-label={`${repo.name} ${untracked ? '未管理文件' : '变更文件'}`}>{renderTree(repo, trees.get(repo.root)![group], group)}</div></div>}</div>
+    })}</div>}</section>
   }
-  return <div className="git-panel"><header className="ws-explorer-header"><strong>Commit</strong><div>{!readOnlyShare && <button className="ws-icon-button" title="Update Project" aria-label="Update Project：拉取并合并上游代码" disabled={operationBusy || !workspace} onClick={() => openGitUpdate()}><Download size={14} /></button>}<button className="ws-icon-button" title="紧凑文件夹：合并连续单子目录" aria-label="紧凑文件夹" aria-pressed={compact} onClick={() => setCompact(!compact)}><Settings2 size={14} /></button><button className="ws-icon-button" title="Git History" aria-label="打开 Git 历史" disabled={!workspace} onClick={onOpenHistory}><History size={14} /></button><button className="ws-icon-button" title="全部展开" aria-label="全部展开 Git 分组、仓库和目录" onClick={() => setAllCollapsedTo(false)}><ChevronsUpDown size={14} /></button><button className="ws-icon-button" title="全部折叠" aria-label="全部折叠 Git 分组、仓库和目录" onClick={() => setAllCollapsedTo(true)}><ChevronsDownUp size={14} /></button><button className="ws-icon-button" disabled={busy || loading || !workspace} title="刷新 Git 状态" aria-label="刷新 Git 状态" onClick={() => void refresh(true)}><RefreshCw size={14} className={loading ? 'spinning' : ''} /></button>{!readOnlyShare && <><button className="ws-icon-button" disabled={busy} title="Add to VCS" aria-label="添加所选未管理文件" onClick={() => mutate('add')}><Plus size={15} /></button><button className="ws-icon-button" disabled={busy} title="Rollback" aria-label="回滚所选文件" onClick={() => mutate('rollback')}><Undo2 size={15} /></button></>}<button className="ws-icon-button" onClick={onClose} aria-label="关闭 Git 面板"><X size={14} /></button></div></header>
-    <div className="git-scroll" aria-busy={status?.refreshing}>{!workspace ? <p className="git-notice">请先打开工作区。</p> : <>{!readOnlyShare && status?.repositories.filter(repo => repo.changes.some(file => file.kind === 'conflict') || repo.blocked).map(repo => <section className="git-section git-merge-conflicts" key={repo.root}><h3><GitMerge size={13} /> Merge Conflicts · {repo.name}</h3><button className="ws-outline-button" disabled={busy} onClick={() => openGitUpdate(repo.root)}>打开 Merge / 查看进行中的操作</button>{repo.changes.filter(file => file.kind === 'conflict').map(file => <button key={file.path} className="git-conflict-file" disabled={busy} title={file.path} onClick={() => openGitUpdate(repo.root)}>{file.path}</button>)}</section>)}{section(false)}{section(true)}{status && !status.refreshing && status.repositories.length > 0 && !status.repositories.some(repo => repo.changes.some(visibleChange)) && <p className="git-notice">没有文件变化或子模块引用更新。</p>}{status && !status.repositories.length && <p className="git-notice">没有发现 Git 仓库。请将完整仓库根目录加入工作区。</p>}{status?.warnings.map((warning, index) => <p key={index} className="git-notice">{warning}</p>)}</>}</div>
-    {status?.refreshing && <p className="git-notice" role="status">正在后台更新变化…</p>}
+  const menuFile = menu?.file
+  const pendingRepositories = status?.repositories.filter(repo => !repo.version).length ?? 0
+  return <div className="git-panel"><header className="ws-explorer-header"><strong>Commit</strong><div>{!readOnlyShare && <button className="ws-icon-button" title="Update Project" aria-label="Update Project：拉取并合并上游代码" disabled={operationBusy || !workspace} onClick={() => openGitUpdate()}><Download size={14} /></button>}<button className="ws-icon-button" title="紧凑文件夹：合并连续单子目录" aria-label="紧凑文件夹" aria-pressed={compact} onClick={() => setCompact(!compact)}><Settings2 size={14} /></button><button className="ws-icon-button" title="Git History" aria-label="打开 Git 历史" disabled={!workspace} onClick={onOpenHistory}><History size={14} /></button><button className="ws-icon-button" title="全部展开" aria-label="全部展开 Git 分组、仓库和目录" onClick={() => setAllCollapsedTo(false)}><ChevronsUpDown size={14} /></button><button className="ws-icon-button" title="全部折叠" aria-label="全部折叠 Git 分组、仓库和目录" onClick={() => setAllCollapsedTo(true)}><ChevronsDownUp size={14} /></button><button className="ws-icon-button" disabled={busy || loading || !workspace} title="刷新 Git 状态" aria-label="刷新 Git 状态" onClick={() => void refresh({ foreground: true })}><RefreshCw size={14} className={loading ? 'spinning' : ''} /></button>{!readOnlyShare && <><button className="ws-icon-button" disabled={busy} title="Add to VCS" aria-label="添加所选未管理文件" onClick={() => mutate('add')}><Plus size={15} /></button><button className="ws-icon-button" disabled={busy} title="Rollback" aria-label="回滚所选文件" onClick={() => mutate('rollback')}><Undo2 size={15} /></button></>}<button className="ws-icon-button" onClick={onClose} aria-label="关闭 Git 面板"><X size={14} /></button></div></header>
+    <div className="git-scroll" aria-busy={loading || status?.refreshing}>{active && (!workspace ? <p className="git-notice">请先打开工作区。</p> : <>
+      {!readOnlyShare && status?.repositories.filter(repo => repo.version && (repo.changes.some(file => file.kind === 'conflict') || repo.blocked)).map(repo => {
+        const conflicts = repo.changes.filter(file => file.kind === 'conflict')
+        return <section className="git-section git-merge-conflicts" key={repo.root}>
+          <h3><GitMerge size={13} /> {conflicts.length ? 'Merge Conflicts' : '仓库操作受限'} · {repo.name}</h3>
+          {repo.blocked && <p className="git-notice">{repo.blocked}</p>}
+          {!repo.truncated && <button className="ws-outline-button" disabled={busy} onClick={() => openGitUpdate(repo.root)}>打开 Merge / 查看进行中的操作</button>}
+          {conflicts.map(file => <button key={file.path} className="git-conflict-file" disabled={busy} title={file.path} onClick={() => openGitUpdate(repo.root)}>{file.path}</button>)}
+        </section>
+      })}
+      {section(false)}{section(true)}
+      {status && !status.refreshing && !pendingRepositories && status.repositories.length > 0 && status.repositories.every(repo => !repo.blocked) && !status.repositories.some(repo => repo.changes.some(visibleChange)) && <p className="git-notice">没有文件变化或子模块引用更新。</p>}
+      {status && !status.repositories.length && <p className="git-notice">没有发现 Git 仓库。请将完整仓库根目录加入工作区。</p>}
+      {status?.warnings.map((warning, index) => <p key={index} className="git-notice">{warning}</p>)}
+    </>)}</div>
+    {(loading || status?.refreshing || status?.stale || pendingRepositories > 0) && <p className="git-notice" role="status">{pendingRepositories ? `正在读取 Git 状态，剩余 ${pendingRepositories} 个仓库…` : '正在刷新 Git 状态…'}</p>}
     {notice && <p className="git-notice" role="status">{notice}</p>}
     {!readOnlyShare && pendingPush.length > 0 && <div className="git-push-retry"><button className="ws-outline-button" disabled={busy} onClick={retryPush}>{busy ? '处理中…' : '重试 Push'}</button><small>仅推送已生成的本地提交</small></div>}
     {!readOnlyShare && <ResizableCommitPanel><div className="git-commit-heading"><span>Commit Message</span><BaseButton disabled={busy} onClick={() => setMessageDialogOpen(true)}>规范填写</BaseButton></div><textarea aria-label="提交信息" placeholder="Commit Message" value={message} disabled={busy} onChange={event => { setMessage(event.target.value); setPreview(null) }} />
@@ -295,6 +376,14 @@ export function GitPanel({ workspace, active, onOpenDiff, onOpenHistory, onClose
     </ResizableCommitPanel>}
     {!readOnlyShare && messageDialogOpen && <CommitMessageDialog message={message} onClose={() => setMessageDialogOpen(false)} onApply={value => { setMessage(value); setPreview(null); setMessageDialogOpen(false) }} />}
 
-    {menu && <div className="git-context" role="menu" style={{ left: menu.x, top: menu.y }} onClick={event => event.stopPropagation()}><button role="menuitem" onClick={() => { void showDiff(menu.repo, menu.file); setMenu(null) }}>Show Diff</button>{!readOnlyShare && <><button role="menuitem" disabled={busy || !menu.file.selectable || !menu.file.untracked} onClick={() => mutate('add', [{ repository: menu.repo.root, version: menu.repo.version, paths: [menu.file.path] }])}>Add to VCS</button><button role="menuitem" disabled={busy || !menu.file.selectable || menu.file.untracked || menu.file.submodule} onClick={() => mutate('rollback', [{ repository: menu.repo.root, version: menu.repo.version, paths: [menu.file.path] }])}>Rollback…</button></>}</div>}
+    {menu && <div className="git-context" role="menu" style={{ left: menu.x, top: menu.y }} onClick={event => event.stopPropagation()}>
+      {menuFile && <button role="menuitem" onClick={() => { void showDiff(menu.repo, menuFile); setMenu(null) }}>Show Diff</button>}
+      {!readOnlyShare && <>
+        <button role="menuitem" disabled={busy || !!menu.repo.blocked || menu.repo.truncated || !menu.paths.length || !!menuFile && (!menuFile.selectable || !menuFile.untracked || menuFile.submodule)}
+          onClick={() => void mutate('add', [{ repository: menu.repo.root, version: menu.repo.version, paths: menu.paths }])}>添加到 VCS{!menuFile ? `（${menu.paths.length} 个文件）` : ''}</button>
+        {menuFile && <button role="menuitem" disabled={busy || !!menu.repo.blocked || menu.repo.truncated || !menuFile.selectable || menuFile.untracked || menuFile.submodule}
+          onClick={() => void mutate('rollback', [{ repository: menu.repo.root, version: menu.repo.version, paths: [menuFile.path] }])}>Rollback…</button>}
+      </>}
+    </div>}
   </div>
 }

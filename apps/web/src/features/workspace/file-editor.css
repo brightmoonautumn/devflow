@@ -26,6 +26,4 @@
 .file-status { display: flex; align-items: center; flex-shrink: 0; justify-content: flex-end; flex-wrap: wrap; gap: 12px; padding: 5px 12px; border-top: 1px solid var(--ws-subtle-border); color: var(--ws-dim); font-size: var(--ws-font-caption); }
 .file-status span { display: inline-flex; align-items: center; gap: 4px; }
 .file-status span:first-child { margin-right: auto; color: var(--ws-muted); }
-.df-source-editor .cm-search { font-size: var(--ws-font-small); }
-.df-source-editor .cm-textfield { background: var(--ws-bg); color: var(--ws-ink); border-color: var(--ws-border); }
 @media (max-width: 550px) { .file-tab-group { max-width: 200px; } .file-status { gap: 8px; } }

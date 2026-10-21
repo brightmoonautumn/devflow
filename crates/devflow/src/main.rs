@@ -78,8 +78,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         share_slots: Arc::new(tokio::sync::Semaphore::new(8)),
     });
     let guest_router = share::router(state.clone());
+    let terminal_workspace = state.engine.workspace.clone();
     let app = Router::new()
         .route("/api/health", get(http::health))
+        .route("/api/workspace/terminal", post(http::terminal_execute))
+        .route("/api/workspace/terminal/socket", get(http::terminal_socket))
         .route("/api/workspace/shares", get(share::list).post(share::create))
         .route("/api/workspace/shares/revoke", post(share::revoke))
         .route("/api/session", get(http::session))
@@ -169,10 +172,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Err(error) = axum::serve(share_listener, guest_router.into_make_service_with_connect_info::<SocketAddr>()).await { tracing::error!("只读分享监听失败：{error}"); }
         });
     }
-    axum::serve(listener, app)
+    let result = axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
-        .await?;
+        .await;
+    terminal_workspace.close_terminals()?;
+    result?;
     Ok(())
 }

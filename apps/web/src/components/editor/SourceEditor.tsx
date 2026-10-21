@@ -7,6 +7,8 @@ import { indentWithTab } from '@codemirror/commands'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { loadEditorLanguage } from './editorLanguages'
+import { editorPhrases } from './editorPhrases'
+import { editorSearch } from './editorSearch'
 import './source-editor.css'
 
 export const colors = syntaxHighlighting(HighlightStyle.define([
@@ -69,7 +71,7 @@ export default function SourceEditor({ path, value, readonly, location, onChange
       parent: host.current,
       doc: initial.current,
       extensions: [
-        basicSetup, colors, language.of([]), attribution.current.of([]),
+        basicSetup, editorPhrases, editorSearch, colors, language.of([]), attribution.current.of([]),
         EditorView.domEventHandlers({ scroll: () => { setMenu(null); return false } }),
         /\.(?:md|markdown)$/i.test(path) ? EditorView.lineWrapping : [],
         EditorState.tabSize.of(2),

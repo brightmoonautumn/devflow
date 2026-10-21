@@ -1,0 +1,33 @@
+.terminal-body { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.terminal-views { flex: 1; min-width: 0; min-height: 0; position: relative; }
+.terminal-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.terminal-view[hidden] { display: none; }
+.terminal-screen { flex: 1; min-height: 0; padding: 6px 4px 2px 10px; overflow: hidden; background: #11151b; }
+[data-theme="light"] .terminal-screen { background: #fff; }
+.terminal-screen .xterm { height: 100%; }
+.terminal-empty { display: flex; height: 100%; min-height: 80px; align-items: center; justify-content: center; flex-direction: column; gap: 10px; color: var(--ws-muted); font-size: 12px; padding: 12px; text-align: center; }
+.terminal-empty small { font-size: 11px; }
+.terminal-sessions { width: 190px; flex-shrink: 0; overflow-y: auto; border-left: 1px solid var(--ws-border); padding: 5px 0; }
+.terminal-session { display: flex; min-width: 0; align-items: center; }
+.terminal-session.is-active { background: var(--ws-hover); color: var(--ws-accent); }
+.terminal-session > button:first-child { flex: 1; min-width: 0; display: flex; gap: 6px; align-items: center; background: none; text-align: left; padding: 6px 8px; color: inherit; font-size: 11px; }
+.terminal-session > button > svg { flex-shrink: 0; }
+.terminal-session > button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-session small { margin-left: 6px; opacity: .65; font-size: 10px; }
+.terminal-session-close { flex-shrink: 0; background: none; color: var(--ws-muted); padding: 5px; }
+.terminal-session-close:hover { color: var(--ws-error); }
+.terminal-add { position: relative; }
+.terminal-folder-menu { position: absolute; z-index: 50; right: 0; bottom: calc(100% + 8px); max-height: 250px; overflow-y: auto; width: min(340px, 75vw); border: 1px solid var(--ws-border); background: var(--ws-bg); box-shadow: 0 6px 24px #0004; border-radius: 5px; padding: 5px; }
+.terminal-folder-menu > span { display: block; padding: 6px 8px; font-size: 11px; color: var(--ws-muted); }
+.terminal-folder-menu > button { display: flex; align-items: center; width: 100%; text-align: left; background: none; gap: 8px; padding: 7px 8px; color: var(--ws-ink); border-radius: 3px; font-size: 12px; }
+.terminal-folder-menu > button:hover, .terminal-folder-menu > button:focus-visible { background: var(--ws-hover); }
+.terminal-folder-menu > button > span { min-width: 0; }
+.terminal-folder-menu small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 270px; color: var(--ws-muted); font-size: 10px; margin-top: 3px; }
+.terminal-notice { flex-shrink: 0; padding: 4px 10px; color: var(--ws-muted); font-size: 11px; }
+.terminal-notice.is-error { color: var(--ws-error); }
+.terminal-notice button { margin-left: 8px; font-size: inherit; color: inherit; background: none; text-decoration: underline; }
+@media (max-width: 719px) {
+  .terminal-body { flex-direction: column-reverse; }
+  .terminal-sessions { display: flex; width: 100%; max-height: 36px; overflow-x: auto; border-left: 0; border-bottom: 1px solid var(--ws-border); padding: 0; }
+  .terminal-session { flex-shrink: 0; max-width: 200px; }
+}

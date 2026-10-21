@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 jsonc-parser = { version = "0.34", features = ["serde", "cst"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
@@ -17,3 +18,6 @@ tree-sitter-java = "0.23"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 
 notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }
+
+# Native PTY / Windows ConPTY for interactive workspace terminals.
+portable-pty = "0.9"

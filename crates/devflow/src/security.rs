@@ -57,6 +57,12 @@ pub async fn guard(State(state): State<Arc<AppState>>, request: Request, next: N
         if headers.get("x-devflow-client").is_none_or(|v| v != "web") {
             return StatusCode::FORBIDDEN.into_response();
         }
+    } else if path == "/api/workspace/terminal/socket" {
+        // Browser WebSocket cannot set Authorization. This endpoint validates
+        // its first frame before accessing the core; require a browser Origin.
+        if headers.get("origin").is_none() {
+            return StatusCode::FORBIDDEN.into_response();
+        }
     } else if path != "/api/health" && !authenticated(headers, &state) {
         return (
             StatusCode::UNAUTHORIZED,

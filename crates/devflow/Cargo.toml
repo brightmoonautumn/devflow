@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 devflow-core = { path = "../devflow-core" }
-axum = { version = "0.8", features = ["json"] }
+axum = { version = "0.8", features = ["json", "ws"] }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

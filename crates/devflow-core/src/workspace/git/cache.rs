@@ -93,6 +93,17 @@ struct Entry {
     snapshot: Option<GitRepository>, sampled: Option<Instant>, attempted: Option<Instant>,
     dirty: u64, clean: u64, dirty_at: Option<Instant>, refreshing: bool, error: Option<String>, bytes: usize,
 }
+impl Entry {
+    fn refresh_due(&self, force: bool) -> bool {
+        if self.refreshing { return false; }
+        let changed = self.dirty != self.clean && self.dirty_at.is_none_or(|time| time.elapsed() >= DEBOUNCE);
+        let expired = self.sampled.is_none_or(|time| time.elapsed() >= FALLBACK);
+        // Back off failed reads, not successful snapshots invalidated by an edit
+        // or a completed mutation. Those must become visible without a 5s delay.
+        let retry = self.error.is_none() || self.attempted.is_none_or(|time| time.elapsed() >= Duration::from_secs(5));
+        force || ((self.snapshot.is_none() || changed || expired) && retry)
+    }
+}
 #[derive(Default)]
 struct State {
     scope: String, generation: u64, topology: Option<(Instant, Vec<Repository>, Vec<String>)>, topology_dirty: bool,
@@ -254,10 +265,7 @@ impl GitCache {
                 let Ok(mut state) = self.state.lock() else { return; };
                 let generation = state.generation;
                 let entry = state.entries.entry(repo.root.clone()).or_default();
-                let changed = entry.dirty != entry.clean && entry.dirty_at.is_none_or(|time| time.elapsed() >= DEBOUNCE);
-                let expired = entry.sampled.is_none_or(|time| time.elapsed() >= FALLBACK);
-                let retry = entry.attempted.is_none_or(|time| time.elapsed() >= Duration::from_secs(5));
-                if entry.refreshing || !(force || ((entry.snapshot.is_none() || changed || expired) && retry)) { continue; }
+                if !entry.refresh_due(force) { continue; }
                 entry.refreshing = true;
                 (generation, entry.dirty, STATUS_LIMIT / repositories.len().max(1))
             };
@@ -306,6 +314,10 @@ impl GitCache {
                 if let Ok(mut state) = self.state.lock() { if let Some(entry) = state.entries.get_mut(&root) { entry.refreshing = false; } }
             }
         }
+    }
+    pub(super) fn is_cold(&self, repositories: &[Repository]) -> bool {
+        self.state.lock().map_or(true, |state| repositories.iter().any(|repo|
+            state.entries.get(&repo.root).is_none_or(|entry| entry.snapshot.is_none())))
     }
     pub(super) fn result(&self, revision: u64, repositories: &[Repository], mut warnings: Vec<String>, wait: Duration) -> Result<GitStatus> {
         let started = Instant::now();
@@ -388,6 +400,31 @@ fn within(path: &Path, root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn invalidated_success_does_not_wait_for_failure_backoff() {
+        let snapshot = GitRepository { root: "C:/source/中文 仓库".into(), name: "中文 仓库".into(), branch: "main".into(),
+            head: None, parent: None, submodule_path: None, version: "warm".into(), changes: Vec::new(), blocked: None, truncated: false };
+        let mut entry = Entry { snapshot: Some(snapshot), attempted: Some(Instant::now()), sampled: Some(Instant::now()), dirty: 1,
+            dirty_at: Some(Instant::now() - DEBOUNCE), ..Entry::default() };
+        assert!(entry.refresh_due(false));
+        entry.error = Some("read failed".into());
+        assert!(!entry.refresh_due(false));
+        assert!(entry.refresh_due(true));
+        entry.attempted = Some(Instant::now() - Duration::from_secs(6));
+        assert!(entry.refresh_due(false));
+        entry.refreshing = true;
+        assert!(!entry.refresh_due(true));
+    }
+    #[test]
+    fn successful_fresh_snapshot_keeps_debounce_and_does_not_rescan_on_every_poll() {
+        let snapshot = GitRepository { root: "C:/source/repo".into(), name: "repo".into(), branch: "main".into(),
+            head: None, parent: None, submodule_path: None, version: "warm".into(), changes: Vec::new(), blocked: None, truncated: false };
+        let mut entry = Entry { snapshot: Some(snapshot), sampled: Some(Instant::now()), ..Entry::default() };
+        assert!(!entry.refresh_due(false));
+        entry.dirty = 1; entry.dirty_at = Some(Instant::now());
+        assert!(!entry.refresh_due(false));
+        assert!(entry.refresh_due(true));
+    }
     #[test]
     fn content_lru_is_bounded_and_recent_reads_can_be_retained() {
         let mut cache = Content::default();

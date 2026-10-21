@@ -98,7 +98,7 @@
 
 - 服务卡片直接显示主 PID；Java 应用进程与 Maven 启动器、Windows `conhost.exe` 辅助进程分开，Node.js 尽量展示包管理器下的应用进程，工作子进程不重复作为主进程。同一服务确有多个独立应用进程时保留多个主 PID，不随意取第一个。构建阶段尚无应用进程时显示“等待应用启动”。展开项目详情后显示辅助进程 / 启动器名称、PID 和父 PID。
 - 核心运行快照新增 `primaryPids`、`processes`（`pid` / `parentPid` / `name` / `role`）及 `listeners`（`pid` / `port` / `purpose` / `purposeSource`），HTTP、MCP 和只读分享共用识别逻辑。保留原 `pids`、`javaPids`、`nodePids`、`listeningPorts` 字段及其语义；资源指标和进程树清理继续覆盖全部关联进程。进程元数据不返回完整命令行。
-- 卡片最多直接显示两个监听项，注明端口、所属 PID 和用途；展开详情可查看完整列表。同一 PID 的 IPv4 / IPv6 同端口去重，不同 PID 的同端口保留各自归属；采集失败时 `listeners` 为 null，无监听时为空数组。
+- 卡片端口标签仅显示端口数字（如 `8001`），按端口号去重排序，最多展示三个，其余以 `+N` 提示；所属 PID、用途及其依据放在展开详情中。新旧后端均使用简洁数字标签。同一 PID 的 IPv4 / IPv6 同端口去重，不同 PID 的同端口在详情中保留各自归属；采集失败时 `listeners` 为 null，无监听时为空数组。
 - 用途仅依据可读取的启动参数：JDWP 监听地址、显式 `server.port`、`management.server.port`、`grpc.server.port` 以及 Arthas 启动器的端口参数；用途来源标记为 `command_line`。配置文件、远程配置或应用代码决定的端口暂不推断，显示“用途未知”（`unknown`），不根据 8080、50051 等常见号码断言协议。旧后端仍显示端口，并提示更新后才能识别主 PID 及端口归属。
 - 已补充 Windows 中文路径、控制台 / Maven 辅助进程、Node.js 包管理器与子进程、监听归属及去重、未知用途、采集失败和退出后清空的测试代码；本轮未运行编译或测试。
 
@@ -107,6 +107,8 @@
 - 新增轻量文件编辑能力，扩展原 MVP 不提供源码编辑器的范围。参考 [VS Code 的 Explorer / Editor 与预览标签交互](https://code.visualstudio.com/docs/editing/getting-started/userinterface)，使用 [CodeMirror 6](https://codemirror.net/docs/guide/) 的开源编辑内核，不引入 Monaco 或完整 IDE。
 - 点击左侧文件节点，在右侧预览文件；双击文件或标签固定标签，首次编辑自动固定。未修改的预览标签可被下一次预览复用；同时最多打开 12 个文件，切换标签保留未保存内容、光标、滚动与撤销历史。顶部“服务”标签返回原服务页面，底部运行输出保持独立；窄屏打开文件后自动收起目录树。
 - 提供行号、括号匹配、折叠、撤销/重做、查找替换、Tab 缩进、Ctrl/Cmd+S 立即保存，停止输入 700ms 后自动保存；JS/TS/JSX/TSX、JSON、HTML/Vue、CSS、Java、Markdown、XML/SVG 提供语法高亮，其他 UTF-8 文本按纯文本编辑。`components/editor/SourceEditor.tsx` 是公共编辑组件边界，工作区业务不直接调用 CodeMirror API；编辑器按需加载，跟随现有明暗主题令牌。
+- Ctrl/Cmd+F 查找替换栏位于编辑区域顶部，采用紧凑双行布局；查找行包含输入框、大小写/全字/正则切换、上下项导航和全选匹配，替换行可收起，包含替换输入与中文操作按钮。展开箭头使用 CSS 绘制并始终对齐第一行，避免字符基线造成视觉偏下。只读时隐藏替换入口，窄区域自动换行，明暗主题与匹配高亮沿用工作台令牌。
+- 普通源码与三方合并编辑器共用 `editorSearch.ts` 和中文短语配置；查询、导航、替换复用 CodeMirror 搜索命令，保留 Enter/Shift+Enter、Escape 等键盘交互并避开中文输入法组合输入。显式声明现有传递依赖 `@codemirror/search`，同步锁文件；未安装依赖、编译或运行测试，顶部布局、明暗主题、窄屏与键盘操作待界面验收。
 - 语法高亮按文件名和扩展名自动识别，复用 CodeMirror 官方语言目录并按需加载解析器；在既有格式外支持 YAML/YML、Python/PYI/PYW、SQL、Shell/Zsh、PowerShell、Dockerfile、TOML、Properties/INI、Go、Rust、C/C++ 等常见格式。额外识别 `.env` / `.env.*`、`Dockerfile.*`、Shell 启动文件、JSONC 与 `.code-workspace`、MTS/CTS、SVG/XSD 等配置别名；JSONC/JSON5 使用 JSON 高亮规则，环境变量文件使用 Properties 高亮规则，未知格式保持纯文本。
 - `.log` / `.out` / `.err` 及其轮转后缀使用本地轻量日志高亮：时间、ERROR/FATAL、WARN、INFO、DEBUG/TRACE、异常名称与 Java 堆栈、URL、字符串、数字和线程标记使用不同主题颜色；兼容方括号包裹的级别和时间。语言模块加载失败时保持可编辑的纯文本，异步加载不重建编辑器或清空撤销记录，关闭标签后不会应用迟到结果。高亮仅影响 Web 展示，文件 HTTP/MCP 读写规则保持共用核心服务。
 - 本次高亮扩展已更新前端依赖与锁文件（安装时禁用生命周期脚本），按约定未运行编译、构建或测试命令，实际显示待用户构建后验证。
@@ -331,5 +333,26 @@ Commit 顶部 History 入口在独立工具标签打开提交图、仓库/分支
 
 Git 展示读取改为核心内存快照与按仓库后台刷新；History 使用独立仓库目录接口。HTTP/MCP/只读分享复用相同规则，本机与分享共用 32 MiB 历史内容 LRU 和 16 MiB 状态内容估算预算，授权缓存键隔离。详细行为与未运行的验证场景见 `docs/features/workspace-git.md` 的“Git 扫描与内存缓存”。
 
+Commit 面板修复冷启动加载占位误报 Merge Conflicts，添加到 VCS 后显示进度/成功数量并强制同步列表；Unversioned Files 的目录支持右键按已列出的文件路径添加。状态解析限制对象数量，冷启动判断移除额外快照复制；前端复用未变化数组、卸载折叠后代与隐藏文件树。已补测试源码，未编译或运行测试，实际行为及内存下降待验收；History 优化留待后续。
+
 
 Git Update Project 与三栏冲突合并：Git 面板新增拉取并合并上游的入口；后台任务、三方文本处理、整文件选择、完成/中止合并共享 devflow-core，并同时提供 HTTP/MCP。详见 [工作区 Git 管理](workspace-git.md) 的“Update Project 与三栏合并”。首版要求干净暂存区和已跟踪工作区，未实现 Rebase/自动 Stash；按约定未编译或运行测试，等待用户本机验证。
+
+
+## 工作区交互终端
+
+- 底部状态栏新增“终端”，`Ctrl+反引号` 打开或收起。终端标题栏 `+` 在单个可用工作区文件夹时直接创建，多个时先列出文件夹名称与绝对路径；工作目录通过 PTY 的 cwd 设置，不拼接 `cd` 命令，支持中文、空格与 Windows 路径。
+- 使用与 VS Code 同类的 xterm.js + 系统 PTY 架构。参考 [terminalInstance.ts](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/terminal/browser/terminalInstance.ts)、[xtermTerminal.ts](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/terminal/browser/xterm/xtermTerminal.ts) 与 [terminalProcess.ts](https://github.com/microsoft/vscode/blob/main/src/vs/platform/terminal/node/terminalProcess.ts) 的展示/进程分层，未复制 VS Code 源码。Rust 使用 portable-pty 0.9（Windows ConPTY）；前端增加 @xterm/xterm、@xterm/addon-fit，依赖锁文件已同步。
+- Windows 默认使用系统 Windows PowerShell，初始化控制台输入、输出及管道 UTF-8；类 Unix 使用服务端 SHELL 或 /bin/sh。支持真实交互输入、Ctrl+C、光标与 ANSI/256 色/真彩色输出；输出颜色由命令本身发出的 ANSI 控制序列决定，不对普通文本做日志级别着色。不包含 VS Code shell integration、命令导航、终端分屏或远程终端。
+- 每个终端独立进程与输出，右侧列表切换，窄屏改为横向列表；明暗主题同步，拖拽底部面板自动同步 PTY 行列。清理按钮清除当前渲染器滚动历史，垃圾桶终止进程树并关闭会话。收起面板保留会话；刷新网页可重新列出进程并重放保留输出。切换/关闭工作区关闭全部终端，删除文件夹关闭对应终端，保存和添加文件夹保留仍被授权的终端。服务正常退出时显式清理，异常强制结束宿主的情况仍需本机验收。
+- 核心业务统一在 `WorkspaceService` 的终端服务内。HTTP `POST /api/workspace/terminal` 与 MCP `workspace_terminal` 保留原有 `expectedRevision` 和 `operation`（`list/create/read/input/resize/close`）；WebSocket 输入/尺寸更新复用相同内部执行逻辑。创建只接受当前工作区显式声明且 canonicalize 后在授权根内的可用文件夹，不接受客户端指定 shell 可执行文件或启动参数。工作区修改持锁更新会话成员关系，实时操作持同一工作区锁检查 revision 和存活会话；输入/尺寸更新重新授权当前终端目录，避免逐键解析和检查全部工作区文件夹或收集全部会话状态。终端不挂载到局域网只读分享监听器。
+- 此功能按用户要求提供本机交互 shell：工作区校验约束初始 cwd 与会话访问，不是 shell 文件系统沙箱，shell 中的命令以当前本机用户权限运行。MCP 工具声明为具有副作用和破坏可能性的能力。
+- 最多 12 个会话，每个保留 1 MiB 原始输出字节。HTTP/MCP 读取仍每次最多 64 KiB，返回 `data: number[]`、`nextCursor`、`truncated`、`exited`、`exitCode`。Web UI 使用 `GET /api/workspace/terminal/socket` 升级为 WebSocket，取消输出的 120ms/800ms 定时轮询；PTY 追加输出时通过 watch 通知订阅者，通知可合并，实际输出按 cursor 从有界缓冲读取，等待期间不持工作区锁。每秒只做一次修订/会话生命周期检查，确保无输出或暂停确认时也能发现失效会话。
+- WebSocket 协议：首条 JSON 为 `{token, expectedRevision, id, after}`，认证成功返回 `ready`；随后客户端发送 `input`、`resize`、`ack` 控制消息。服务端输出二进制帧为 **8 字节大端 nextCursor + 最多 64 KiB 原始 PTY 字节**，其他消息为 `reset`、`input_ack`、`input_error`、`exit`、`error`。xterm 消费完每帧后才提交游标并 ACK，服务端最多保留 256 KiB 未确认输出，超过窗口暂停发送；后端仍继续读取 PTY 到 1 MiB 环形缓冲，慢客户端溢出后收到截断提示，此流控不阻塞 shell。保留跨块 UTF-8 和 ANSI 序列。
+- 连接继续验证本机 Host/Origin，升级请求必须携带允许的 Origin；令牌只在首帧传递，不写入 URL，认证前不访问终端业务，5 秒内未认证断开。最多 24 条实时连接，限制消息尺寸和发送等待时间。Vite `/api` 代理开启 `ws`。输入使用原有独立线程和有界队列；前端按 Unicode 字符分块（每块最多 4096 个码点），最多排队 256 KiB，收到 `input_ack`（表示已进入后端输入队列，不代表 shell 已执行）后发送下一块；后端队列满时取消剩余粘贴并提示。连接中断不自动重放输入。
+- 仅当前可见且页面前台的终端建立实时连接；切换、展开或回到页面时立即连接，断线使用退避重连，并从 xterm 已消费游标补读；断开连接不关闭 shell。检测到 shell 退出且当前缓冲已发送完时通知退出码，继续接收可能晚到的 PTY 尾部输出，读到 EOF 后关闭连接（兼容 ConPTY 在 shell 退出后仍保持管道打开的情况）。尺寸更新按帧 fit，并在 32ms 防抖后发送；移除强制启用的 screenReaderMode。
+- 已添加测试源码：中文/ANSI 跨块字节保留、有界缓冲区与游标、令牌/修订/精确工作区根目录校验、原生 PTY 中文空格路径、交互输入、调整尺寸与关闭工作区时的进程清理。本轮按要求未运行编译、类型检查或测试，仅更新依赖锁文件并检查源码差异。
+- WebSocket 改造补充测试源码：实际升级连接的 Origin 拒绝及首帧认证顺序、输出通知的读/等待竞态和合并、实时接口鉴权/修订/关闭校验、原生 PTY 的订阅与补读、发送窗口上限/无效 ACK/截断游标跳跃。仅同步 Cargo 锁文件并静态检查源码，按项目约定未运行编译、类型检查或测试。
+- 待本机验收：多文件夹 `+` 选择与 cwd；中文输入和输出；PowerShell/Node/Maven ANSI 输出；Ctrl+C 中断前台子进程；长输出时的输入响应、粘贴限流与退出尾部输出；多会话切换、收起再打开、页面后台恢复、断线/刷新重连且无重复输出；宽窄屏与主题；删除文件夹、切换工作区和退出 DevFlow 后的进程树清理；未授权、恶意 Origin、过期修订和无效 ACK 被拒绝；只读分享无终端入口。
+
+终端 Windows cwd 修正：授权与会话归属继续使用 canonical 路径，传入 shell 的 cwd 使用普通盘符/UNC 路径，避免 Windows PowerShell 将 `\\?\` 路径显示为 `Microsoft.PowerShell.Core\FileSystem::...`。已有会话需关闭后新建才使用修正后的 cwd；未编译或运行测试。

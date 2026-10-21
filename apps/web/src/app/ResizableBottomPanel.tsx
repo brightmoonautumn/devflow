@@ -4,9 +4,9 @@ import { Terminal, X } from 'lucide-react'
 const storageKey = 'devflow.bottom-panel.height'
 const defaultHeight = 220
 
-type Props = { title: string, project?: string, description: string, children?: ReactNode, headerActions?: ReactNode, onClose: () => void }
+type Props = { title: string, project?: string, description: string, children?: ReactNode, headerActions?: ReactNode, hidden?: boolean, onClose: () => void }
 
-export function ResizableBottomPanel({ title, project, description, children, headerActions, onClose }: Props) {
+export function ResizableBottomPanel({ title, project, description, children, headerActions, hidden = false, onClose }: Props) {
   const [height, setHeight] = useState(() => {
     try {
       const saved = Number(localStorage.getItem(storageKey) ?? defaultHeight)
@@ -63,7 +63,7 @@ export function ResizableBottomPanel({ title, project, description, children, he
     }
   }, [])
 
-  return <section ref={panel} className={`bottom-panel ws-bottom-panel ${resizing ? 'is-resizing' : ''}`} style={{ height }} aria-label={title}>
+  return <section ref={panel} className={`bottom-panel ws-bottom-panel ${resizing ? 'is-resizing' : ''}`} style={{ height, display: hidden ? 'none' : undefined }} aria-label={title}>
     <div className="ws-panel-resizer" role="separator" aria-label="调整底部面板高度" aria-orientation="horizontal" aria-valuemin={bounds.min} aria-valuemax={bounds.max} aria-valuenow={height} aria-valuetext={`${height} 像素`} tabIndex={0} title="拖拽调整高度；上下方向键微调；双击复位"
       onPointerDown={event => {
         if (event.button !== 0) return

@@ -8,6 +8,9 @@ use devflow_core::workspace::{WorkspaceChildrenRequest, WorkspaceError, Workspac
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+mod terminal_socket;
+pub use terminal_socket::terminal_socket;
+
 pub(crate) type ApiResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
 pub(crate) fn response<T: serde::Serialize>(result: Result<T, WorkspaceError>) -> ApiResult {
     match result {
@@ -319,4 +322,10 @@ pub async fn node_output(
         })
         .await,
     )
+}
+
+/// Owner-only PTY operations; never mounted on the read-only sharing listener.
+pub async fn terminal_execute(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::TerminalRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.terminal_execute(request, authenticated)).await)
 }
