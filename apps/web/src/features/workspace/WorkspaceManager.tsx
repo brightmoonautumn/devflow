@@ -116,7 +116,7 @@ export function WorkspaceManager({ mode: initialMode, data, onChange, onRefresh,
         <div className="ws-native-picker">
           {mode === 'open' && <button type="button" className="ws-outline-button" disabled={busy || stale || baseRevision === undefined} onClick={() => void pickLocal('workspace_file')}><Layers3 size={15} />选择工作区文件…</button>}
           <button type="button" className="ws-outline-button" disabled={busy || stale || baseRevision === undefined} onClick={() => void pickLocal('folder')}><FolderOpen size={15} />{saving ? '选择保存文件夹…' : '选择本机文件夹…'}</button>
-          <p className="ws-manager-hint" role="status">{picking ? cancelling ? '正在关闭系统选择窗口…' : '请在系统窗口中选择；若被遮挡，可从任务栏切换到“DevFlow — 选择本机位置”，或在此取消选择。' : '可选择本机任意位置。下方保留已授权位置，方便再次打开。'}</p>
+          <p className="ws-manager-hint" role="status">{picking ? cancelling ? '正在关闭系统选择窗口…' : '请在系统窗口中选择，或在此取消选择。' : '可选择本机任意位置。下方保留已授权位置，方便再次打开。'}</p>
           {picking && <button type="button" className="ws-outline-button" disabled={cancelling} onClick={() => void cancelPick()}>{cancelling ? '正在取消…' : '取消选择'}</button>}
         </div>
         {mode === 'open' && selected && <p className="ws-native-selection" title={selected}>已选择：{selected}</p>}

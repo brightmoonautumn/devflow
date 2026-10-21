@@ -96,43 +96,14 @@ impl Drop for PickerSession<'_> {
 #[cfg(windows)]
 fn pick_dialog(session: &PickerSession<'_>, kind: WorkspacePickKind) -> Result<Option<String>> {
     use std::{io::Read, os::windows::process::CommandExt, process::{Command, Stdio}, time::{Duration, Instant}};
-    const SCRIPT: &str = r#"
-$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-Add-Type -AssemblyName System.Windows.Forms
-$owner = New-Object System.Windows.Forms.Form
-$owner.TopMost = $true
-$owner.ShowInTaskbar = $false
-$owner.Opacity = 0
-$owner.Show()
-try {
-  if ($env:DEVFLOW_PICK_KIND -eq 'workspace_file') {
-    $dialog = New-Object System.Windows.Forms.OpenFileDialog
-    $dialog.Title = '选择工作区文件'
-    $dialog.Filter = 'VS Code 工作区 (*.code-workspace)|*.code-workspace'
-    $dialog.CheckFileExists = $true
-    $dialog.Multiselect = $false
-    $dialog.DereferenceLinks = $true
-  } else {
-    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description = '选择本机文件夹'
-    $dialog.RootFolder = [System.Environment+SpecialFolder]::MyComputer
-    $dialog.ShowNewFolderButton = $true
-  }
-  try {
-    if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
-      if ($env:DEVFLOW_PICK_KIND -eq 'workspace_file') { $path = $dialog.FileName } else { $path = $dialog.SelectedPath }
-      ConvertTo-Json -Compress -InputObject $path
-    } else { 'null' }
-  } finally { $dialog.Dispose() }
-} finally { $owner.Dispose() }
-"#;
+    const SCRIPT: &str = include_str!("picker-windows.ps1");
     // Rust passes Windows process arguments as UTF-16, preserving the dialog labels.
     let mut state = session.state.lock().map_err(|_| failure("选择窗口状态不可用"))?;
     if state.cancelled { return Ok(None); }
     let mut child = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-STA", "-WindowStyle", "Hidden", "-Command", SCRIPT])
         .env("DEVFLOW_PICK_KIND", match kind { WorkspacePickKind::WorkspaceFile => "workspace_file", WorkspacePickKind::Folder => "folder" })
+        .env("DEVFLOW_PICK_PARENT", std::process::id().to_string())
         .creation_flags(0x08000000)
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
     // Drain concurrently: a long selected path must not fill the pipe and block exit.
@@ -218,5 +189,64 @@ mod tests {
         session.state.lock().unwrap().child = Some(child);
         registry.cancel("child").unwrap();
         assert!(session.state.lock().unwrap().child.is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "opens a native chooser on the interactive Windows desktop"]
+    fn native_chooser_is_topmost_without_a_visible_auxiliary_owner() {
+        use std::time::{Duration, Instant};
+
+        struct Probe { pid: u32, found: bool }
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn EnumWindows(callback: unsafe extern "system" fn(isize, isize) -> i32, parameter: isize) -> i32;
+            fn GetWindowThreadProcessId(window: isize, pid: *mut u32) -> u32;
+            fn GetWindowLongW(window: isize, index: i32) -> i32;
+            fn GetWindow(window: isize, command: u32) -> isize;
+            fn IsWindowVisible(window: isize) -> i32;
+            fn GetClassNameW(window: isize, name: *mut u16, length: i32) -> i32;
+        }
+        unsafe extern "system" fn inspect(window: isize, parameter: isize) -> i32 {
+            let probe = unsafe { &mut *(parameter as *mut Probe) };
+            let mut pid = 0;
+            unsafe { GetWindowThreadProcessId(window, &mut pid); }
+            if pid != probe.pid || unsafe { IsWindowVisible(window) } == 0 { return 1; }
+            let mut name = [0u16; 64];
+            let length = unsafe { GetClassNameW(window, name.as_mut_ptr(), name.len() as i32) };
+            if length <= 0 || String::from_utf16_lossy(&name[..length as usize]) != "#32770" { return 1; }
+            let owner = unsafe { GetWindow(window, 4) }; // GW_OWNER
+            probe.found = owner != 0
+                && unsafe { IsWindowVisible(owner) } == 0
+                && unsafe { GetWindowLongW(owner, -20) } & 0x0004_0000 == 0 // No WS_EX_APPWINDOW
+                && unsafe { GetWindowLongW(window, -20) } & 0x0000_0008 != 0; // WS_EX_TOPMOST
+            if probe.found { 0 } else { 1 }
+        }
+
+        // Cover both the legacy folder chooser and the workspace file chooser.
+        for kind in [WorkspacePickKind::Folder, WorkspacePickKind::WorkspaceFile] {
+            let registry = PickerRegistry::default();
+            let session = registry.start(Some("window-test".into())).unwrap();
+            std::thread::scope(|scope| {
+                let worker = scope.spawn(|| session.pick(kind));
+                let deadline = Instant::now() + Duration::from_secs(30);
+                let mut observed = false;
+                while Instant::now() < deadline && !worker.is_finished() {
+                    let pid = session.state.lock().unwrap().child.as_ref().map(|child| child.id());
+                    if let Some(pid) = pid {
+                        let mut probe = Probe { pid, found: false };
+                        unsafe { EnumWindows(inspect, &mut probe as *mut Probe as isize); }
+                        if probe.found { observed = true; break; }
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                // Always close and reap the actual chooser before reporting failures.
+                registry.cancel("window-test").unwrap();
+                let result = worker.join().unwrap();
+                assert!(observed, "native chooser must be topmost without a visible auxiliary owner");
+                assert!(result.unwrap().is_none());
+                assert!(session.state.lock().unwrap().child.is_none());
+            });
+        }
     }
 }
