@@ -11,7 +11,7 @@ DevFlow 提供两个原生入口：面向人类的 Web UI，以及面向 AI 的 
 
 ## 当前范围
 
-仅规划工作区功能，需求和验收标准集中在 [工作区](features/workspace.md)。启动和 Arthas 可继续使用内部 runtime、diagnose 模块，不作为独立功能规划。
+当前包含 [工作区](features/workspace.md) 与 [看板](features/board.md)。启动和 Arthas 可继续使用内部 runtime、diagnose 模块。看板以工作区身份隔离，持久化、认领、交付与验收规则位于 `devflow-core` 的工作区服务，HTTP 与 MCP 复用同一事务入口。
 
 工作区管理的是用户的 Maven/Spring Boot 和 Node 工程；根据实际工程配置识别模块及启动方式，不能假设目标工程是 Rust 项目。
 

@@ -1,20 +1,22 @@
 import { useRef, useState } from 'react'
 import { Check, Focus, Minus, Plus, Workflow } from 'lucide-react'
-import { featureEdges, type BoardFeature, type BoardTask } from './boardModel'
+import { type BoardFeature, type BoardTask } from './boardModel'
 
-export function BoardCanvas({ features, tasks, activeFeature, onFeature, onTask, onMove }: {
-  features: BoardFeature[]; tasks: BoardTask[]; activeFeature: string
+export function BoardCanvas({ features: savedFeatures, edges, disabled, tasks, activeFeature, onFeature, onTask, onMove }: {
+  features: BoardFeature[]; edges: [string, string][]; disabled: boolean; tasks: BoardTask[]; activeFeature: string
   onFeature: (id: string) => void; onTask: (task: BoardTask) => void; onMove: (id: string, x: number, y: number) => void
 }) {
-  const [camera, setCamera] = useState({ x: 30, y: 30, zoom: .8 })
+  const [camera, setCamera] = useState({ x: 30, y: 30, zoom: 1 })
+  const [moving, setMoving] = useState<{ id: string; x: number; y: number } | null>(null)
+  const features = savedFeatures.map(f => moving?.id === f.id ? { ...f, x: moving.x, y: moving.y } : f)
   const viewport = useRef<HTMLDivElement>(null)
   const gesture = useRef<{ id?: string; x: number; y: number; startX: number; startY: number; moved: boolean } | null>(null)
   function fit() {
     const el = viewport.current
-    if (!el) return
+    if (!el || !features.length) return
     const minX = Math.min(...features.map(f => f.x)) - 30, minY = Math.min(...features.map(f => f.y)) - 30
     const width = Math.max(...features.map(f => f.x)) + 320 - minX
-    const height = Math.max(...features.map(f => f.y)) + 260 - minY
+    const height = Math.max(...features.map(f => f.y)) + 300 - minY
     const zoom = Math.min(1, (el.clientWidth - 32) / width, (el.clientHeight - 32) / height)
     setCamera({ x: (el.clientWidth - width * zoom) / 2 - minX * zoom, y: (el.clientHeight - height * zoom) / 2 - minY * zoom, zoom: Math.max(.15, zoom) })
   }
@@ -33,6 +35,7 @@ export function BoardCanvas({ features, tasks, activeFeature, onFeature, onTask,
     if (event.button !== 0 || (event.target as Element).closest('button, input')) return
     const node = (event.target as Element).closest<HTMLElement>('[data-feature]')
     const feature = features.find(f => f.id === node?.dataset.feature)
+    if (feature && disabled) return
     gesture.current = { id: feature?.id, x: event.clientX, y: event.clientY, startX: feature?.x ?? camera.x, startY: feature?.y ?? camera.y, moved: false }
     event.currentTarget.setPointerCapture(event.pointerId)
   }} onPointerMove={event => {
@@ -41,22 +44,26 @@ export function BoardCanvas({ features, tasks, activeFeature, onFeature, onTask,
     const dx = event.clientX - g.x, dy = event.clientY - g.y
     if (Math.abs(dx) + Math.abs(dy) > 4) g.moved = true
     if (!g.moved) return
-    if (g.id) onMove(g.id, g.startX + dx / camera.zoom, g.startY + dy / camera.zoom)
+    if (g.id) setMoving({ id: g.id, x: g.startX + dx / camera.zoom, y: g.startY + dy / camera.zoom })
     else setCamera(c => ({ ...c, x: g.startX + dx, y: g.startY + dy }))
   }} onPointerUp={event => {
     const g = gesture.current
     if (g?.id && !g.moved) onFeature(g.id)
+    if (g?.id && g.moved) onMove(g.id, g.startX + (event.clientX - g.x) / camera.zoom, g.startY + (event.clientY - g.y) / camera.zoom)
+    setMoving(null)
     gesture.current = null
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-  }} onPointerCancel={() => { gesture.current = null }}>
+  }} onPointerCancel={() => { gesture.current = null; setMoving(null) }}>
     <div className="kb-canvas-world" style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})` }}>
-      <svg className="kb-edges" aria-hidden="true"><defs><marker id="kb-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="var(--ws-dim)" /></marker></defs>{featureEdges.map(([source, target]) => {
+      <svg className="kb-edges" aria-hidden="true"><defs><marker id="kb-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="var(--ws-dim)" /></marker></defs>{edges.map(([source, target]) => {
         const a = features.find(f => f.id === source), b = features.find(f => f.id === target)
         if (!a || !b) return null
-        const vertical = source === 'workspace' && target === 'runtime'
-        const x1 = a.x + (vertical ? 145 : 290), y1 = a.y + (vertical ? 240 : 100)
-        const x2 = b.x + (vertical ? 145 : 0), y2 = b.y + (vertical ? 0 : 100)
-        return <path key={`${source}-${target}`} d={vertical ? `M${x1},${y1} C${x1},${y1 + 30} ${x2},${y2 - 30} ${x2},${y2}` : `M${x1},${y1} C${x1 + 65},${y1} ${x2 - 65},${y2} ${x2},${y2}`} markerEnd="url(#kb-arrow)" />
+        const vertical = Math.abs(a.x - b.x) < 150 && Math.abs(a.y - b.y) > 200
+        const down = b.y >= a.y, right = b.x >= a.x
+        const x1 = a.x + (vertical ? 145 : right ? 290 : 0), y1 = a.y + (vertical ? down ? 280 : 0 : 100)
+        const x2 = b.x + (vertical ? 145 : right ? 0 : 290), y2 = b.y + (vertical ? down ? 0 : 280 : 100)
+        const offset = vertical ? down ? 30 : -30 : right ? 65 : -65
+        return <path key={`${source}-${target}`} d={vertical ? `M${x1},${y1} C${x1},${y1 + offset} ${x2},${y2 - offset} ${x2},${y2}` : `M${x1},${y1} C${x1 + offset},${y1} ${x2 - offset},${y2} ${x2},${y2}`} markerEnd="url(#kb-arrow)" />
       })}</svg>
       {features.map(feature => {
         const items = tasks.filter(t => t.feature === feature.id), done = items.filter(t => t.status === 'done').length

@@ -1,128 +1,211 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowLeft, ArrowRight, Check, ChevronRight, Circle, CircleCheck, Clock3, Flag, Kanban, LockKeyhole, Plus, RotateCcw, Sparkles, Workflow, X } from 'lucide-react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { Check, ChevronRight, Circle, Flag, Kanban, LockKeyhole, Plus, RefreshCw, Workflow, X } from 'lucide-react'
+import { useDialogs } from '../../components/form/BaseDialog'
 import { BoardCanvas } from './BoardCanvas'
-import { readBoardDraft, statuses, type BoardDraft, type BoardTask, type TaskStatus } from './boardModel'
+import { executeBoard, getBoard } from './api'
+import { activityText, readBoardDraft, statuses, type BoardFeature, type BoardOperation, type BoardSnapshot, type BoardTask, type TaskStatus } from './boardModel'
 import './board.css'
 
-type Props = { workspaceName: string; workspaceKey: string; query: string; onQueryChange: (query: string) => void; onSearchFocus: () => void }
-export function BoardPage({ workspaceName, workspaceKey, query, onQueryChange: setQuery, onSearchFocus }: Props) {
-  const [draft, setDraft] = useState<BoardDraft>(() => readBoardDraft(workspaceKey))
-  const { tasks, features } = draft
+type Editor = { kind: 'task'; task?: BoardTask } | { kind: 'feature'; feature?: BoardFeature } | { kind: 'features' } | { kind: 'edges' } | { kind: 'history' } | { kind: 'note'; task: BoardTask; action: 'submit' | 'progress' | 'reject' | 'block' }
+type Props = { workspaceName: string; workspaceKey: string; workspaceRevision: number; query: string; onQueryChange: (query: string) => void; onSearchFocus: () => void }
+export function BoardPage({ workspaceName, workspaceKey, workspaceRevision, query, onQueryChange, onSearchFocus }: Props) {
+  const [board, setBoard] = useState<BoardSnapshot | null>(null)
   const [view, setView] = useState<'flow' | 'architecture'>('flow')
   const [feature, setFeature] = useState('all')
   const [selected, setSelected] = useState<string | null>(null)
-  const [creating, setCreating] = useState(false)
+  const [editor, setEditor] = useState<Editor | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
-  const [storageFailed, setStorageFailed] = useState(false)
   const [mobileStatus, setMobileStatus] = useState<TaskStatus>('todo')
-  const newTaskTrigger = useRef<HTMLButtonElement | null>(null)
-  const [creationStatus, setCreationStatus] = useState<TaskStatus>('todo')
-  const [draggedTask, setDraggedTask] = useState<string | null>(null)
+  const [dragged, setDragged] = useState<string | null>(null)
   const [dropStatus, setDropStatus] = useState<TaskStatus | null>(null)
+  const [hasDraft, setHasDraft] = useState(false)
+  const latest = useRef(board)
+  const writing = useRef(false)
+  const sequence = useRef(0)
+  const readAbort = useRef<AbortController | null>(null)
+  const mounted = useRef(false)
+  const paused = useRef(false)
   const detailRef = useRef<HTMLElement>(null)
+  const dialogs = useDialogs()
+  latest.current = board
+  paused.current = !!editor || !!dragged
   useEffect(() => {
-    try { localStorage.setItem(`devflow.board.prototype.v1:${workspaceKey}`, JSON.stringify(draft)); setStorageFailed(false) }
-    catch { setStorageFailed(true) }
-  }, [draft, workspaceKey])
+    mounted.current = true
+    return () => { mounted.current = false; sequence.current++; readAbort.current?.abort(); readAbort.current = null }
+  }, [])
+  async function refresh(background = false) {
+    if (workspaceKey === 'demo') return
+    if (background && readAbort.current) return
+    readAbort.current?.abort()
+    const controller = new AbortController()
+    readAbort.current = controller
+    const seq = ++sequence.current
+    try {
+      const value = await getBoard(workspaceKey, workspaceRevision, controller.signal)
+      if (!mounted.current || seq !== sequence.current || writing.current || (background && paused.current)) return
+      latest.current = value; setBoard(value)
+      if (!background) setError('')
+    } catch (e) { if (!controller.signal.aborted && mounted.current && seq === sequence.current) setError(e instanceof Error ? e.message : '读取看板失败') }
+    finally { if (readAbort.current === controller) readAbort.current = null }
+  }
+  useEffect(() => {
+    void refresh()
+    const timer = setInterval(() => { if (!paused.current && !writing.current && document.visibilityState === 'visible') void refresh(true) }, 5000)
+    try { setHasDraft(localStorage.getItem(`devflow.board.prototype.v1:${workspaceKey}`) !== null) } catch { setHasDraft(false) }
+    return () => { clearInterval(timer); sequence.current++; readAbort.current?.abort(); readAbort.current = null }
+    // Workspace revision changes invalidate requests as well as workspace identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceKey, workspaceRevision])
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 3500); return () => clearTimeout(timer) }, [notice])
   useEffect(() => { if (selected) detailRef.current?.focus() }, [selected])
+  async function mutate(operation: BoardOperation): Promise<boolean> {
+    const current = latest.current
+    if (!current || writing.current) return false
+    writing.current = true; sequence.current++; readAbort.current?.abort(); setBusy(true); setError('')
+    try {
+      const value = await executeBoard(workspaceKey, workspaceRevision, current.revision, operation)
+      if (!mounted.current) return false
+      latest.current = value; setBoard(value); setNotice('已保存')
+      if (operation.type === 'task_create') {
+        onQueryChange(''); setFeature('all'); setMobileStatus('todo')
+        setSelected(value.tasks.find(t => !current.tasks.some(old => old.id === t.id))?.id ?? null)
+      }
+      if (operation.type === 'feature_delete') setFeature('all')
+      return true
+    } catch (e) { if (mounted.current) setError(e instanceof Error ? e.message : '保存失败，修改尚未保存'); return false }
+    finally { writing.current = false; if (mounted.current) setBusy(false) }
+  }
+  const tasks = board?.tasks ?? [], features = board?.features ?? []
   const activeTask = tasks.find(t => t.id === selected)
   const activeFeature = features.find(f => f.id === feature)
-  const visible = tasks.filter(t => (feature === 'all' || t.feature === feature) && `${t.id} ${t.title} ${t.description}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
-  function updateTask(id: string, update: Partial<BoardTask>, activity?: string) {
-    setDraft(current => ({ ...current, tasks: current.tasks.map(t => t.id === id ? { ...t, ...update, activity: activity ? [...t.activity, activity] : t.activity } : t) }))
-  }
-  function moveTask(id: string, status: TaskStatus) {
+  const visible = tasks.filter(t => (feature === 'all' || t.feature === feature) && `${t.id} ${t.title} ${t.description} ${t.owner ?? ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+  const action = (task: BoardTask, action: Extract<BoardOperation, { type: 'action' }>['action']) => mutate({ type: 'action', id: task.id, action })
+  function moveTask(id: string, target: TaskStatus) {
+    setDragged(null); setDropStatus(null)
     const task = tasks.find(t => t.id === id)
-    if (!task || task.status === status) return
-    if (task.blocked && status === 'doing') { setNotice('请先在任务详情中解除阻塞'); return }
-    updateTask(id, { status, owner: status === 'doing' ? task.owner ?? 'Codex（演示）' : task.owner }, `演示操作：移至${statuses.find(s => s.id === status)?.label}`)
-    setNotice(`任务已移至${statuses.find(s => s.id === status)?.label}`)
+    if (!task || task.status === target || writing.current) return
+    if (task.status === 'todo' && target === 'doing') void action(task, 'claim')
+    else if (task.status === 'doing' && target === 'todo') void action(task, 'release')
+    else if (task.status === 'doing' && target === 'review') setEditor({ kind: 'note', task, action: 'submit' })
+    else if (task.status === 'review' && target === 'doing') setEditor({ kind: 'note', task, action: 'reject' })
+    else if (task.status === 'review' && target === 'done') void approve(task)
+    else if (task.status === 'done' && target === 'todo') void action(task, 'reopen')
+    else setError('请按任务流程操作：认领 → 提交验收 → 通过；详情中可释放、退回或重新打开。')
   }
-  function chooseFeature(id: string) { setFeature(id) }
-  function openCreate(status: TaskStatus, trigger: HTMLButtonElement) {
-    newTaskTrigger.current = trigger
-    setCreationStatus(status)
-    setCreating(true)
+  async function approve(task: BoardTask) {
+    const revision = latest.current?.revision
+    if (await dialogs.confirm({ title: '通过验收', description: `确认「${task.title}」已达到验收条件？`, confirmText: '通过验收' })) {
+      if (revision !== latest.current?.revision) { setError('确认期间看板已变化，请重新查看交付后验收'); return }
+      await action(task, 'approve')
+    }
   }
-  function finishDrop(id: string, status: TaskStatus) {
-    moveTask(id, status)
-    setDraggedTask(null)
-    setDropStatus(null)
+  async function deleteTask(task: BoardTask) {
+    const revision = latest.current?.revision
+    if (await dialogs.confirm({ title: '删除任务', description: `永久删除「${task.title}」及其活动记录？`, tone: 'danger', confirmText: '删除' })) {
+      if (revision !== latest.current?.revision) { setError('确认期间看板已变化，请重新检查后删除'); return }
+      if (await mutate({ type: 'task_delete', id: task.id })) setSelected(null)
+    }
   }
-  return <section className="kb-page" aria-label={`${workspaceName}工作区看板`} onKeyDown={event => {
+  async function importDraft() {
+    if (!await dialogs.confirm({ title: '导入浏览器草稿', description: '导入功能、布局和任务正文；演示认领、状态和交付会清除，任务统一进入待开始。原草稿继续保留。', confirmText: '导入' })) return
+    try {
+      const draft = readBoardDraft(workspaceKey)
+      if (!draft) throw new Error('草稿格式无效，原数据仍保留在浏览器中')
+      await mutate({ type: 'import', ...draft, edges: [] })
+    } catch (e) { setError(e instanceof Error ? e.message : '无法读取草稿') }
+  }
+  const errorView = error && <div className="kb-error" role="alert"><span>{error}</span><button disabled={busy} onClick={() => void refresh()}>刷新数据</button></div>
+  return <section className="kb-page" aria-label={`${workspaceName}工作区看板`} aria-busy={busy} onKeyDown={event => {
+    if (editor) return
     if (event.key === 'Escape' && selected) { setSelected(null); onSearchFocus(); event.stopPropagation() }
     if (event.key === '/' && !(event.target as Element).closest('input, textarea, select')) { event.preventDefault(); onSearchFocus() }
   }}>
-    <div className="kb-body">
-      <div className="kb-content">{activeFeature && <div className="kb-feature-context"><span className={`kb-feature-pin feature-${activeFeature.id}`} /><div><strong>{activeFeature.name}</strong><p>{activeFeature.goal}</p></div><button aria-label="清除功能筛选" onClick={() => chooseFeature('all')}><X size={14} /></button></div>}
-        {view === 'flow' ? <><div className="kb-mobile-status" role="group" aria-label="任务阶段">{statuses.map(s => <button key={s.id} className={mobileStatus === s.id ? 'is-active' : ''} aria-pressed={mobileStatus === s.id} onClick={() => setMobileStatus(s.id)} onDragOver={event => { if (draggedTask) { event.preventDefault(); setMobileStatus(s.id); setDropStatus(s.id) } }} onDrop={event => { event.preventDefault(); finishDrop(event.dataTransfer.getData('application/devflow-task'), s.id) }}>{s.label}<small>{visible.filter(t => t.status === s.id).length}</small></button>)}</div><div className="kb-columns">{statuses.map(s => <section key={s.id} className={`kb-column ${mobileStatus === s.id ? 'is-mobile-active' : ''} ${dropStatus === s.id ? 'is-drop-target' : ''}`} aria-label={s.label} onDragOver={event => { if (event.dataTransfer.types.includes('application/devflow-task')) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropStatus(s.id) } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropStatus(null) }} onDrop={event => { event.preventDefault(); finishDrop(event.dataTransfer.getData('application/devflow-task'), s.id) }}><header><span className={`kb-dot status-${s.id}`}>{s.id === 'done' && <Check size={8} />}</span><h2>{s.label}</h2><span className="kb-count">{visible.filter(t => t.status === s.id).length}</span><button aria-label={`在${s.label}列新建任务`} title={`新建${s.label}任务`} onClick={event => openCreate(s.id, event.currentTarget)}><Plus size={14} /></button></header><p className="kb-column-caption">{s.caption}</p><div className="kb-column-tasks">{visible.filter(t => t.status === s.id).map(task => <button key={task.id} className={`kb-task ${selected === task.id ? 'is-selected' : ''} ${draggedTask === task.id ? 'is-dragging' : ''}`} draggable onDragStart={event => { event.dataTransfer.setData('application/devflow-task', task.id); event.dataTransfer.effectAllowed = 'move'; setDraggedTask(task.id) }} onDragEnd={() => { setDraggedTask(null); setDropStatus(null) }} onClick={() => { if (!draggedTask) setSelected(task.id) }}><span className="kb-task-top"><span className={`kb-task-feature feature-${task.feature}`}>{features.find(f => f.id === task.feature)?.name}</span><span className="kb-task-id">{task.id}</span></span><strong>{task.title}</strong><p>{task.description}</p>{task.blocked && <span className="kb-blocked"><LockKeyhole size={11} />{task.blocked}</span>}<span className="kb-task-bottom"><span className={task.priority === '高' ? 'kb-priority-high' : 'kb-muted'}><Flag size={11} />{task.priority === '高' ? '高优先级' : '普通'}</span>{task.owner ? <span className="kb-owner"><span>C</span>Codex</span> : task.status === 'done' ? <span className="kb-done-label"><CircleCheck size={12} />已验收</span> : <span className="kb-muted">未认领</span>}</span></button>)}{!visible.some(t => t.status === s.id) && <div className="kb-column-empty"><Circle size={18} /><span>{query || feature !== 'all' ? '没有匹配的任务' : '暂无任务'}</span></div>}</div><button className="kb-add-task" onClick={event => openCreate(s.id, event.currentTarget)}><Plus size={14} />添加任务</button></section>)}</div></> : <BoardCanvas features={features} tasks={visible} activeFeature={feature} onFeature={chooseFeature} onTask={task => setSelected(task.id)} onMove={(id, x, y) => setDraft(current => ({ ...current, features: current.features.map(f => f.id === id ? { ...f, x, y } : f) }))} />}
-      </div>
-    </div>
-    <footer className="kb-footer">
-      <div className="kb-view-switch" role="group" aria-label="看板视图">
-        <button aria-pressed={view === 'flow'} className={view === 'flow' ? 'is-active' : ''} onClick={() => { setView('flow'); setFeature('all') }}><Kanban size={13} />流程</button>
-        <button aria-pressed={view === 'architecture'} className={view === 'architecture' ? 'is-active' : ''} onClick={() => setView('architecture')}><Workflow size={13} />架构</button>
-      </div>
-      <span><span className="kb-local-dot" />{storageFailed ? '浏览器存储不可用，修改仅本次有效' : '演示数据 · 浏览器自动保存'}</span>
-      <span>{view === 'flow' ? '拖动卡片到其他列以改变状态' : '功能归属与任务进度同步'}</span>
-    </footer>
+    {errorView}
+    {!board ? <div className="kb-empty-board">{workspaceKey === 'demo' ? '请先打开一个工作区，再使用看板。' : error ? '看板暂不可用，原有数据不会被替换。' : '正在读取看板…'}</div> : <>
+      <div className="kb-board-tools"><select aria-label="筛选功能" value={feature} onChange={e => setFeature(e.target.value)}><option value="all">全部功能</option>{features.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select><button disabled={busy} onClick={() => setEditor({ kind: 'features' })}>管理功能</button><button disabled={busy} onClick={() => setEditor({ kind: 'history' })}>记录</button><button disabled={busy} title="刷新看板" aria-label="刷新看板" onClick={() => void refresh()}><RefreshCw size={14} /></button>{hasDraft && board.revision === 0 && <button disabled={busy} onClick={() => void importDraft()}>导入草稿</button>}</div>
+      <div className="kb-body"><div className="kb-content">
+        {activeFeature && <div className="kb-feature-context"><span className="kb-feature-pin" /><div><strong>{activeFeature.name}</strong><p>{activeFeature.goal}</p></div><button disabled={busy} onClick={() => setEditor({ kind: 'feature', feature: activeFeature })}>编辑</button><button aria-label="清除功能筛选" onClick={() => setFeature('all')}><X size={14} /></button></div>}
+        {!features.length ? <div className="kb-empty-board"><Workflow size={28} /><p>先创建一个功能，再把讨论整理为任务。</p><button className="kb-primary" onClick={() => setEditor({ kind: 'feature' })}><Plus size={14} />新建功能</button></div> : view === 'flow' ? <>
+          <div className="kb-mobile-status" role="group" aria-label="任务阶段">{statuses.map(s => <button key={s.id} className={mobileStatus === s.id ? 'is-active' : ''} aria-pressed={mobileStatus === s.id} onClick={() => setMobileStatus(s.id)} onDragOver={event => { if (dragged) { event.preventDefault(); setMobileStatus(s.id); setDropStatus(s.id) } }} onDrop={event => { event.preventDefault(); moveTask(event.dataTransfer.getData('application/devflow-task'), s.id) }}>{s.label}<small>{visible.filter(t => t.status === s.id).length}</small></button>)}</div>
+          <div className="kb-columns">{statuses.map(s => <section key={s.id} className={`kb-column ${mobileStatus === s.id ? 'is-mobile-active' : ''} ${dropStatus === s.id ? 'is-drop-target' : ''}`} aria-label={s.label} onDragOver={event => { if (dragged && !busy) { event.preventDefault(); setDropStatus(s.id) } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropStatus(null) }} onDrop={event => { event.preventDefault(); moveTask(event.dataTransfer.getData('application/devflow-task'), s.id) }}>
+            <header><span className={`kb-dot status-${s.id}`}>{s.id === 'done' && <Check size={8} />}</span><h2>{s.label}</h2><span className="kb-count">{visible.filter(t => t.status === s.id).length}</span>{s.id === 'todo' && <button disabled={busy} aria-label="新建任务" onClick={() => setEditor({ kind: 'task' })}><Plus size={14} /></button>}</header><p className="kb-column-caption">{s.caption}</p>
+            <div className="kb-column-tasks">{visible.filter(t => t.status === s.id).map(task => <button key={task.id} className={`kb-task ${selected === task.id ? 'is-selected' : ''} ${dragged === task.id ? 'is-dragging' : ''}`} draggable={!busy} onDragStart={event => { event.dataTransfer.setData('application/devflow-task', task.id); event.dataTransfer.effectAllowed = 'move'; setDragged(task.id) }} onDragEnd={() => { setDragged(null); setDropStatus(null) }} onClick={() => { if (!dragged) setSelected(task.id) }}><span className="kb-task-top"><span className={`kb-task-feature feature-${task.feature}`}>{features.find(f => f.id === task.feature)?.name}</span><span className="kb-task-id">{task.id}</span></span><strong>{task.title}</strong><p>{task.description}</p>{task.blocked && <span className="kb-blocked"><LockKeyhole size={11} />{task.blocked}</span>}<span className="kb-task-bottom"><span className={task.priority === '高' ? 'kb-priority-high' : 'kb-muted'}><Flag size={11} />{task.priority}</span><span className="kb-owner">{task.status === 'done' ? '已验收' : task.owner ?? '未认领'}</span></span></button>)}{!visible.some(t => t.status === s.id) && <div className="kb-column-empty"><Circle size={18} /><span>{query || feature !== 'all' ? '没有匹配的任务' : '暂无任务'}</span></div>}</div>
+            {s.id === 'todo' && <button className="kb-add-task" disabled={busy} onClick={() => setEditor({ kind: 'task' })}><Plus size={14} />添加任务</button>}
+          </section>)}</div>
+        </> : <BoardCanvas features={features} tasks={visible} edges={board.edges} activeFeature={feature} onFeature={setFeature} onTask={task => setSelected(task.id)} disabled={busy} onMove={(id, x, y) => { const f = latest.current?.features.find(f => f.id === id); if (f) void mutate({ type: 'feature_save', feature: { ...f, x, y } }) }} />}
+      </div></div>
+      <footer className="kb-footer"><div className="kb-view-switch" role="group" aria-label="看板视图"><button aria-pressed={view === 'flow'} className={view === 'flow' ? 'is-active' : ''} onClick={() => setView('flow')}><Kanban size={13} />流程</button><button aria-pressed={view === 'architecture'} className={view === 'architecture' ? 'is-active' : ''} onClick={() => setView('architecture')}><Workflow size={13} />架构</button></div><span>{busy ? '正在保存…' : `已保存 · v${board.revision}`}</span><button disabled={busy} onClick={() => setEditor({ kind: 'edges' })}>功能关联</button></footer>
+    </>}
     {notice && <div className="kb-toast" role="status"><Check size={14} />{notice}</div>}
-    {activeTask && <><button className="kb-detail-backdrop" aria-label="关闭任务详情" onClick={() => setSelected(null)} /><aside ref={detailRef} tabIndex={-1} className="kb-detail" aria-label={`${activeTask.title}任务详情`}><header><span><Kanban size={14} />{activeTask.id}<ChevronRight size={12} />任务详情</span><button aria-label="关闭任务详情" onClick={() => { setSelected(null); onSearchFocus() }}><X size={17} /></button></header><div className="kb-detail-content"><span className={`kb-task-feature feature-${activeTask.feature}`}>{features.find(f => f.id === activeTask.feature)?.name}</span><h2>{activeTask.title}</h2><div className="kb-detail-properties"><span>状态</span><span className="kb-detail-status"><i className={`kb-dot status-${activeTask.status}`} />{statuses.find(s => s.id === activeTask.status)?.label}</span><span>执行者</span><span>{activeTask.owner ?? '未认领'}</span><span>优先级</span><button onClick={() => updateTask(activeTask.id, { priority: activeTask.priority === '高' ? '普通' : '高' })}><Flag size={12} />{activeTask.priority}</button></div><label className="kb-edit-field">任务描述<textarea key={`${activeTask.id}-description`} defaultValue={activeTask.description} rows={3} onBlur={e => { if (e.target.value !== activeTask.description) updateTask(activeTask.id, { description: e.target.value }) }} /></label><label className="kb-edit-field">目标与验收<textarea key={`${activeTask.id}-acceptance`} defaultValue={activeTask.acceptance} rows={3} onBlur={e => { if (e.target.value !== activeTask.acceptance) updateTask(activeTask.id, { acceptance: e.target.value }) }} /></label>{activeTask.blocked && <div className="kb-detail-blocked"><LockKeyhole size={14} /><span>{activeTask.blocked}</span><button onClick={() => updateTask(activeTask.id, { blocked: undefined }, '已解除阻塞')}>解除</button></div>}{activeTask.result && <div className="kb-delivery"><h3><CircleCheck size={15} />交付结果</h3><p>{activeTask.result}</p></div>}<div className="kb-activity"><h3><Clock3 size={14} />活动记录</h3>{activeTask.activity.map((entry, i) => <div key={i}><i /><span>{entry}</span></div>)}</div></div><footer className="kb-detail-actions">{activeTask.status === 'todo' && <button className="kb-primary" disabled={!!activeTask.blocked} onClick={() => moveTask(activeTask.id, 'doing')}><Sparkles size={14} />模拟 Codex 认领</button>}{activeTask.status === 'doing' && <><button className="kb-secondary" onClick={() => { updateTask(activeTask.id, { status: 'todo', owner: undefined }, '执行者释放了任务'); setNotice('已释放任务') }}><RotateCcw size={13} />释放任务</button><button className="kb-primary" onClick={() => updateTask(activeTask.id, { status: 'review', result: '已按任务目标完成本次交付，请检查功能效果和验收条件。\n这是前端演示结果，未执行真实代码修改或验证。' }, 'Codex 提交了交付结果，等待验收')}>模拟提交验收<ArrowRight size={13} /></button></>}{activeTask.status === 'review' && <><button className="kb-secondary" onClick={() => { updateTask(activeTask.id, { status: 'doing' }, '你退回了任务，需要继续修改'); setNotice('已退回进行中') }}><ArrowLeft size={13} />退回修改</button><button className="kb-primary" onClick={() => { updateTask(activeTask.id, { status: 'done' }, '你通过了验收'); setNotice('已通过验收') }}><Check size={14} />通过验收</button></>}{activeTask.status === 'done' && <button className="kb-secondary" onClick={() => { updateTask(activeTask.id, { status: 'todo', owner: undefined }, '你重新打开了任务'); setNotice('已重新打开任务') }}><RotateCcw size={13} />重新打开</button>}</footer></aside></>}
-    {creating && <NewTaskDialog features={features} initialStatus={creationStatus} defaultFeature={feature === 'all' ? features[0].id : feature} onClose={() => { setCreating(false); newTaskTrigger.current?.focus() }} onCreate={task => {
-      const id = `DF-${String(Math.max(0, ...tasks.map(t => Number(t.id.replace('DF-', '')) || 0)) + 1).padStart(3, '0')}`
-      setDraft(current => ({ ...current, tasks: [...current.tasks, { ...task, id, status: creationStatus, activity: ['你创建了任务'] }] }))
-      setFeature('all'); setQuery(''); setMobileStatus(creationStatus); setNotice(`任务已添加到${statuses.find(s => s.id === creationStatus)?.label}`); setCreating(false); setSelected(id)
-    }} />}
+    {activeTask && <><button className="kb-detail-backdrop" aria-label="关闭任务详情" onClick={() => setSelected(null)} /><aside ref={detailRef} tabIndex={-1} className="kb-detail" aria-label={`${activeTask.title}任务详情`}><header><span><Kanban size={14} />{activeTask.id}<ChevronRight size={12} />任务详情</span><button aria-label="关闭任务详情" onClick={() => { setSelected(null); onSearchFocus() }}><X size={17} /></button></header><div className="kb-detail-content">
+      {errorView}<span className="kb-task-feature">{features.find(f => f.id === activeTask.feature)?.name}</span><h2>{activeTask.title}</h2><div className="kb-detail-properties"><span>状态</span><span>{statuses.find(s => s.id === activeTask.status)?.label}</span><span>执行者</span><span>{activeTask.owner ?? '未认领'}</span><span>优先级</span><span>{activeTask.priority}</span></div>
+      <div className="kb-detail-edit-actions"><button disabled={busy} onClick={() => setEditor({ kind: 'task', task: activeTask })}>编辑任务</button><button disabled={busy} onClick={() => void deleteTask(activeTask)}>删除</button></div>
+      <div className="kb-read-field"><h3>任务描述</h3><p>{activeTask.description || '暂无描述'}</p></div><div className="kb-read-field"><h3>目标与验收</h3><p>{activeTask.acceptance || '尚未填写验收条件'}</p></div>
+      {activeTask.blocked && <div className="kb-detail-blocked"><LockKeyhole size={14} /><span>{activeTask.blocked}</span><button disabled={busy} onClick={() => void action(activeTask, 'unblock')}>解除</button></div>}
+      {activeTask.result && <div className="kb-delivery"><h3>交付结果</h3><p>{activeTask.result}</p></div>}
+      {activeTask.status !== 'done' && <div className="kb-detail-edit-actions">{activeTask.status === 'doing' && <button disabled={busy} onClick={() => setEditor({ kind: 'note', task: activeTask, action: 'progress' })}>记录进展 / 交接</button>}{!activeTask.blocked && <button disabled={busy} onClick={() => setEditor({ kind: 'note', task: activeTask, action: 'block' })}>标记阻塞</button>}</div>}
+      <div className="kb-activity"><h3>活动记录</h3>{activeTask.activity.map((entry, i) => <div key={i}><i /><span>{activityText(entry)}</span></div>)}</div>
+    </div><footer className="kb-detail-actions">
+      {activeTask.status === 'todo' && <button className="kb-primary" disabled={busy || !!activeTask.blocked} onClick={() => void action(activeTask, 'claim')}>认领任务</button>}
+      {activeTask.status === 'doing' && <><button className="kb-secondary" disabled={busy} onClick={() => void action(activeTask, 'release')}>释放任务</button><button className="kb-primary" disabled={busy || !!activeTask.blocked} onClick={() => setEditor({ kind: 'note', task: activeTask, action: 'submit' })}>提交验收</button></>}
+      {activeTask.status === 'review' && <><button className="kb-secondary" disabled={busy} onClick={() => setEditor({ kind: 'note', task: activeTask, action: 'reject' })}>退回修改</button><button className="kb-primary" disabled={busy || !!activeTask.blocked} onClick={() => void approve(activeTask)}>通过验收</button></>}
+      {activeTask.status === 'done' && <button className="kb-secondary" disabled={busy} onClick={() => void action(activeTask, 'reopen')}>重新打开</button>}
+    </footer></aside></>}
+    {editor && board && <BoardEditor editor={editor} board={board} defaultFeature={feature} busy={busy} error={errorView} onRefresh={() => void refresh()} onClose={() => setEditor(null)} onEditor={setEditor} onSave={mutate} />}
   </section>
 }
 
-function NewTaskDialog({ features, defaultFeature, initialStatus, onClose, onCreate }: { initialStatus: TaskStatus; features: BoardDraft['features']; defaultFeature: string; onClose: () => void; onCreate: (task: Pick<BoardTask, 'title' | 'description' | 'acceptance' | 'feature' | 'priority'>) => void }) {
-  const dialog = useRef<HTMLDialogElement>(null)
-  useEffect(() => { const el = dialog.current; el?.showModal(); return () => el?.close() }, [])
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const form = event.currentTarget, data = new FormData(form)
-    const title = String(data.get('title') ?? '').trim()
-    if (!title) { const input = form.elements.namedItem('title') as HTMLInputElement; input.setCustomValidity('请输入任务标题'); input.reportValidity(); return }
-    onCreate({ title, description: String(data.get('description') ?? '').trim(), acceptance: String(data.get('acceptance') ?? '').trim(), feature: String(data.get('feature')), priority: data.get('priority') === '高' ? '高' : '普通' })
+function Modal({ title, children, onClose, busy }: { title: string; children: ReactNode; onClose: () => void; busy: boolean }) {
+  const ref = useRef<HTMLDialogElement>(null)
+  useEffect(() => { const el = ref.current; const previous = document.activeElement as HTMLElement | null; el?.showModal(); return () => { el?.close(); previous?.focus() } }, [])
+  return <dialog ref={ref} className="kb-create-dialog" aria-labelledby="kb-editor-title" onKeyDown={e => e.stopPropagation()} onCancel={e => { e.preventDefault(); if (!busy) onClose() }}><header><h2 id="kb-editor-title">{title}</h2><button type="button" disabled={busy} aria-label="关闭" onClick={onClose}><X size={18} /></button></header>{children}</dialog>
+}
+function BoardEditor({ editor, board, defaultFeature, busy, error, onRefresh, onClose, onEditor, onSave }: { editor: Editor; board: BoardSnapshot; defaultFeature: string; busy: boolean; error: ReactNode; onRefresh: () => void; onClose: () => void; onEditor: (e: Editor) => void; onSave: (o: BoardOperation) => Promise<boolean> }) {
+  const dialogs = useDialogs()
+  const [localError, setLocalError] = useState('')
+  const [edges, setEdges] = useState(board.edges)
+  const [source, setSource] = useState(board.features[0]?.id ?? '')
+  const [target, setTarget] = useState(board.features[1]?.id ?? '')
+  const [moveTo, setMoveTo] = useState<Record<string, string>>({})
+  const labels = { submit: '提交验收', progress: '记录进展 / 交接', reject: '退回修改', block: '标记阻塞' }
+  const title = editor.kind === 'task' ? editor.task ? '编辑任务' : '新建任务' : editor.kind === 'feature' ? editor.feature ? '编辑功能' : '新建功能' : editor.kind === 'features' ? '管理功能' : editor.kind === 'edges' ? '功能关联' : editor.kind === 'history' ? '看板活动记录' : labels[editor.action]
+  async function save(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setLocalError('')
+    const data = new FormData(e.currentTarget), value = (key: string) => String(data.get(key) ?? '').trim()
+    let operation: BoardOperation
+    if (editor.kind === 'task') {
+      if (!value('title')) { setLocalError('请输入任务标题'); return }
+      const task = { title: value('title'), description: value('description'), acceptance: value('acceptance'), feature: value('feature'), priority: value('priority') as BoardTask['priority'] }
+      operation = editor.task ? { type: 'task_update', id: editor.task.id, ...task } : { type: 'task_create', ...task }
+    } else if (editor.kind === 'feature') {
+      if (!value('name')) { setLocalError('请输入功能名称'); return }
+      operation = { type: 'feature_save', feature: { id: editor.feature?.id ?? crypto.randomUUID(), name: value('name'), description: value('description'), goal: value('goal'), x: Number(value('x')), y: Number(value('y')) } }
+    } else if (editor.kind === 'note') {
+      if (!value('text')) { setLocalError('请填写说明'); return }
+      operation = { type: 'action', id: editor.task.id, action: editor.action, text: value('text') }
+    } else if (editor.kind === 'edges') operation = { type: 'edges', edges }
+    else return
+    if (await onSave(operation)) onClose()
   }
-  return <dialog
-    ref={dialog}
-    className="kb-create-dialog"
-    aria-labelledby="kb-create-title"
-    onCancel={event => { event.preventDefault(); onClose() }}
-    onClick={event => { if (event.target === event.currentTarget) onClose() }}
-  >
-    <form onSubmit={submit}>
-      <header>
-        <div><span className="kb-eyebrow">从一个明确的目标开始</span><h2 id="kb-create-title">新建任务</h2></div>
-        <button type="button" aria-label="关闭新建任务" onClick={onClose}><X size={18} /></button>
-      </header>
-      <label>任务标题
-        <input autoFocus name="title" required maxLength={120} placeholder="例如：支持 Codex 认领任务" onInput={e => e.currentTarget.setCustomValidity('')} />
-      </label>
-      <div className="kb-form-row">
-        <label>所属功能
-          <select name="feature" defaultValue={defaultFeature}>
-            {features.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-          </select>
-        </label>
-        <label>优先级
-          <select name="priority" defaultValue="普通"><option>普通</option><option>高</option></select>
-        </label>
-      </div>
-      <label>核心描述
-        <textarea name="description" rows={3} placeholder="需要提供什么功能？只写核心意图。" maxLength={4000} />
-      </label>
-      <label>目标与验收
-        <textarea name="acceptance" rows={3} placeholder="做到什么程度，就可以交给你验收？" maxLength={4000} />
-      </label>
-      <footer>
-        <span>创建后进入「{statuses.find(s => s.id === initialStatus)?.label}」</span>
-        <button type="button" className="kb-secondary" onClick={onClose}>取消</button>
-        <button type="submit" className="kb-primary"><Plus size={14} />创建任务</button>
-      </footer>
-    </form>
-  </dialog>
+  async function removeFeature(f: BoardFeature) {
+    const count = board.tasks.filter(t => t.feature === f.id).length
+    if (count && !moveTo[f.id]) { setLocalError('该功能含有任务，请先选择迁移目标功能'); return }
+    if (await dialogs.confirm({ title: '删除功能', description: `删除「${f.name}」及其关联线${count ? `，并迁移 ${count} 个任务到所选功能` : ''}？`, tone: 'danger', confirmText: '删除' })) {
+      if (await onSave({ type: 'feature_delete', id: f.id, moveTo: moveTo[f.id] || undefined })) setLocalError('')
+    }
+  }
+  return <Modal title={title} onClose={onClose} busy={busy}><form key={editor.kind === 'task' ? editor.task?.id ?? 'new-task' : editor.kind === 'feature' ? editor.feature?.id ?? 'new-feature' : title} onSubmit={e => void save(e)}>
+    {error}{localError && <p className="kb-error" role="alert">{localError}</p>}
+    <fieldset disabled={busy} className="kb-editor-fields">
+      {editor.kind === 'task' && <><label>任务标题<input autoFocus name="title" required maxLength={120} defaultValue={editor.task?.title} /></label><div className="kb-form-row"><label>所属功能<select name="feature" defaultValue={editor.task?.feature ?? (board.features.some(f => f.id === defaultFeature) ? defaultFeature : board.features[0]?.id)} required>{board.features.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label><label>优先级<select name="priority" defaultValue={editor.task?.priority ?? '普通'}><option>普通</option><option>高</option></select></label></div><label>核心描述<textarea name="description" rows={4} maxLength={4000} defaultValue={editor.task?.description} /></label><label>目标与验收<textarea name="acceptance" rows={4} maxLength={4000} defaultValue={editor.task?.acceptance} /></label></>}
+      {editor.kind === 'feature' && <><label>功能名称<input autoFocus name="name" required maxLength={60} defaultValue={editor.feature?.name} /></label><label>核心描述<textarea name="description" rows={4} maxLength={4000} defaultValue={editor.feature?.description} /></label><label>功能目标<textarea name="goal" rows={4} maxLength={4000} defaultValue={editor.feature?.goal} /></label><div className="kb-form-row"><label>画布横坐标<input name="x" type="number" step="any" min={-100000} max={100000} required defaultValue={editor.feature?.x ?? 100 + board.features.length % 3 * 350} /></label><label>画布纵坐标<input name="y" type="number" step="any" min={-100000} max={100000} required defaultValue={editor.feature?.y ?? 100 + Math.floor(board.features.length / 3) * 320} /></label></div></>}
+      {editor.kind === 'note' && <><p className="kb-muted">{editor.task.id} · {editor.task.title}</p><label>{editor.action === 'submit' ? '交付内容、验证情况与已知限制' : editor.action === 'progress' ? '已完成、剩余工作和接手提示' : editor.action === 'reject' ? '需要继续修改的原因' : '阻塞原因'}<textarea autoFocus name="text" required rows={7} maxLength={4000} /></label></>}
+      {editor.kind === 'features' && <><button type="button" className="kb-secondary" onClick={() => onEditor({ kind: 'feature' })}><Plus size={14} />新建功能</button>{board.features.map(f => <div className="kb-feature-row" key={f.id}><strong>{f.name}</strong><p>{f.goal}</p><div><button type="button" onClick={() => onEditor({ kind: 'feature', feature: f })}>编辑</button><button type="button" onClick={() => void removeFeature(f)}>删除</button></div>{board.tasks.some(t => t.feature === f.id) && <label>删除时迁移任务到<select value={moveTo[f.id] ?? ''} onChange={e => setMoveTo(current => ({ ...current, [f.id]: e.target.value }))}><option value="">请选择目标功能</option>{board.features.filter(other => other.id !== f.id).map(other => <option key={other.id} value={other.id}>{other.name}</option>)}</select></label>}</div>)}</>}
+      {editor.kind === 'history' && <div className="kb-activity">{board.activity.length ? [...board.activity].reverse().map((a, i) => <div key={i}><span>{activityText(a)}</span></div>) : <p>暂无活动</p>}</div>}
+      {editor.kind === 'edges' && <><p className="kb-muted">关联表示功能之间的结构关系，不影响任务执行顺序。</p><div className="kb-form-row"><label>起点<select value={source} onChange={e => setSource(e.target.value)}><option value="">请选择</option>{board.features.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label><label>终点<select value={target} onChange={e => setTarget(e.target.value)}><option value="">请选择</option>{board.features.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label></div><button type="button" className="kb-secondary" disabled={!source || !target || source === target || edges.some(([a, b]) => a === source && b === target)} onClick={() => setEdges(current => [...current, [source, target]])}>添加关联</button>{edges.map(([a, b]) => <div className="kb-edge-row" key={`${a}-${b}`}><span>{board.features.find(f => f.id === a)?.name} → {board.features.find(f => f.id === b)?.name}</span><button type="button" onClick={() => setEdges(current => current.filter(edge => edge[0] !== a || edge[1] !== b))}>移除</button></div>)}</>}
+    </fieldset>
+    <footer><span>{editor.kind === 'task' && !editor.task ? '创建后进入待开始' : '保存后生效'}</span>{error && <button type="button" disabled={busy} onClick={onRefresh}>刷新数据</button>}<button type="button" className="kb-secondary" disabled={busy} onClick={onClose}>{editor.kind === 'history' || editor.kind === 'features' ? '关闭' : '取消'}</button>{editor.kind !== 'features' && editor.kind !== 'history' && <button type="submit" className="kb-primary" disabled={busy}>{busy ? '保存中…' : '保存'}</button>}</footer>
+  </form></Modal>
 }

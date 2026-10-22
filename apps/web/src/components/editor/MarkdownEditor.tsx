@@ -5,7 +5,7 @@ import Vditor from 'vditor'
 import DOMPurify from 'dompurify'
 import { readOnlyShare } from '../../lib/access'
 import type { SourceEditorProps } from './SourceEditor'
-import { markdownAssetRoot, prepareMarkdownRuntime, resolveMarkdownLink } from './markdownRuntime'
+import { markdownAssetRoot, prepareMarkdownRuntime, releaseMarkdownEditor, resolveMarkdownLink } from './markdownRuntime'
 import 'vditor/dist/index.css'
 import './markdown-editor.css'
 
@@ -13,7 +13,7 @@ const SourceEditor = lazy(() => import('./SourceEditor'))
 type Mode = 'document' | 'source' | 'split'
 
 /** Vditor is an implementation detail; persistence and authorization stay in the workbench. */
-export default function MarkdownEditor(props: SourceEditorProps & { onOpenFile?: (path: string) => void; toolbarContainer?: HTMLElement | null; viewStateKey?: string }) {
+export default function MarkdownEditor(props: SourceEditorProps & { active?: boolean; onOpenFile?: (path: string) => void; toolbarContainer?: HTMLElement | null; viewStateKey?: string }) {
   const [mode, setMode] = useState<Mode>(() => {
     if (props.location && props.location.sequence !== 0) return 'source'
     try {
@@ -36,6 +36,9 @@ export default function MarkdownEditor(props: SourceEditorProps & { onOpenFile?:
   const baseline = useRef('')
   const appliedValue = useRef(props.value)
   const initialized = useRef(false)
+  const appliedTheme = useRef<boolean | null>(null)
+  // Keep initialized tabs alive, but never parse a hidden or source-only document just to open it.
+  const shouldInitialize = ready || (mode !== 'source' && props.active !== false)
   const id = useId()
   current.current = props
   currentMode.current = mode
@@ -56,13 +59,18 @@ export default function MarkdownEditor(props: SourceEditorProps & { onOpenFile?:
     return () => observer.disconnect()
   }, [])
   useEffect(() => {
+    if (!shouldInitialize) return
     let disposed = false
     let instance: Vditor | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
     const element = host.current
     if (!element) return
-    void prepareMarkdownRuntime().then(() => {
+    // Paint the new selection/loading state before parsing Markdown. Rapid switches cancel this work.
+    const initialize = () => {
+      void prepareMarkdownRuntime().then(() => {
       if (disposed) return
       const isDark = element.closest('.workspace-shell')?.getAttribute('data-theme') === 'dark'
+      appliedTheme.current = isDark
       instance = new Vditor(element, {
         value: current.current.value, cdn: markdownAssetRoot, lang: 'zh_CN', height: '100%', minHeight: 180,
         mode: 'wysiwyg', theme: isDark ? 'dark' : 'classic', cache: { enable: false },
@@ -81,7 +89,7 @@ export default function MarkdownEditor(props: SourceEditorProps & { onOpenFile?:
         blur: acceptInput,
         after() {
           if (!instance) return
-          if (disposed) { instance.destroy(); return }
+          if (disposed) { releaseMarkdownEditor(instance); return }
           editor.current = instance
           if (appliedValue.current !== current.current.value) instance.setValue(current.current.value)
           appliedValue.current = current.current.value
@@ -93,16 +101,20 @@ export default function MarkdownEditor(props: SourceEditorProps & { onOpenFile?:
           setReady(true)
         },
       })
-    }).catch(err => { if (!disposed) setError(err instanceof Error ? err.message : String(err)) })
+      }).catch(err => { if (!disposed) setError(err instanceof Error ? err.message : String(err)) })
+    }
+    const frame = requestAnimationFrame(() => { timer = setTimeout(initialize, 0) })
     return () => {
       disposed = true
-      if (initialized.current) instance?.destroy()
+      cancelAnimationFrame(frame)
+      clearTimeout(timer)
+      if (initialized.current && instance) releaseMarkdownEditor(instance)
       initialized.current = false
       editor.current = null
     }
-  }, [props.path])
+  }, [props.path, shouldInitialize])
   useEffect(() => {
-    if (!ready || !editor.current || appliedValue.current === props.value) return
+    if (!ready || !editor.current || props.active === false || mode === 'source' || appliedValue.current === props.value) return
     const timer = setTimeout(() => {
       const instance = editor.current
       if (!instance) return
@@ -114,14 +126,15 @@ export default function MarkdownEditor(props: SourceEditorProps & { onOpenFile?:
       if (scroller) { scroller.scrollTop = top; scroller.scrollLeft = left }
     }, 180)
     return () => clearTimeout(timer)
-  }, [props.value, ready])
+  }, [props.value, ready, props.active, mode])
   useEffect(() => {
     if (!ready || !editor.current) return
     if (props.readonly || mode !== 'document') editor.current.disabled()
     else editor.current.enable()
   }, [props.readonly, mode, ready])
   useEffect(() => {
-    if (!ready || !editor.current || !host.current) return
+    if (!ready || !editor.current || !host.current || props.active === false || mode === 'source' || appliedTheme.current === dark) return
+    appliedTheme.current = dark
     editor.current.setTheme(dark ? 'dark' : 'classic', dark ? 'dark' : 'light', dark ? 'github-dark' : 'github', `${markdownAssetRoot}/dist/css/content-theme`)
     // Repaint only diagram previews; changing themes must not reset the document or undo history.
     for (const node of host.current.querySelectorAll<HTMLElement>('.language-mermaid[data-processed="true"]')) {
@@ -129,7 +142,7 @@ export default function MarkdownEditor(props: SourceEditorProps & { onOpenFile?:
       if (source) { node.textContent = source; node.removeAttribute('data-processed') }
     }
     Vditor.mermaidRender(host.current, markdownAssetRoot, dark ? 'dark' : 'classic')
-  }, [dark, ready])
+  }, [dark, ready, props.active, mode])
   useEffect(() => {
     if (props.location && props.location.sequence !== 0) { setSourceOpened(true); setMode('source') }
   }, [props.location?.sequence])

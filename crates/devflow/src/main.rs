@@ -108,6 +108,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/workspace/shares/revoke", post(share::revoke))
         .route("/api/session", get(http::session))
+        .route("/api/workspace/board", get(http::board_read).post(http::board_execute))
         .route("/api/projects", get(http::projects))
         .route(
             "/api/workspace",

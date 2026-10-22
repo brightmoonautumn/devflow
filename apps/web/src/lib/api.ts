@@ -95,6 +95,7 @@ export async function request<T>(url: string, options: RequestInit = {}, retry =
   headers.set('Authorization', `Bearer ${token}`)
   if (options.body) headers.set('Content-Type', 'application/json')
   const response = await fetch(url, { ...options, signal: options.signal ?? AbortSignal.timeout(15000), headers, cache: 'no-store' })
+  if (url.startsWith('/api/workspace/board') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) throw new ApiError('backend_outdated', '当前后端尚不支持正式看板，请更新并重启 DevFlow。浏览器原型草稿仍保留。')
   if (response.status === 401 && retry) { session = null; return request<T>(url, options, false) }
   if (url === '/api/workspace/terminal' && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) throw new ApiError('backend_outdated', '当前后端尚不支持交互终端，请更新并重启 DevFlow。')
   if (url.startsWith('/api/workspace/shares') && (response.status === 404 || response.status === 405 || (response.ok && !response.headers.get('content-type')?.includes('application/json')))) throw new ApiError('backend_outdated', '当前后端尚不支持只读分享，请更新并重启后端。')

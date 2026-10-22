@@ -17,7 +17,8 @@ DevFlow has two native entry points: Web UI for humans and MCP for AI. Both MUST
 - No embedded AI chat and no source editor in MVP.
 
 ## Features
-- Only the workspace feature is currently planned: open/create VS Code-compatible `.code-workspace` files, add folders, open folders directly, launch Java/Node projects, and attach Arthas independently of startup or JVM debugging.
+- Workspace features include open/create VS Code-compatible `.code-workspace` files, add folders, open folders directly, launch Java/Node projects, and attach Arthas independently of startup or JVM debugging.
+- The workspace-scoped board now has a first implementation: persisted features/tasks/layout/relations, cooperative session claims, progress/handoff, delivery and human acceptance through shared core transactions. See `docs/features/board.md`; compilation and runtime acceptance remain pending user verification. Claims do not launch agents automatically.
 - Runtime and diagnosis code may remain in their existing internal modules; their current requirements belong to `docs/features/workspace.md`. Other scaffold directories do not imply planned or implemented features.
 
 ## Coding agreements

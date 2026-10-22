@@ -36,6 +36,21 @@ pub async fn health() -> Json<Value> {
 pub async fn session(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({"token": state.api_token}))
 }
+
+pub async fn board_read(
+    State(state): State<Arc<AppState>>, headers: HeaderMap,
+    Query(request): Query<devflow_core::workspace::BoardRead>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |e| e.workspace.board_read(request, authenticated)).await)
+}
+pub async fn board_execute(
+    State(state): State<Arc<AppState>>, headers: HeaderMap,
+    Json(request): Json<devflow_core::workspace::BoardRequest>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |e| e.workspace.board_execute(request, authenticated, "你", true)).await)
+}
 #[derive(serde::Deserialize)]
 pub struct WorkspaceQuery {
     #[serde(default)]

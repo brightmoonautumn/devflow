@@ -5,6 +5,11 @@ export type SavedFileTab = { path: string; preview: boolean; line: number; colum
 export type WorkspaceViewState = { tabs?: SavedFileTab[]; active?: string | null; expanded?: string[]; selected?: string | null; sidebarOpen?: boolean; sidebarView?: 'explorer' | 'search' }
 export const viewPathKey = (path: string) => /^[a-z]:[\\/]|^\\\\/i.test(path) ? path.replace(/\\/g, '/').toLowerCase() : path
 
+export function pathWithin(path: string, parent: string) {
+  const key = viewPathKey(path).replace(/\/+$/, ''), root = viewPathKey(parent).replace(/\/+$/, '')
+  return key === root || key.startsWith(`${root}/`)
+}
+
 export function workspaceViewKey(workspace: WorkspaceResponse | null): string | null {
   if (!workspace || (!workspace.workspaceFile && !workspace.workspaceRoot && !workspace.folders.length)) return null
   const identity = workspace.workspaceFile ?? workspace.workspaceRoot ?? workspace.folders.map(folder => viewPathKey(folder.path)).sort().join('|')

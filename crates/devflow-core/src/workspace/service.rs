@@ -21,6 +21,10 @@ use std::{
 mod terminal;
 pub use terminal::{TerminalOperation, TerminalRequest, TerminalResponse, TerminalStreamPage};
 
+#[path = "board.rs"]
+mod board;
+pub use board::{BoardOperation, BoardRead, BoardRequest, BoardSnapshot, Feature as BoardFeature, Task as BoardTask};
+
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_FOLDERS: usize = 512;
 

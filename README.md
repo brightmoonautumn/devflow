@@ -86,15 +86,28 @@ pnpm web:check
 
 ### Codex MCP 接入（实验性）
 
-```bash
-codex mcp add devflow --url http://127.0.0.1:31080/mcp --bearer-token-env-var DEVFLOW_API_TOKEN
+先启动 DevFlow，然后注册仓库提供的本机连接器（将路径换成实际位置；需要 Python 3.10+）：
+
+```powershell
+codex mcp add devflow --env PYTHONIOENCODING=utf-8 -- python -u D:/PersonalProject/devflow/scripts/devflow-client.py mcp
 ```
 
-后端与 MCP 客户端进程需设置相同的 `DEVFLOW_API_TOKEN`。`/mcp` 当前提供最小化 JSON-RPC 接口，支持 `initialize`、`ping`、`tools/list` 和 `tools/call`，包括工作区查询、打开、新建、添加文件夹、保存及只读指标工具。详细参数见工作区文档。
+注册后重启 Codex 并新开对话。连接器通过 stdio 提供 MCP，业务请求转发至本机 Axum `/mcp`，从 `/api/session` 在内存中获取认证令牌，后台重启后自动重新认证；不需要保存令牌或设置系统环境变量。连接器不会启动后台或编译项目。Codex 中的执行仍遵守用户授权与仓库规则。
+
+命令行也可使用同一个连接器：
+
+```powershell
+.\DevFlow-CLI.cmd workspace
+.\DevFlow-CLI.cmd board
+.\DevFlow-CLI.cmd tools
+.\DevFlow-CLI.cmd call board_execute --args-file D:\Temp\board-request.json
+```
+
+`workspace/board/tools` 为只读；`call` 按所选工具执行操作，参数文件为 UTF-8 JSON，字段与 MCP 工具一致。看板写入必须显式提供工作区身份、工作区版本、看板版本及会话标识，不自动重试冲突。完整流程与对话示例见 [Codex 看板联动](docs/features/board-codex.md)。
 
 部分 MCP 客户端可能需要更完整的会话和通知机制。正式用于生产环境前，建议升级为持续维护的 Rust MCP SDK。**请勿将此端口直接暴露到公网。**
 
-Web 开发代理仅用于浏览器 API 请求，Codex 则直接与 Axum 服务通信。
+也可直接配置 HTTP MCP，但需后端与客户端设置相同的 `DEVFLOW_API_TOKEN`；本机连接器优先，避免在多个进程间手工同步令牌。Web 开发代理仅用于浏览器 API 请求。
 
 ## 支持的工作区
 

@@ -1,8 +1,11 @@
 import DOMPurify from 'dompurify'
+import type { MermaidConfig } from 'mermaid'
 
 export const markdownAssetRoot = `${import.meta.env.BASE_URL}vendor/vditor`
 let ready: Promise<void> | undefined
+let diagrams: Promise<typeof import('mermaid')> | undefined
 let renderQueue: Promise<unknown> = Promise.resolve()
+const diagramError = () => ({ svg: '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="72" viewBox="0 0 480 72"><text x="16" y="40" fill="#d97706" font-family="sans-serif" font-size="14">图表暂时无法渲染，请检查源码或重新打开文档。</text></svg>' })
 
 function script(path: string, id: string): Promise<void> {
   if (document.getElementById(id)) return Promise.resolve()
@@ -17,17 +20,23 @@ function script(path: string, id: string): Promise<void> {
 
 export function prepareMarkdownRuntime(): Promise<void> {
   if (!ready) ready = (async () => {
-    const [{ default: mermaid }] = await Promise.all([
-      import('mermaid'), script('js/lute/lute.min.js', 'vditorLuteScript'),
+    await Promise.all([
+      script('js/lute/lute.min.js', 'vditorLuteScript'),
       script('js/i18n/zh_CN.js', 'vditorI18nScriptzh_CN'), script('js/icons/ant.js', 'vditorIconScript'),
     ])
-    let config: Parameters<typeof mermaid.initialize>[0] = {}
+    let config: MermaidConfig = {}
     // Adapt the global API expected by Vditor; serialize and sanitize diagram output.
     Object.assign(window, { mermaid: {
       initialize(options: typeof config) { config = options },
       render(id: string, source: string) {
         const options = config
         const job = renderQueue.catch(() => {}).then(async () => {
+          // Let pending clicks and paints run between expensive diagram layouts.
+          await new Promise<void>(resolve => setTimeout(resolve, 0))
+          const { default: mermaid } = await (diagrams ??= import('mermaid').catch(error => {
+            diagrams = undefined
+            throw error
+          }))
           mermaid.initialize({ ...options, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true,
             maxTextSize: 80000, maxEdges: 1000, htmlLabels: false, flowchart: { ...options?.flowchart, htmlLabels: false },
             secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'htmlLabels', 'flowchart', 'suppressErrorRendering'],
@@ -47,11 +56,11 @@ export function prepareMarkdownRuntime(): Promise<void> {
             return { svg: DOMPurify.sanitize(result.svg, { USE_PROFILES: { svg: true, svgFilters: true } }) }
           } catch {
             // Vditor's error path assumes a DOM error node; return a safe diagnostic instead.
-            return { svg: '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="72" viewBox="0 0 480 72"><text x="16" y="40" fill="#d97706" font-family="sans-serif" font-size="14">流程图语法暂不完整，请点击图表编辑源码。</text></svg>' }
+            return diagramError()
           } finally {
             container.remove()
           }
-        })
+        }).catch(diagramError)
         renderQueue = job
         return job
       },
@@ -63,6 +72,16 @@ export function prepareMarkdownRuntime(): Promise<void> {
     }
   })().catch(error => { ready = undefined; throw error })
   return ready
+}
+
+/** Vditor removes the shared script on destroy, then uses synchronous XHR to reload it.
+ * The SVG sprite outlives an editor; retain its executed script marker for the next tab.
+ */
+export function releaseMarkdownEditor(editor: { destroy(): void }) {
+  const icons = document.getElementById('vditorIconScript')
+  try { editor.destroy() } finally {
+    if (icons && !document.getElementById('vditorIconScript')) document.head.append(icons)
+  }
 }
 
 export function resolveMarkdownLink(path: string, href: string): string | null {

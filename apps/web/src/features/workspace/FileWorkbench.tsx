@@ -1,5 +1,5 @@
 import { readOnlyShare } from '../../lib/access'
-import { readViewState, restoredTabs, viewPathKey, workspaceViewKey, writeViewState, type WorkspaceViewState } from './workspaceViewState'
+import { pathWithin, readViewState, restoredTabs, viewPathKey, workspaceViewKey, writeViewState, type WorkspaceViewState } from './workspaceViewState'
 import { useDialogs } from '../../components/form/BaseDialog'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, FileText, LoaderCircle, RefreshCw, Server, X } from 'lucide-react'
@@ -220,20 +220,20 @@ export function FileWorkbench({ workspace, openRequest, onOpenFile, onSaveStatus
   useEffect(() => () => { autosaves.current.forEach(pending => clearTimeout(pending.timer)); autosaves.current.clear() }, [])
   useEffect(() => {
     const beforeDelete = (event: Event) => {
-      const key = keyFor((event as CustomEvent<string>).detail)
-      const tab = live.current.tabs.find(tab => tab.key === key)
-      if (tab?.saving || tab?.loading || tab?.deleting) { event.preventDefault(); return }
-      if (tab) updateTab(key, current => ({ ...current, deleting: true }))
+      const path = (event as CustomEvent<string>).detail
+      const tabs = live.current.tabs.filter(tab => pathWithin(tab.path, path))
+      if (tabs.some(tab => tab.saving || tab.loading || tab.deleting)) { event.preventDefault(); return }
+      for (const tab of tabs) updateTab(tab.key, current => ({ ...current, deleting: true }))
     }
     const finished = (event: Event) => {
       const { path, deleted } = (event as CustomEvent<{ path: string; deleted: boolean }>).detail
-      const key = keyFor(path)
-      if (!deleted) { updateTab(key, tab => ({ ...tab, deleting: false })); return }
-      pending.current.get(key)?.abort(); pending.current.delete(key)
+      const affected = live.current.tabs.filter(tab => pathWithin(tab.path, path))
+      if (!deleted) { for (const tab of affected) updateTab(tab.key, current => ({ ...current, deleting: false })); return }
+      for (const tab of affected) { pending.current.get(tab.key)?.abort(); pending.current.delete(tab.key) }
       change(value => {
-        const index = value.tabs.findIndex(tab => tab.key === key)
-        const tabs = value.tabs.filter(tab => tab.key !== key)
-        return { tabs, active: value.active === key ? tabs[Math.min(index, tabs.length - 1)]?.key ?? null : value.active }
+        const index = value.tabs.findIndex(tab => tab.key === value.active)
+        const tabs = value.tabs.filter(tab => !pathWithin(tab.path, path))
+        return { tabs, active: tabs.some(tab => tab.key === value.active) ? value.active : tabs[Math.min(index, tabs.length - 1)]?.key ?? null }
       })
     }
     window.addEventListener('devflow-before-file-delete', beforeDelete)
@@ -302,7 +302,7 @@ export function FileWorkbench({ workspace, openRequest, onOpenFile, onSaveStatus
     {state.tabs.map(tab => <section key={tab.key} id={`file-pane-${encodeURIComponent(tab.key)}`} role="tabpanel" aria-labelledby={`file-tab-${encodeURIComponent(tab.key)}`} hidden={state.active !== tab.key} className="file-pane">
       {tab.error && <div className="file-notice is-error" role="alert">{tab.error}<button className="ws-outline-button" disabled={tab.loading || tab.saving || tab.deleting || !workspace} onClick={() => reloadFile(tab)}>重新读取</button></div>}
       {tab.file?.readonlyReason && !(readOnlyShare && tab.file.readonlyReason === '只读分享') && <p className="file-notice">{tab.file.readonlyReason}</p>}
-      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor key={tab.path} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
+      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor key={tab.path} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} active={state.active === tab.key} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
       {tab.file && <footer className="file-status"><span role="status">{tab.saving ? '保存中…' : dirty(tab) ? '未保存' : tab.savedAt ? <><Check size={12} />已保存</> : tab.preview ? '预览 · 双击标签固定' : '已打开'}</span><span>行 {tab.line}，列 {tab.column}</span><span>UTF-8{tab.file.bom ? ' BOM' : ''} · {tab.file.lineEnding}</span></footer>}
     </section>)}
   </div>

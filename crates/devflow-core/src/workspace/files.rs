@@ -119,7 +119,26 @@ impl WorkspaceService {
             return Err(error("unauthorized", "需要有效的访问令牌"));
         }
         let state = self.lock()?;
-        let path = self.file_path(&state, &request.path, request.expected_revision)?;
+        let path = self.entry_path(&state, &request.path, request.expected_revision, true)?;
+        let directory = path.is_dir();
+        if directory {
+            let session = state.session.as_ref()
+                .ok_or_else(|| error("no_workspace", "请先打开工作区"))?;
+            for entry in folder_entries(&parse_document(&session.source)?)? {
+                if let Ok(root) = resolve_folder(entry, &session.base).and_then(|p| self.authorize(&p)) {
+                    if root.starts_with(&path) {
+                        return Err(error("invalid_path", "不能删除工作区根文件夹或包含其他工作区根的目录，请使用从工作区移除"));
+                    }
+                }
+            }
+            let recent = self.recent_path.lock()
+                .map_err(|_| error("unavailable", "最近工作区记录暂不可用"))?;
+            if session.file.as_ref().is_some_and(|file| file.starts_with(&path))
+                || recent.as_ref().is_some_and(|file| file.starts_with(&path))
+            {
+                return Err(error("permission_denied", "不能删除包含当前工作区配置或最近工作区记录的文件夹"));
+            }
+        }
         let snapshot = self.file_snapshot(&state, &path, String::new())?;
         if snapshot.readonly {
             return Err(error(
@@ -131,9 +150,14 @@ impl WorkspaceService {
             .discovery
             .lock()
             .map_err(|_| error("unavailable", "服务发现缓存暂不可用"))?;
-        // Delete only a validated regular file, never a directory tree.
-        fs::remove_file(&path)?;
+        // Revalidate immediately before deletion; remove_dir_all does not follow child links.
+        if self.entry_path(&state, &request.path, request.expected_revision, true)? != path {
+            return Err(error("file_conflict", "删除目标路径已改变"));
+        }
+        let result = if directory { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
+        // A recursive deletion can fail after removing some entries (e.g. a locked file).
         discovery.clear();
+        result?;
         Ok(WorkspaceFileMutation {
             path: display_path(&path),
             revision: state.revision,
@@ -141,6 +165,10 @@ impl WorkspaceService {
     }
 
     fn file_path(&self, state: &State, requested: &str, revision: u64) -> Result<PathBuf> {
+        self.entry_path(state, requested, revision, false)
+    }
+
+    fn entry_path(&self, state: &State, requested: &str, revision: u64, allow_directory: bool) -> Result<PathBuf> {
         if state.revision != revision {
             return Err(error("conflict", "工作区已改变，请重新打开文件"));
         }
@@ -169,8 +197,19 @@ impl WorkspaceService {
                 "依赖、构建产物和版本管理元数据目录不支持编辑",
             ));
         }
-        if fs::symlink_metadata(requested)?.file_type().is_symlink() || !path.is_file() {
-            return Err(error("invalid_path", "只能打开已有的普通文件"));
+        let metadata = fs::symlink_metadata(requested)?;
+        let linked = metadata.file_type().is_symlink();
+        #[cfg(windows)]
+        let linked = {
+            use std::os::windows::fs::MetadataExt;
+            linked || metadata.file_attributes() & 0x400 != 0
+        };
+        if linked || !(path.is_file() || (allow_directory && path.is_dir())) {
+            return Err(error("invalid_path", if allow_directory {
+                "只能删除已有的普通文件或文件夹，不支持链接"
+            } else {
+                "只能打开已有的普通文件"
+            }));
         }
         Ok(path)
     }
@@ -487,6 +526,59 @@ mod tests {
             fs::read_to_string(fixture.0.join("source.txt")).unwrap(),
             "original"
         );
+    }
+
+    #[test]
+    fn recursively_deletes_chinese_directory_including_generated_children() {
+        let fixture = Fixture::new();
+        let directory = fixture.0.join("中文 文件夹");
+        fs::create_dir_all(directory.join("子目录/node_modules")).unwrap();
+        fs::write(directory.join("子目录/node_modules/binary.bin"), [0, 255]).unwrap();
+        fs::write(fixture.0.join("保留.txt"), "保留").unwrap();
+        let service = fixture.service();
+        let revision = service.lock().unwrap().revision;
+        let request = |expected_revision| WorkspaceFileReadRequest {
+            path: display_path(&directory), expected_revision,
+        };
+        assert_eq!(service.delete_file(request(revision), false).unwrap_err().code, "unauthorized");
+        assert_eq!(service.delete_file(request(revision + 1), true).unwrap_err().code, "conflict");
+        let deleted = service.delete_file(request(revision), true).unwrap();
+        assert_eq!(deleted.path, display_path(&directory));
+        assert_eq!(deleted.revision, revision);
+        assert!(!directory.exists());
+        assert!(fixture.0.join("保留.txt").is_file());
+    }
+
+    #[test]
+    fn rejects_deleting_directory_containing_active_configuration() {
+        let fixture = Fixture::new();
+        let directory = fixture.0.join("配置");
+        fs::create_dir(&directory).unwrap();
+        let config = directory.join("active.code-workspace");
+        fs::write(&config, r#"{"folders":[{"path":".."}]}"#).unwrap();
+        let service = WorkspaceService::new(vec![fixture.0.clone()], Some(config.clone())).unwrap();
+        let revision = service.lock().unwrap().revision;
+        let result = service.delete_file(WorkspaceFileReadRequest {
+            path: display_path(&directory), expected_revision: revision,
+        }, true);
+        assert_eq!(result.unwrap_err().code, "permission_denied");
+        assert!(config.is_file());
+    }
+
+    #[test]
+    fn rejects_deleting_directory_containing_another_workspace_root() {
+        let fixture = Fixture::new();
+        let directory = fixture.0.join("父目录");
+        fs::create_dir_all(directory.join("子项目")).unwrap();
+        let config = fixture.0.join("active.code-workspace");
+        fs::write(&config, r#"{"folders":[{"path":"."},{"path":"父目录/子项目"}]}"#).unwrap();
+        let service = WorkspaceService::new(vec![fixture.0.clone()], Some(config)).unwrap();
+        let revision = service.lock().unwrap().revision;
+        let result = service.delete_file(WorkspaceFileReadRequest {
+            path: display_path(&directory), expected_revision: revision,
+        }, true);
+        assert_eq!(result.unwrap_err().code, "invalid_path");
+        assert!(directory.join("子项目").is_dir());
     }
 
     #[test]
