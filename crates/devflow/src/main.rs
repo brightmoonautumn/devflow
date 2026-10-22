@@ -81,6 +81,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let restore_recent =
         root.is_none() || std::env::var("DEVFLOW_RESTORE_RECENT").is_ok_and(|value| value == "1");
     let engine = devflow_core::DevFlowEngine::new(roots, None)?;
+    devflow_core::runtime::managed::start_maintenance()?;
     engine.workspace.configure_recent(
         std::env::current_dir()?.join(".devflow/recent-workspace.json"),
         root,

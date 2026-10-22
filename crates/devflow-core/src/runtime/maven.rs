@@ -179,7 +179,7 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 fn log(directory: &Path, message: impl std::fmt::Display) -> Result<()> {
-    writeln!(fs::OpenOptions::new().append(true).create(true).open(directory.join("stdout.log"))?, "[DevFlow] {message}")?;
+    super::logs::append(directory, "stdout", format!("[DevFlow] {message}\n").as_bytes())?;
     Ok(())
 }
 

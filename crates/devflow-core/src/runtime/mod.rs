@@ -3,6 +3,7 @@ pub mod java;
 pub mod node;
 pub mod managed;
 mod maven;
+mod logs;
 mod ports;
 mod presentation;
 pub(crate) mod process;

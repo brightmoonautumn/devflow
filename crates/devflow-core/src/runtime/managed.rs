@@ -1,6 +1,7 @@
 //! Durable service host. The HTTP/MCP process is only a client of this host.
 //! A separate executable owns launch sequencing and file-backed stdout/stderr.
 use super::process::{Run, identity, kill_tree};
+use super::logs;
 use crate::workspace::WorkspaceError;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, ffi::OsString, fs, io::{Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}, process::{Command, Stdio}, sync::{Arc, Mutex}, thread, time::Duration};
@@ -48,8 +49,17 @@ struct Record {
     pid: Option<(u32, u64)>,
     state: String,
     exit: Option<i32>,
+    #[serde(default)]
+    finished_ms: Option<u64>,
 }
 fn now_ms() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64 }
+
+#[path = "managed_retention.rs"]
+mod retention;
+
+/// Shared automatic policy for both HTTP and MCP service histories. No mutation
+/// endpoint or caller-supplied deletion path is exposed.
+pub fn start_maintenance() -> Result<()> { retention::start(root()?) }
 
 struct LaunchLock { _file: fs::File }
 fn lock_launch(slot: &Path) -> Result<LaunchLock> {
@@ -85,7 +95,8 @@ fn slot(root: &Path, kind: &str, key: &str) -> PathBuf {
     root.join(format!("{kind}-{hash:016x}"))
 }
 
-struct LogReader { offset: u64, pending: Vec<u8> }
+struct LogReader { offset: u64, pending: Vec<u8>, generation: Option<logs::Rotation>, sink_error: Option<String> }
+impl LogReader { fn new() -> Self { Self { offset: 0, pending: vec![], generation: None, sink_error: None } } }
 pub(crate) struct ManagedRun {
     directory: PathBuf,
     id: String,
@@ -96,7 +107,7 @@ pub(crate) struct ManagedRun {
 }
 impl ManagedRun {
     fn new(directory: PathBuf, record: &Record) -> Self {
-        Self { directory, id: record.id.clone(), kind: record.kind.clone(), key: record.key.clone(), stdout: LogReader { offset: 0, pending: vec![] }, stderr: LogReader { offset: 0, pending: vec![] } }
+        Self { directory, id: record.id.clone(), kind: record.kind.clone(), key: record.key.clone(), stdout: LogReader::new(), stderr: LogReader::new() }
     }
     fn record(&self) -> Result<Record> {
         let record: Record = read_json(&self.directory.join("state.json"))?;
@@ -156,19 +167,33 @@ pub(crate) fn refresh(run: &mut Run) -> Result<()> {
 }
 
 fn read_log(path: &Path, reader: &mut LogReader, run: &mut Run, stream: &str, finished: bool) -> Result<()> {
+    let sink_error = fs::File::open(logs::suffix(path, ".error")).ok().and_then(|file| {
+        let mut text = String::new(); file.take(8192).read_to_string(&mut text).ok().map(|_| text)
+    });
+    if sink_error != reader.sink_error {
+        if let Some(message) = &sink_error { run.log("system", message.chars().take(2048).collect::<String>()); }
+        reader.sink_error = sink_error;
+    }
+    let generation = logs::rotation(path)?;
+    if generation.as_ref().is_some_and(|state| state.rotating) && !finished { return Ok(()); }
     let mut file = match fs::File::open(path) { Ok(file) => file, Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()), Err(err) => return Err(err.into()) };
     let length = file.metadata()?.len();
-    if length < reader.offset { reader.offset = 0; reader.pending.clear(); }
+    let rotated = generation != reader.generation;
+    let mut offset = if rotated || length < reader.offset { 0 } else { reader.offset };
     // Bounded catch-up even if a detached service has emitted gigabytes.
-    if length.saturating_sub(reader.offset) > 256 * 1024 {
-        reader.offset = length - 256 * 1024;
-        reader.pending.clear();
-        run.log("system", format!("{stream} 较早的日志已省略，完整日志保留在磁盘。"));
-    }
-    file.seek(SeekFrom::Start(reader.offset))?;
+    let skipped = length.saturating_sub(offset) > 256 * 1024;
+    if skipped { offset = length - 256 * 1024; }
+    file.seek(SeekFrom::Start(offset))?;
     let mut bytes = Vec::new();
     file.take(256 * 1024).read_to_end(&mut bytes)?;
-    reader.offset += bytes.len() as u64;
+    // Never commit a cursor read across a rename, even when the new file is
+    // already larger than the previous offset. Size alone cannot detect this.
+    if logs::rotation(path)? != generation { return Ok(()); }
+    if rotated || length < reader.offset || skipped { reader.pending.clear(); }
+    if rotated && (reader.generation.is_some() || reader.offset > 0) { run.log("system", format!("{stream} 日志已轮转，继续显示当前文件；备份按保留策略保存。")); }
+    if skipped { run.log("system", format!("{stream} 较早的日志已省略，磁盘日志按轮转保留策略保存。")); }
+    reader.generation = generation;
+    reader.offset = offset + bytes.len() as u64;
     for byte in bytes {
         if byte == b'\n' || reader.pending.len() >= 16384 {
             run.log(stream, String::from_utf8_lossy(&reader.pending).trim_end_matches('\r').to_owned());
@@ -217,10 +242,11 @@ pub(crate) fn launch(kind: &str, key: &str, plan: LaunchPlan) -> Result<Run> {
     fs::create_dir_all(&directory)?;
     #[cfg(unix)]
     { use std::os::unix::fs::PermissionsExt; fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?; }
-    let record = Record { version: 1, kind: kind.into(), key: key.into(), id: id.clone(), created_ms: now_ms(), worker: None, pid: None, state: "starting".into(), exit: None };
+    let record = Record { version: 1, kind: kind.into(), key: key.into(), id: id.clone(), created_ms: now_ms(), worker: None, pid: None, state: "starting".into(), exit: None, finished_ms: None };
     write_json(&directory.join("plan.json"), &plan)?;
     write_json(&directory.join("state.json"), &record)?;
     write_json(&slot.join("current.json"), &id)?;
+    if let Err(err) = retention::prune_locked(&slot, now_ms()) { eprintln!("DevFlow 历史清理失败: {err}"); }
     let mut command = Command::new(executable);
     command.arg("--devflow-runtime-worker").arg(&directory).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)]
@@ -315,9 +341,10 @@ pub fn run_worker(directory: &Path) -> Result<()> {
         Ok(code) => { record.exit = code; record.state = if directory.join("stop").exists() || code == Some(0) { "stopped" } else { "failed" }.into(); },
         Err(err) => {
             record.state = if record.pid.is_some() { "running" } else if directory.join("stop").exists() { "stopped" } else { "failed" }.into();
-            if let Ok(mut log) = fs::OpenOptions::new().append(true).create(true).open(directory.join("stderr.log")) { let _ = writeln!(log, "{}", err.message); }
+            let _ = logs::append(directory, "stderr", format!("{}\n", err.message).as_bytes());
         },
     }
+    record.finished_ms = Some(now_ms());
     write_json(&directory.join("state.json"), &record)
 }
 
@@ -327,12 +354,14 @@ fn execute(command: Command, directory: &Path, record: &mut Record, phase: &str)
 
 fn execute_with(mut command: Command, directory: &Path, record: &mut Record, phase: &str, tick: &mut dyn FnMut() -> Result<()>) -> Result<Option<i32>> {
     if directory.join("stop").exists() { return Ok(None); }
-    let stdout = fs::OpenOptions::new().append(true).create(true).open(directory.join("stdout.log"))?;
-    let stderr = fs::OpenOptions::new().append(true).create(true).open(directory.join("stderr.log"))?;
-    command.stdin(Stdio::null()).stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
+    logs::append(directory, "stdout", &[])?;
+    logs::append(directory, "stderr", &[])?;
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
     let mut child = command.spawn()?;
+    let stdout = logs::pipe(child.stdout.take().ok_or_else(|| error("无法读取标准输出"))?, directory.to_owned(), "stdout");
+    let stderr = logs::pipe(child.stderr.take().ok_or_else(|| error("无法读取标准错误"))?, directory.to_owned(), "stderr");
     let Some(pid) = identity(child.id()) else { let _ = child.kill(); let _ = child.wait(); return Err(error("无法校验服务 PID")); };
     record.pid = Some(pid);
     record.state = phase.into();
@@ -345,7 +374,17 @@ fn execute_with(mut command: Command, directory: &Path, record: &mut Record, pha
             let _ = child.wait();
             return Err(err);
         }
-        if let Some(status) = child.try_wait()? { return Ok(status.code()); }
+        if let Some(status) = child.try_wait()? {
+            // A descendant may inherit the pipe. Bound final draining so a
+            // leaked descendant handle cannot hang stop/restart indefinitely.
+            let deadline = std::time::Instant::now() + Duration::from_secs(1);
+            while !(stdout.is_finished() && stderr.is_finished()) && std::time::Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if stdout.is_finished() { let _ = stdout.join(); }
+            if stderr.is_finished() { let _ = stderr.join(); }
+            return Ok(status.code());
+        }
         thread::sleep(Duration::from_millis(100));
     }
 }
@@ -367,7 +406,7 @@ mod tests {
             fs::create_dir_all(&directory).unwrap();
             let current = identity(std::process::id()).unwrap();
             let stale = (current.0, current.1 + 1);
-            let record = Record { version: 1, kind: kind.into(), key: key.into(), id: id.clone(), created_ms: 0, worker: Some(stale), pid: Some(stale), state: "running".into(), exit: None };
+            let record = Record { version: 1, kind: kind.into(), key: key.into(), id: id.clone(), created_ms: 0, worker: Some(stale), pid: Some(stale), state: "running".into(), exit: None, finished_ms: None };
             write_json(&directory.join("state.json"), &record).unwrap();
             write_json(&slot.join("current.json"), &id).unwrap();
             (directory, record)
@@ -398,7 +437,7 @@ mod tests {
         let fixture = Fixture::new();
         let path = fixture.0.join("stdout.log");
         let mut run = Run::new("running");
-        let mut reader = LogReader { offset: 0, pending: vec![] };
+        let mut reader = LogReader::new();
         let data = "中文输出\n".as_bytes();
         fs::write(&path, &data[..2]).unwrap();
         read_log(&path, &mut reader, &mut run, "stdout", false).unwrap();
@@ -410,6 +449,22 @@ mod tests {
         read_log(&path, &mut reader, &mut run, "stdout", true).unwrap();
         assert!(run.logs.len() <= 2000);
         assert_eq!(reader.offset, path.metadata().unwrap().len());
+    }
+
+    #[test]
+    fn rotated_file_resets_cursor_even_when_new_file_is_larger() {
+        let fixture = Fixture::new(); let path = fixture.0.join("stdout.log");
+        let mut run = Run::new("running"); let mut reader = LogReader::new();
+        fs::write(&path, "old\n").unwrap();
+        read_log(&path, &mut reader, &mut run, "stdout", false).unwrap();
+        fs::write(&path, "新的第一行\n新的第二行\n").unwrap();
+        fs::write(logs::suffix(&path, ".rotation.json"), serde_json::to_vec(&logs::Rotation { generation: "next-file".into(), rotating: false }).unwrap()).unwrap();
+        read_log(&path, &mut reader, &mut run, "stdout", false).unwrap();
+        assert!(run.logs.iter().any(|line| line.text == "新的第一行"));
+        let before = run.sequence;
+        fs::write(logs::suffix(&path, ".rotation.json"), serde_json::to_vec(&logs::Rotation { generation: "in-progress".into(), rotating: true }).unwrap()).unwrap();
+        read_log(&path, &mut reader, &mut run, "stdout", false).unwrap();
+        assert_eq!(run.sequence, before);
     }
 
     #[test]
