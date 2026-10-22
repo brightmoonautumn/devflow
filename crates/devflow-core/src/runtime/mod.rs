@@ -2,6 +2,7 @@
 pub mod java;
 pub mod node;
 pub mod managed;
+mod maven;
 mod ports;
 mod presentation;
 pub(crate) mod process;
@@ -657,7 +658,7 @@ fn aggregate_with_managed(
                     matches!(
                         p.name.to_ascii_lowercase().as_str(),
                         "java" | "java.exe" | "javaw" | "javaw.exe"
-                    ) && !p.args.iter().any(|arg| arg.contains("org.codehaus.plexus"))
+                    ) && !p.args.iter().any(|arg| maven::is_launcher_arg(arg))
                 })
                 .map(|p| p.pid)
                 .collect();
@@ -946,13 +947,16 @@ mod tests {
         let projects = vec![project("app", "d:/code/app")];
         let mut launcher = process(3, Some(1), "java.exe", "");
         launcher.args = vec!["org.codehaus.plexus.classworlds.launcher.Launcher".into()];
+        let mut bridge = process(4, Some(1), "java.exe", "");
+        bridge.args = vec![r"D:\工具 中文\DevflowMavenBridge.java".into()];
         let processes = vec![
             process(1, None, "java.exe", "d:/code/app/app.jar"),
             process(2, Some(1), "conhost.exe", ""),
             launcher,
+            bridge,
         ];
         let metrics = aggregate(&projects, &processes, 20, 2);
-        assert_eq!(metrics[0].pids, vec![1, 2, 3]);
+        assert_eq!(metrics[0].pids, vec![1, 2, 3, 4]);
         assert_eq!(metrics[0].java_pids, vec![1]);
     }
     #[test]

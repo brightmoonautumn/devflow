@@ -110,6 +110,9 @@ impl DevFlowEngine {
                 args,
                 profiles,
                 main_class,
+                maven_profiles,
+                build_mode,
+                force_build,
             } => {
                 if !pids.is_empty() {
                     return Err(workspace::WorkspaceError {
@@ -117,10 +120,11 @@ impl DevFlowEngine {
                         message: "项目已有运行进程，请先停止".into(),
                     });
                 }
-                self.java
-                    .start(project, jvm_args, args, profiles, main_class)
+                let boundary = self.workspace.java_build_boundary(&project.path, request.expected_revision)?;
+                self.java.start_with_build(project, jvm_args, args, profiles, main_class, boundary,
+                    runtime::java::BuildOptions { maven_profiles, build_mode, force_build })
             }
-            JavaOperation::Restart { jvm_args, args, profiles, main_class, pid } => {
+            JavaOperation::Restart { jvm_args, args, profiles, main_class, pid, maven_profiles, build_mode, force_build } => {
                 let external = pid.map(target).transpose()?;
                 let metrics = observed.projects.iter().find(|m| m.project_path == project.path);
                 let managed = metrics.and_then(|m| m.managed_state.as_deref())
@@ -131,7 +135,9 @@ impl DevFlowEngine {
                         message: "检测到多个关联进程，请先停止外部服务，再启动".into(),
                     });
                 }
-                self.java.restart(project, jvm_args, args, profiles, main_class, external)
+                let boundary = self.workspace.java_build_boundary(&project.path, request.expected_revision)?;
+                self.java.restart_with_build(project, jvm_args, args, profiles, main_class, external, boundary,
+                    runtime::java::BuildOptions { maven_profiles, build_mode, force_build })
             }
             JavaOperation::Stop { pid } => self.java.stop(&project, pid.map(target).transpose()?),
             JavaOperation::Attach { pid } => {

@@ -8,6 +8,8 @@
 - CodeMirror 的 Ctrl/Cmd+F 查找替换栏由 `editorSearch.ts` 封装，固定于编辑区域顶部。默认显示查找、替换双行，左侧可收起替换行，查找输入框右侧提供大小写/全字/正则切换，右侧提供上下项导航、全选匹配和中文替换按钮；只读时隐藏替换入口。`source-editor.css` 统一适配明暗主题，窄编辑区域自动换行。
 - 普通源码编辑器使用 `editorSearch.ts` 和 `editorPhrases.ts`，交互文案和辅助读屏提示使用中文。查询状态、匹配、替换和撤销沿用 CodeMirror 搜索命令；保留 Enter/Shift+Enter 导航、替换输入框 Enter 替换、Escape 关闭和内置搜索快捷键，中文输入法选词时不触发 Enter 操作。
 - `.md / .markdown` 由 `MarkdownEditor` 封装 Vditor，默认所见即所得文档编辑，支持源码和对照模式。对照时编辑源码，文档区域只读，窄面板自动上下排列；实例在切换模式时保留，源码、文档各自保留撤销历史。
+- 包含 Mermaid 图表或复杂原生 HTML（表格、合并单元格、块容器、自定义锚点）的文档使用 `MarkdownSourcePreview`：直接由 Markdown 转 HTML 后经 DOMPurify 清洗，再渲染图表和公式；预览永远不序列化回正文。此类文档在源码/对照模式编辑，保留表格 `rowspan/colspan` 和锚点。检测忽略普通代码围栏中的 HTML 示例；一个标签进入此模式后保持到关闭，避免编辑过程中反复切换引擎。普通 Markdown 继续使用原可视化编辑。禁用脚本、表单、内联样式与可编辑属性，图表 SVG 仍单独清洗。打开、切换、主题更新与失焦不会通过预览触发自动保存。
+- 两种文档视图的正文颜色、背景、字号和行高统一由应用 CSS 明确指定，不依赖 Vditor 全局内容主题是否已被其他标签加载。`theme` 从应用外壳经工作台直接传入，预览首次渲染、异步编辑器初始化和之后的主题更新使用同一主题值；不再通过 DOM 观察器延后推断暗色状态。
 - 参考了 [Office Viewer 的 Markdown 接入](https://github.com/cweijan/vscode-office/blob/main/resource/markdown/index.js)：本地资源、禁用依赖缓存、输入回传和外部内容同步。Office Viewer 维护定制 Vditor；本项目直接使用 [Vditor 开源上游](https://github.com/Vanessa219/vditor) 的 npm 分发，未移植其 VS Code 协议或扩展源码。
 - `markdownRuntime.ts` 管理本地脚本与 Mermaid 全局 API 适配；按调用串行初始化与绘图，使用 strict 模式和 SVG 清洗。Vditor 负责表格、目录、任务列表、脚注、代码及 KaTeX；依赖的磁盘资源由 `apps/web/vditorAssets.ts` 白名单提供，并在构建时输出到 `vendor/vditor`，无需在线 CDN。只枚举一个已知字体目录，不递归遍历依赖目录。
 - 工作台通过 `active` 告知当前可见编辑器；Markdown 重型初始化安排在下一次绘制之后，可取消快速切换中已失效的初始化任务。隐藏且未初始化的标签、纯源码模式不创建 Vditor，已初始化标签继续保留实例及撤销记录；隐藏/源码模式暂停文档正文和主题同步，恢复显示时补齐。销毁通过 `releaseMarkdownEditor` 保留已执行的共享图标脚本标记，避免上游销毁后再次打开时触发同步 XHR 及重复插入 SVG 图标。Mermaid 模块只在首个图表实际渲染时加载，图表间让出事件循环，初始主题不再额外重绘图表。

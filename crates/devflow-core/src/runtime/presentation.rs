@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 fn launcher(process: &Observation) -> bool {
     process.args.iter().any(|arg| {
-        arg.contains("org.codehaus.plexus") || ["npm-cli.js", "pnpm.cjs", "pnpm.mjs", "pnpm.js", "yarn.js", "yarn.cjs"]
+        super::maven::is_launcher_arg(arg) || ["npm-cli.js", "pnpm.cjs", "pnpm.mjs", "pnpm.js", "yarn.js", "yarn.cjs"]
             .iter().any(|name| arg.replace('\\', "/").rsplit('/').next() == Some(*name))
     })
 }
@@ -93,6 +93,10 @@ mod tests {
         assert_eq!(details[1].parent_pid, Some(10));
         assert_eq!(details[2].role, "launcher");
         assert!(process_details(&[], &app, &[]).0.is_empty());
+        maven.args = vec![r"D:\工具 中文\DevflowMavenBridge.java".into()];
+        let (primary, details) = process_details(&[&maven], &app, &[]);
+        assert!(primary.is_empty());
+        assert_eq!(details[0].role, "launcher");
     }
 
     #[test]

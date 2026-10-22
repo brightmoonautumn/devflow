@@ -38,6 +38,13 @@ export function JavaLaunchDialog({ project, onClose }: { project: Project; onClo
         <BaseField htmlFor={`${formId}-args`} label="程序参数">
           <BaseTextarea id={`${formId}-args`} mono rows={3} value={config.args} onChange={event => setConfig({ ...config, args: event.target.value })} placeholder={'--server.port=8080\n--example.name=hello world'} />
         </BaseField>
+        <BaseField htmlFor={`${formId}-build`} label="启动前构建" hint={config.buildMode === 'install' ? '按需执行 install，可能触发项目中的打包、复制依赖等插件。' : '按需构建变化模块和受影响的依赖链；没有变化时直接启动。'}>
+          <BaseSelect id={`${formId}-build`} value={config.buildMode} onValueChange={value => setConfig(current => ({ ...current, buildMode: value === 'install' ? 'install' : 'workspace' }))} options={[{ value: 'workspace', label: '工作区按需构建（推荐）' }, { value: 'install', label: '构建并安装（兼容特殊产物）' }]} />
+        </BaseField>
+        <BaseField htmlFor={`${formId}-maven-profiles`} label="Maven Profile" hint="多个名称用逗号分隔，与下方 Spring Profile 独立；留空沿用 Maven 默认配置。">
+          <BaseInput id={`${formId}-maven-profiles`} value={config.mavenProfiles} onChange={event => setConfig({ ...config, mavenProfiles: event.target.value })} placeholder="例如 local-build" />
+        </BaseField>
+        <BaseCheckbox label="每次重新构建目标及上游（忽略缓存）" checked={config.forceBuild} onCheckedChange={forceBuild => setConfig(current => ({ ...current, forceBuild }))} />
         <fieldset className="java-profile-fields"><legend>Spring Profile</legend>
           <div className="java-profile-list">{options?.profiles.map(profile => <BaseCheckbox key={profile} label={profile} checked={config.profiles.includes(profile)} onCheckedChange={checked => setConfig(current => ({ ...current, profiles: checked ? [...current.profiles, profile] : current.profiles.filter(value => value !== profile) }))} />)}</div>
           {options && !options.profiles.length && <p className="df-field-hint java-profile-empty">未发现预设 Profile，可在下方填写。</p>}

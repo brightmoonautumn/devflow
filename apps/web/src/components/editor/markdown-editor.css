@@ -13,6 +13,12 @@
 .df-markdown-editor .md-vditor-host { display: flex; flex-direction: column; flex: 1 1 0; width: 100%; height: 100% !important; min-height: 0 !important; min-width: 0; overflow: hidden; }
 .md-loading, .md-load-error { margin: 0; padding: 16px; color: var(--ws-muted); font-size: var(--ws-font-small); }
 .md-load-error { background: var(--ws-error-bg); color: var(--ws-error); }
+.md-source-preview-host, .md-source-preview { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.md-source-preview-scroll { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+.md-source-preview-scroll > .vditor-reset { max-width: 880px; margin: 0 auto; padding: 20px 24px 60px; }
+.md-source-preview-note { padding: 7px 12px; color: var(--ws-muted); border-bottom: 1px solid var(--ws-subtle-border); font-size: var(--ws-font-small); }
+.md-source-preview-note button { color: var(--ws-accent); background: transparent; padding: 3px 6px; }
+.df-markdown-editor .md-source-preview-scroll table td[valign='middle'] { vertical-align: middle; }
 .df-markdown-editor .vditor { border: 0; border-radius: 0; background: var(--ws-bg); --border-color: var(--ws-border); --second-color: var(--ws-dim); --panel-background-color: var(--ws-surface); --panel-shadow: var(--ws-shadow); --toolbar-background-color: var(--ws-bg); --toolbar-icon-color: var(--ws-muted); --toolbar-icon-hover-color: var(--ws-accent); --textarea-background-color: var(--ws-bg); --textarea-text-color: var(--ws-ink); --heading-border-color: var(--ws-border); --blockquote-color: var(--ws-muted); --blockquote-border-color: var(--ws-accent); --blockquote-text-color: var(--ws-muted); }
 .df-markdown-editor .vditor-content { flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; }
 .df-markdown-editor .vditor-wysiwyg { flex: 1 1 0; width: auto; min-height: 0; min-width: 0; overflow: hidden; }
@@ -25,8 +31,11 @@
 .df-markdown-editor .vditor-toolbar__item { padding: 0 1px; }
 .df-markdown-editor .vditor-toolbar__divider { margin: 8px 4px; }
 .df-markdown-editor .vditor-toolbar button { min-width: 26px; height: 30px; }
-.df-markdown-editor .vditor-wysiwyg, .df-markdown-editor .vditor-wysiwyg > .vditor-reset { background: var(--ws-bg); color: var(--ws-ink); }
-.df-markdown-editor .vditor-wysiwyg > .vditor-reset { padding: 28px max(24px, calc((100% - 880px) / 2)) 100px !important; font: 15px/1.9 var(--font-ui); overflow-wrap: anywhere; }
+/* Both renderers own their text theme; Vditor's asynchronously loaded global
+   content styles must not change colors when another tab initializes. */
+.df-markdown-editor .vditor-wysiwyg, .df-markdown-editor .vditor-reset { background: var(--ws-bg); color: var(--ws-ink); }
+.df-markdown-editor .vditor-reset { font: 15px/1.9 var(--font-ui); overflow-wrap: anywhere; }
+.df-markdown-editor .vditor-wysiwyg > .vditor-reset { padding: 28px max(24px, calc((100% - 880px) / 2)) 100px !important; }
 .df-markdown-editor .vditor-reset h1, .df-markdown-editor .vditor-reset h2, .df-markdown-editor .vditor-reset h3, .df-markdown-editor .vditor-reset h4 { color: var(--ws-ink); font-family: var(--font-ui); font-weight: 600; line-height: 1.45; letter-spacing: -.025em; scroll-margin-top: 24px; }
 .df-markdown-editor .vditor-reset h1 { margin: 4px 0 24px; padding-bottom: 16px; font-size: 30px; border-bottom: 1px solid var(--ws-border); }
 .df-markdown-editor .vditor-reset h2 { margin-top: 38px; margin-bottom: 16px; padding-bottom: 9px; font-size: 22px; border-bottom: 1px solid var(--ws-subtle-border); }
@@ -63,7 +72,8 @@
 @container markdown (max-width: 650px) {
   .df-markdown-editor[data-mode='split'] .md-editor-panes { flex-direction: column; }
   .df-markdown-editor[data-mode='split'] .md-source-pane { border-right: 0; border-bottom: 1px solid var(--ws-border); }
-  .df-markdown-editor .vditor-wysiwyg > .vditor-reset { padding: 20px 18px 60px !important; font-size: 14px; }
+  .df-markdown-editor .vditor-wysiwyg > .vditor-reset { padding: 20px 18px 60px !important; }
+  .df-markdown-editor .vditor-reset { font-size: 14px; }
   .df-markdown-editor .vditor-reset h1 { font-size: 25px; }
   .df-markdown-editor .vditor-reset h2 { font-size: 20px; }
   .df-markdown-editor .vditor-toolbar { overflow: visible; flex-wrap: wrap; }

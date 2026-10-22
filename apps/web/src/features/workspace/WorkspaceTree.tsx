@@ -3,7 +3,7 @@ import { copyText } from '../../lib/clipboard'
 import { readOnlyShare } from '../../lib/access'
 import { useDialogs } from '../../components/form/BaseDialog'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement } from 'react'
-import { AlertCircle, Check, ChevronLeft, ChevronRight, ChevronsDownUp, Copy, FolderMinus, FolderPlus, LoaderCircle, MoreHorizontal, RefreshCw, Save, Settings2, Trash2 } from 'lucide-react'
+import { AlertCircle, Check, ChevronLeft, ChevronRight, ChevronsDownUp, Copy, FolderMinus, FolderPlus, LoaderCircle, LocateFixed, MoreHorizontal, RefreshCw, Save, Settings2, Trash2 } from 'lucide-react'
 import { TreeEntryIcon } from '../../components/files/TreeEntryIcon'
 import { FileTreeRow, TreeChevron, TreePathLabel, handleTreeNavigation } from '../../components/files/FileTreeRow'
 import { compactFolderChild, MAX_COMPACT_FOLDER_SEGMENTS } from '../../components/files/compactFolders'
@@ -14,7 +14,8 @@ import { ApiError, executeWorkspace, getWorkspaceChildren, mutateWorkspaceFile, 
 type NodeEntry = WorkspaceTreeEntry & { status?: string; message?: string | null }
 type TreeRoot = { name: string; path: string }
 type NodeMenu = { entry: NodeEntry; root: TreeRoot; level: number; revision: number; x: number; y: number; target: HTMLElement }
-type NodeProps = { compact: boolean; scope: string | null; entry: NodeEntry; root: TreeRoot; level: number; revision: number; selected: string | null; copiedPath: string | null; onCopy: (path: string, value?: string) => Promise<void>; onSelect: (path: string) => void; onOpenFile: (path: string, pinned?: boolean) => void; onNodeMenu: (menu: NodeMenu) => void }
+type RevealRequest = { path: string; root: string; sequence: number }
+type NodeProps = { reveal: RevealRequest | null; compact: boolean; scope: string | null; entry: NodeEntry; root: TreeRoot; level: number; revision: number; selected: string | null; copiedPath: string | null; onCopy: (path: string, value?: string) => Promise<void>; onSelect: (path: string) => void; onOpenFile: (path: string, pinned?: boolean) => void; onNodeMenu: (menu: NodeMenu) => void }
 
 function relativeTreePath(path: string, root: string) {
   const normalized = path.replace(/\\/g, '/'), base = root.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -24,9 +25,14 @@ function relativeTreePath(path: string, root: string) {
   return comparable(normalized).startsWith(`${comparable(base)}/`) ? normalized.slice(base.length + 1) : null
 }
 
-function TreeNode({ compact, scope, entry, root, level, revision, selected, copiedPath, onCopy, onSelect, onOpenFile, onNodeMenu }: NodeProps): ReactElement {
+function TreeNode({ reveal, compact, scope, entry, root, level, revision, selected, copiedPath, onCopy, onSelect, onOpenFile, onNodeMenu }: NodeProps): ReactElement {
   const directory = entry.kind === 'directory'
   const available = !entry.status || entry.status === 'available'
+  const nodeRef = useRef<HTMLLIElement>(null)
+  const currentReveal = useRef(reveal)
+  currentReveal.current = reveal
+  const revealing = !!reveal && viewPathKey(reveal.root) === viewPathKey(root.path) && pathWithin(reveal.path, entry.path)
+  const revealSequence = revealing ? reveal?.sequence : undefined
   const [expanded, setExpanded] = useState(() => {
     const saved = scope ? readViewState(scope).expanded : []
     return Array.isArray(saved) && saved.some(path => typeof path === 'string' && viewPathKey(path) === viewPathKey(entry.path))
@@ -75,6 +81,11 @@ function TreeNode({ compact, scope, entry, root, level, revision, selected, copi
       }
       // Publish the chain atomically so intermediate folders do not mount and probe again.
       setSegments([...chain]); setChildren(resolved)
+      const target = currentReveal.current
+      if (target && viewPathKey(target.root) === viewPathKey(root.path) && pathWithin(target.path, current.path)
+        && !resolved?.entries.some(child => pathWithin(target.path, child.path))) {
+        setError(resolved?.truncated ? '目录条目过多，当前文件不在已返回的条目中，暂无法定位。' : '当前文件或其所在目录已不存在，请刷新或重新打开文件。')
+      }
     } catch (err) {
       if (!controller.signal.aborted) {
         // Keep the last confirmed chain; the failed folder remains explicitly retryable.
@@ -85,11 +96,24 @@ function TreeNode({ compact, scope, entry, root, level, revision, selected, copi
       if (!controller.signal.aborted) setLoading(false)
       if (pending.current === controller) pending.current = null
     }
-  }, [entry, revision, compact, level])
+  }, [entry, revision, compact, level, root.path])
   useEffect(() => {
-    if (directory && available && (expanded || (compact && level > 1))) void readChildren()
+    if (revealing && directory && available) expand(true)
+    if (revealing && !directory && available && viewPathKey(entry.path) === viewPathKey(reveal!.path)) {
+      const frame = requestAnimationFrame(() => {
+        nodeRef.current?.focus({ preventScroll: true })
+        nodeRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+        onSelect(entry.path)
+      })
+      return () => cancelAnimationFrame(frame)
+    }
+    // Each request expands only its ancestor chain, including lazily mounted nodes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealSequence, directory, available])
+  useEffect(() => {
+    if (directory && available && (expanded || (compact && level > 1))) void readChildren(revealSequence !== undefined)
     return () => { pending.current?.abort(); pending.current = null }
-  }, [expanded, directory, available, compact, level, readChildren])
+  }, [expanded, directory, available, compact, level, readChildren, revealSequence])
   useEffect(() => {
     const changed = (event: Event) => {
       const path = (event as CustomEvent<string>).detail.replace(/\\/g, '/')
@@ -129,7 +153,7 @@ function TreeNode({ compact, scope, entry, root, level, revision, selected, copi
     handleTreeNavigation(event, { expanded, expandable, onToggle: next => { if (next) onSelect(activeEntry.path); expand(next) }, onActivate: toggle })
   }
   const status = entry.status === 'blocked' ? '未授权' : entry.status === 'unsupported' ? '不支持' : '不可用'
-  return <li role="treeitem" tabIndex={0} aria-label={label} aria-level={level} aria-selected={segments.some(segment => segment.path === selected)} aria-expanded={expandable ? expanded : undefined} aria-disabled={!available || undefined}
+  return <li ref={nodeRef} role="treeitem" tabIndex={0} aria-label={label} aria-level={level} aria-selected={segments.some(segment => viewPathKey(segment.path) === viewPathKey(selected ?? ''))} aria-expanded={expandable ? expanded : undefined} aria-disabled={!available || undefined}
     onDoubleClick={event => { event.stopPropagation(); if (!(event.target as HTMLElement).closest('button') && !directory && available) onOpenFile(entry.path, true) }}
     onKeyDown={onKeyDown} onContextMenu={event => {
       event.stopPropagation()
@@ -152,7 +176,7 @@ function TreeNode({ compact, scope, entry, root, level, revision, selected, copi
       }}><MoreHorizontal size={14} /></button>}
     </FileTreeRow>
     {((expanded && !empty) || !!error) && <ul role="group">
-      {expanded && children?.entries.map(child => <MemoTreeNode compact={compact} scope={scope} key={child.path} entry={child} root={root} level={level + 1} revision={revision} selected={selected} copiedPath={copiedPath} onCopy={onCopy} onSelect={onSelect} onOpenFile={onOpenFile} onNodeMenu={onNodeMenu} />)}
+      {expanded && children?.entries.map(child => <MemoTreeNode reveal={reveal} compact={compact} scope={scope} key={child.path} entry={child} root={root} level={level + 1} revision={revision} selected={selected} copiedPath={copiedPath} onCopy={onCopy} onSelect={onSelect} onOpenFile={onOpenFile} onNodeMenu={onNodeMenu} />)}
       {expanded && loading && <li role="none" className="ws-tree-note">正在读取…</li>}
       {error && <li role="none" className="ws-tree-note is-error" onClick={event => event.stopPropagation()}><span role="status">{error}</span><button onClick={() => void readChildren(true)}>重试</button></li>}
       {expanded && children?.truncated && <li role="none" className="ws-tree-note">目录过大，仅显示前 2000 个条目范围内的内容。</li>}
@@ -164,12 +188,16 @@ const MemoTreeNode = memo(TreeNode)
 function maxSidebarWidth() { return window.innerWidth < 720 ? Math.max(200, Math.min(360, window.innerWidth - (window.innerWidth <= 550 ? 45 : 51) - 28)) : Math.max(200, Math.min(520, window.innerWidth - 420)) }
 function clampWidth(width: number) { return Math.round(Math.max(200, Math.min(maxSidebarWidth(), width))) }
 
-export function WorkspaceTree({ data, open, hidden, view, onChange, onRefresh, onConfigure, onAddFolder, onSave, onClose, onToggle, onOpenFile }: { data: WorkspaceResponse | null; open: boolean; hidden?: boolean; view: 'explorer' | 'search'; onChange: (data: WorkspaceResponse) => void; onRefresh: () => void; onConfigure: () => void; onAddFolder: () => void; onSave: () => void; onClose: () => void; onToggle: () => void; onOpenFile: (path: string, pinned?: boolean, line?: number, column?: number) => void }) {
+export function WorkspaceTree({ activeFilePath, data, open, hidden, view, onChange, onRefresh, onConfigure, onAddFolder, onSave, onClose, onToggle, onOpenFile }: { activeFilePath: string | null; data: WorkspaceResponse | null; open: boolean; hidden?: boolean; view: 'explorer' | 'search'; onChange: (data: WorkspaceResponse) => void; onRefresh: () => void; onConfigure: () => void; onAddFolder: () => void; onSave: () => void; onClose: () => void; onToggle: () => void; onOpenFile: (path: string, pinned?: boolean, line?: number, column?: number) => void }) {
   const dialogs = useDialogs()
   const scope = workspaceViewKey(data)
   const [compact, setCompact] = useCompactFolders()
   const [generation, setGeneration] = useState(0)
   const [selected, setSelected] = useState<string | null>(null)
+  const [reveal, setReveal] = useState<RevealRequest | null>(null)
+  const revealCounter = useRef(0)
+  const revealRoot = data?.folders.filter(folder => folder.status === 'available' && activeFilePath && pathWithin(activeFilePath, folder.path)).sort((a, b) => b.path.length - a.path.length)[0]
+  useEffect(() => { setReveal(null) }, [scope, data?.revision])
   const [menu, setMenu] = useState<NodeMenu | null>(null)
   const [removing, setRemoving] = useState(false)
   const mutating = useRef(false)
@@ -219,7 +247,7 @@ export function WorkspaceTree({ data, open, hidden, view, onChange, onRefresh, o
   }, [])
   const hasWorkspace = !!(data?.workspaceRoot || data?.workspaceFile)
   useEffect(() => { const saved = scope ? readViewState(scope).selected : null; setSelected(typeof saved === 'string' ? saved : null); setMenu(null) }, [scope, data?.revision])
-  const selectPath = useCallback((path: string) => { setSelected(path); if (scope) writeViewState(scope, { selected: path }) }, [scope])
+  const selectPath = useCallback((path: string) => { setReveal(null); setSelected(path); if (scope) writeViewState(scope, { selected: path }) }, [scope])
   useEffect(() => { setMenu(null); finishResize() }, [open, view])
   useEffect(() => {
     setCopyNotice(null)
@@ -294,18 +322,23 @@ export function WorkspaceTree({ data, open, hidden, view, onChange, onRefresh, o
     <div id="workspace-sidebar-content" className="ws-sidebar-content" hidden={!open}>
     <div className="ws-explorer-view" hidden={view !== 'explorer'}>
     <div className="ws-explorer-heading"><h2 className="ws-explorer-title" title={data?.workspaceFile ?? data?.workspaceRoot ?? ''}><span className="ws-explorer-name">{data?.name ?? '未选择工作区'}</span>{data?.dirty && <small className="ws-explorer-unsaved">未保存</small>}</h2><div>
+      <button className="ws-icon-button" disabled={!activeFilePath || !revealRoot} aria-label="定位当前打开文件" title="定位当前打开文件" onClick={() => {
+        if (!activeFilePath || !revealRoot) return
+        setMenu(null); setOperationError(''); selectPath(activeFilePath)
+        setReveal({ path: activeFilePath, root: revealRoot.path, sequence: ++revealCounter.current })
+      }}><LocateFixed size={15} /></button>
       {!readOnlyShare && <button className="ws-icon-button" disabled={!hasWorkspace} aria-label="添加文件夹到工作区" title="添加文件夹到工作区" onClick={onAddFolder}><FolderPlus size={15} /></button>}
       {!readOnlyShare && data?.dirty && <button className="ws-icon-button" aria-label="保存工作区更改" title="保存工作区更改" onClick={onSave}><Save size={14} /></button>}
       <button className="ws-icon-button" aria-label="紧凑文件夹" title="紧凑文件夹：合并连续单子目录" aria-pressed={compact} onClick={() => {
-        const next = !compact; setCompact(next); setMenu(null)
+        const next = !compact; setReveal(null); setCompact(next); setMenu(null)
       }}><Settings2 size={14} /></button>
-      <button className="ws-icon-button" aria-label="刷新目录树" title="刷新目录树" onClick={() => setGeneration(current => current + 1)}><RefreshCw size={14} /></button>
-      <button className="ws-icon-button" aria-label="折叠所有文件夹" title="折叠所有文件夹" onClick={() => { if (scope) writeViewState(scope, { expanded: [] }); setGeneration(current => current + 1) }}><ChevronsDownUp size={14} /></button>
+      <button className="ws-icon-button" aria-label="刷新目录树" title="刷新目录树" onClick={() => { setReveal(null); setGeneration(current => current + 1) }}><RefreshCw size={14} /></button>
+      <button className="ws-icon-button" aria-label="折叠所有文件夹" title="折叠所有文件夹" onClick={() => { setReveal(null); if (scope) writeViewState(scope, { expanded: [] }); setGeneration(current => current + 1) }}><ChevronsDownUp size={14} /></button>
       <button className="ws-icon-button" aria-label="向左收起文件管理器" title="向左收起文件管理器" onClick={() => { onClose(); sidebarRef.current?.querySelector<HTMLButtonElement>('.ws-sidebar-toggle')?.focus() }}><ChevronLeft size={14} /></button>
     </div></div>
     <div className="ws-tree-scroll">
       <ul role="tree" aria-label="工作区文件夹" key={`${scope}:${data?.revision ?? 0}:${generation}:${compact}`}>
-        {roots.map(folder => <MemoTreeNode compact={compact} scope={scope} key={folder.path} entry={folder} root={folder} level={1} revision={data!.revision} selected={selected} copiedPath={copyNotice?.path ?? null} onCopy={copyPath} onSelect={selectPath} onOpenFile={onOpenFile} onNodeMenu={openNodeMenu} />)}
+        {roots.map(folder => <MemoTreeNode reveal={reveal} compact={compact} scope={scope} key={folder.path} entry={folder} root={folder} level={1} revision={data!.revision} selected={selected} copiedPath={copyNotice?.path ?? null} onCopy={copyPath} onSelect={selectPath} onOpenFile={onOpenFile} onNodeMenu={openNodeMenu} />)}
       </ul>
       {!data?.folders.length && <div className="ws-tree-empty"><p>{hasWorkspace ? '工作区还没有文件夹' : '打开文件夹或工作区'}</p>{!readOnlyShare && <button className="ws-outline-button" onClick={hasWorkspace ? onAddFolder : onConfigure}><FolderPlus size={14} />{hasWorkspace ? '添加文件夹' : '打开工作区'}</button>}</div>}
       {data?.warnings.map(warning => <p className="ws-tree-note is-error" role="status" key={warning}>{warning}</p>)}

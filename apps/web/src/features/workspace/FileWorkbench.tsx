@@ -20,7 +20,7 @@ const textFor = (file: WorkspaceFile) => file.content.replace(/^\uFEFF/, '').rep
 const dirty = (tab: FileTab) => !!tab.file && tab.draft !== textFor(tab.file)
 const nameFor = (path: string) => path.split(/[\\/]/).at(-1) ?? path
 
-export function FileWorkbench({ workspace, openRequest, onOpenFile, onSaveStatusChange, children }: { workspace: WorkspaceResponse | null; openRequest: FileOpenRequest | null; onOpenFile?: (path: string) => void; onSaveStatusChange?: (status: FileSaveStatus | null) => void; children: ReactNode }) {
+export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSaveStatusChange, onActiveFileChange, children }: { theme: 'dark' | 'light'; workspace: WorkspaceResponse | null; openRequest: FileOpenRequest | null; onOpenFile?: (path: string) => void; onSaveStatusChange?: (status: FileSaveStatus | null) => void; onActiveFileChange?: (path: string | null) => void; children: ReactNode }) {
   const dialogs = useDialogs()
   const confirmations = useRef(new Set<string>())
   const [state, setState] = useState<Workbench>({ tabs: [], active: null })
@@ -28,6 +28,9 @@ export function FileWorkbench({ workspace, openRequest, onOpenFile, onSaveStatus
   const [restoredScope, setRestoredScope] = useState<string | null>(null)
   const [editorActions, setEditorActions] = useState<HTMLDivElement | null>(null)
   const activeTab = state.tabs.find(tab => tab.key === state.active)
+  const activePath = scope === restoredScope ? activeTab?.path ?? null : null
+  useEffect(() => { onActiveFileChange?.(activePath) }, [activePath, onActiveFileChange])
+  useEffect(() => () => onActiveFileChange?.(null), [onActiveFileChange])
   const saveText = !activeTab ? '' : activeTab.deleting ? '删除中…' : activeTab.loading ? '读取中…' : activeTab.saving ? '保存中…' : activeTab.error && dirty(activeTab) ? '保存失败' : activeTab.error && !activeTab.file ? '读取失败' : dirty(activeTab) ? '等待自动保存…' : activeTab.savedAt ? `保存于 ${new Date(activeTab.savedAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : activeTab.file?.readonly ? '只读' : '自动保存'
   const saveFailed = !!activeTab?.error
   useEffect(() => { onSaveStatusChange?.(saveText ? { text: saveText, failed: saveFailed } : null) }, [saveText, saveFailed, onSaveStatusChange])
@@ -302,7 +305,7 @@ export function FileWorkbench({ workspace, openRequest, onOpenFile, onSaveStatus
     {state.tabs.map(tab => <section key={tab.key} id={`file-pane-${encodeURIComponent(tab.key)}`} role="tabpanel" aria-labelledby={`file-tab-${encodeURIComponent(tab.key)}`} hidden={state.active !== tab.key} className="file-pane">
       {tab.error && <div className="file-notice is-error" role="alert">{tab.error}<button className="ws-outline-button" disabled={tab.loading || tab.saving || tab.deleting || !workspace} onClick={() => reloadFile(tab)}>重新读取</button></div>}
       {tab.file?.readonlyReason && !(readOnlyShare && tab.file.readonlyReason === '只读分享') && <p className="file-notice">{tab.file.readonlyReason}</p>}
-      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor key={tab.path} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} active={state.active === tab.key} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
+      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor theme={theme} key={tab.path} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} active={state.active === tab.key} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
       {tab.file && <footer className="file-status"><span role="status">{tab.saving ? '保存中…' : dirty(tab) ? '未保存' : tab.savedAt ? <><Check size={12} />已保存</> : tab.preview ? '预览 · 双击标签固定' : '已打开'}</span><span>行 {tab.line}，列 {tab.column}</span><span>UTF-8{tab.file.bom ? ' BOM' : ''} · {tab.file.lineEnding}</span></footer>}
     </section>)}
   </div>

@@ -51,6 +51,7 @@ export function App() {
   const [sidebarView, setSidebarView] = useState<'explorer' | 'search'>(() => savedLayout.sidebarView === 'search' ? savedLayout.sidebarView : 'explorer')
   useEffect(() => { writeViewState('devflow.workbench-layout.v1', { sidebarOpen: explorerOpen, sidebarView }) }, [explorerOpen, sidebarView])
   const [fileRequest, setFileRequest] = useState<FileOpenRequest | null>(null)
+  const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
   const openFile = useCallback((path: string, pinned = false, line?: number, column?: number) => {
     setBoardOpen(false)
     setFileRequest(current => ({ path, pinned, line, column, sequence: (current?.sequence ?? 0) + 1 }))
@@ -321,11 +322,11 @@ export function App() {
         </div>
         <div className="activity-secondary"><button className="activity-button" aria-label="使用说明" title="使用说明" onClick={() => setPanel({ title: '使用说明', description: '点击服务卡片查看运行输出，点击箭头展开目录和启动入口。点击启动直接使用已保存或默认配置，更多操作中的“启动配置”可保存 JVM 参数、程序参数和 Spring Profile；支持停止项目进程树及向运行中的 Java 应用附加 Arthas。底部面板可拖拽调整高度。Node.js 服务支持 npm/pnpm/yarn 启动、停止和运行输出。' })}><CircleHelp size={19} /></button>{!readOnlyShare && <button className="activity-button" aria-label="设置" title="设置" onClick={explainWorkspace}><Settings2 size={19} /></button>}</div>
       </nav>
-      <WorkspaceTree key={shareError ? 'expired' : 'workspace'} hidden={boardOpen} open={explorerOpen && !boardOpen} view={sidebarView} onOpenFile={openFile} data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} onToggle={() => setExplorerOpen(value => !value)} />
+      <WorkspaceTree activeFilePath={activeFilePath} key={shareError ? 'expired' : 'workspace'} hidden={boardOpen} open={explorerOpen && !boardOpen} view={sidebarView} onOpenFile={openFile} data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} onToggle={() => setExplorerOpen(value => !value)} />
       <div className="editor-area">
         {boardOpen && !readOnlyShare && <BoardPage workspaceRevision={data?.revision ?? 0} key={data?.workspaceFile ?? data?.workspaceRoot ?? 'demo'} query={taskQuery} onQueryChange={setTaskQuery} onSearchFocus={() => taskSearchRef.current?.focus()} workspaceName={data?.name ?? 'DevFlow'} workspaceKey={data?.workspaceFile ?? data?.workspaceRoot ?? 'demo'} />}
         <div className="board-workbench-host" hidden={boardOpen && !readOnlyShare}>
-        <FileWorkbench key={shareError ? 'expired' : 'workspace'} workspace={data} openRequest={fileRequest} onSaveStatusChange={setEditorSaveStatus} onOpenFile={path => openFile(path, true)}>
+        <FileWorkbench theme={theme} onActiveFileChange={setActiveFilePath} key={shareError ? 'expired' : 'workspace'} workspace={data} openRequest={fileRequest} onSaveStatusChange={setEditorSaveStatus} onOpenFile={path => openFile(path, true)}>
           <main id="projects" className="main-content">
             <WorkspacePage key={data?.folders.map(folder => folder.path).join('|') ?? 'empty'} query={query} onQueryChange={setQuery} data={data} loading={loading} monitoringEnabled={connected} outputProjectKey={panel?.runtimeProject ? projectKey(panel.runtimeProject) : undefined} onRefresh={() => void load()} onConfigure={() => manage(hasWorkspace ? 'add_folder' : 'open')} onAction={projectAction} />
           </main>

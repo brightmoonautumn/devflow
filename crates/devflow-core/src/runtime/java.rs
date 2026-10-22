@@ -2,6 +2,8 @@
 pub use super::process::{LogLine, ProcessOutput as JavaOutput};
 use super::process::{Run, configure, identity, kill_tree, process_system, reader};
 use super::managed::{self, CommandSpec, LaunchPlan};
+pub use super::maven::{BuildMode, BuildOptions};
+use super::maven::{self, MavenPlan};
 use crate::workspace::{DetectedProject, ProjectKind, WorkspaceError};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -41,6 +43,12 @@ pub enum JavaOperation {
         #[serde(default)]
         profiles: Vec<String>,
         main_class: Option<String>,
+        #[serde(default)]
+        maven_profiles: Vec<String>,
+        #[serde(default)]
+        build_mode: BuildMode,
+        #[serde(default)]
+        force_build: bool,
     },
     #[serde(rename_all = "camelCase")]
     Restart {
@@ -51,6 +59,12 @@ pub enum JavaOperation {
         #[serde(default)]
         profiles: Vec<String>,
         main_class: Option<String>,
+        #[serde(default)]
+        maven_profiles: Vec<String>,
+        #[serde(default)]
+        build_mode: BuildMode,
+        #[serde(default)]
+        force_build: bool,
         pid: Option<u32>,
     },
     Stop {
@@ -193,7 +207,10 @@ fn java_command() -> Result<Command> {
     }
     Ok(command)
 }
-fn maven_command(root: &Path, classpath: &Path) -> Result<Command> {
+fn maven_plan(root: &Path, boundary: &Path, options: BuildOptions) -> Result<MavenPlan> {
+    if options.maven_profiles.len() > 16 || options.maven_profiles.iter().any(|p| !valid_profile(p)) {
+        return Err(error("invalid_arguments", "Maven Profile 仅支持字母、数字、点、横线和下划线"));
+    }
     let home = std::env::var_os("MAVEN_HOME")
         .or_else(|| std::env::var_os("M2_HOME"))
         .map(PathBuf::from)
@@ -213,46 +230,17 @@ fn maven_command(root: &Path, classpath: &Path) -> Result<Command> {
                 "找不到 Maven，请配置 MAVEN_HOME 或将 Maven bin 加入 PATH",
             )
         })?;
-    let boot = fs::read_dir(home.join("boot"))?
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| {
-            p.file_name().is_some_and(|n| {
-                n.to_string_lossy().starts_with("plexus-classworlds-")
-                    && n.to_string_lossy().ends_with(".jar")
-            })
-        })
-        .ok_or_else(|| error("maven_missing", "找不到 Maven ClassWorlds 启动器"))?;
-    let multi = root
-        .ancestors()
-        .find(|p| p.join(".mvn").is_dir())
-        .unwrap_or(root);
-    let mut command = java_command()?;
-    command
-        .arg(format!("-Dmaven.home={}", home.display()))
-        .arg(format!(
-            "-Dclassworlds.conf={}",
-            home.join("bin/m2.conf").display()
-        ))
-        .arg(format!(
-            "-Dmaven.multiModuleProjectDirectory={}",
-            multi.display()
-        ))
-        .arg("-Dfile.encoding=UTF-8")
-        .arg("-classpath")
-        .arg(boot)
-        .arg("org.codehaus.plexus.classworlds.launcher.Launcher")
-        .args([
-            "-B",
-            "-Dstyle.color=never",
-            "-DskipTests",
-            "compile",
-            "dependency:build-classpath",
-            "-Dmdep.includeScope=runtime",
-        ])
-        .arg(format!("-Dmdep.outputFile={}", classpath.display()))
-        .current_dir(root);
-    Ok(command)
+    let home = home.canonicalize()?;
+    if !home.join("lib").is_dir() || !home.join("boot").is_dir() {
+        return Err(error("maven_missing", "Maven 安装缺少 lib/boot 目录"));
+    }
+    let boundary = boundary.canonicalize()?;
+    if !root.starts_with(&boundary) { return Err(error("outside_workspace", "启动模块超出工作区目录")); }
+    let reactor = maven::reactor_root(root, &boundary)?;
+    let configuration = reactor.ancestors().take_while(|path| path.starts_with(&boundary))
+        .find(|path| path.join(".mvn").is_dir()).unwrap_or(&reactor).to_owned();
+    Ok(MavenPlan { reactor, configuration, boundary, target: root.to_owned(), home, java: CommandSpec::from(&java_command()?),
+        profiles: options.maven_profiles, mode: options.build_mode, force: options.force_build })
 }
 pub fn java_identity(pid: u32) -> Result<(u32, u64)> {
     let system = process_system();
@@ -264,7 +252,7 @@ pub fn java_identity(pid: u32) -> Result<(u32, u64)> {
         || process
             .cmd()
             .iter()
-            .any(|arg| arg.to_string_lossy().contains("org.codehaus.plexus"))
+            .any(|arg| maven::is_launcher_arg(&arg.to_string_lossy()))
     {
         return Err(error(
             "invalid_target",
@@ -316,7 +304,8 @@ impl JavaService {
         profiles: Vec<String>,
         main: Option<String>,
     ) -> Result<JavaOutput> {
-        self.launch(project, jvm, args, profiles, main, None)
+        let boundary = PathBuf::from(&project.path);
+        self.launch(project, jvm, args, profiles, main, None, boundary, BuildOptions::default())
     }
     pub fn restart(
         &self,
@@ -327,7 +316,14 @@ impl JavaService {
         main: Option<String>,
         external: Option<(u32, u64)>,
     ) -> Result<JavaOutput> {
-        self.launch(project, jvm, args, profiles, main, Some(external))
+        let boundary = PathBuf::from(&project.path);
+        self.launch(project, jvm, args, profiles, main, Some(external), boundary, BuildOptions::default())
+    }
+    pub(crate) fn start_with_build(&self, project: DetectedProject, jvm: Vec<String>, args: Vec<String>, profiles: Vec<String>, main: Option<String>, boundary: PathBuf, build: BuildOptions) -> Result<JavaOutput> {
+        self.launch(project, jvm, args, profiles, main, None, boundary, build)
+    }
+    pub(crate) fn restart_with_build(&self, project: DetectedProject, jvm: Vec<String>, args: Vec<String>, profiles: Vec<String>, main: Option<String>, external: Option<(u32, u64)>, boundary: PathBuf, build: BuildOptions) -> Result<JavaOutput> {
+        self.launch(project, jvm, args, profiles, main, Some(external), boundary, build)
     }
     fn launch(
         &self,
@@ -337,6 +333,8 @@ impl JavaService {
         profiles: Vec<String>,
         main: Option<String>,
         restart: Option<Option<(u32, u64)>>,
+        boundary: PathBuf,
+        build: BuildOptions,
     ) -> Result<JavaOutput> {
         java_project(&project)?;
         validate_args(&jvm, &args, &profiles)?;
@@ -345,8 +343,7 @@ impl JavaService {
             .filter(|m| project.main_classes.contains(m))
             .ok_or_else(|| error("main_class_required", "请选择项目启动主类"))?;
         let root = Path::new(&project.path).canonicalize()?;
-        let cp = std::env::temp_dir().join(format!("devflow-{}.classpath", uuid::Uuid::new_v4()));
-        let build = maven_command(&root, &cp)?;
+        let maven = maven_plan(&root, &boundary, build)?;
         let mut java = java_command()?;
         java.args(jvm).arg("-Dfile.encoding=UTF-8");
         if let Some(external) = restart {
@@ -367,11 +364,10 @@ impl JavaService {
                 "运行记录已达上限，请重启 DevFlow 清理历史记录",
             ));
         }
-        let run = Arc::new(Mutex::new(managed::launch("java", &key(&project), LaunchPlan::Java {
-            build: CommandSpec::from(&build), java: CommandSpec::from(&java), root,
-            classpath_file: cp, main, args, profiles,
+        let run = Arc::new(Mutex::new(managed::launch("java", &key(&project), LaunchPlan::JavaCached {
+            maven, java: CommandSpec::from(&java), root, main, args, profiles,
         })?));
-        run.lock().unwrap().log("system", "独立服务宿主正在准备 Maven 编译和运行依赖…");
+        run.lock().unwrap().log("system", "独立服务宿主正在检查构建缓存，需要时按依赖链构建…");
         let result = run.lock().unwrap().output(0);
         runs.insert(key(&project), run);
         Ok(result)
@@ -552,7 +548,7 @@ mod tests {
             "projectPath": "D:/工作区 空格/服务", "expectedRevision": 7,
             "operation": { "type": "restart", "mainClass": "example.Application", "jvmArgs": ["-Xmx512m"], "args": ["--name=中文 空格"], "profiles": ["dev"], "pid": 42 }
         })).unwrap();
-        assert!(matches!(request.operation, JavaOperation::Restart { pid: Some(42), jvm_args, args, profiles, main_class: Some(_) } if jvm_args == vec!["-Xmx512m"] && args == vec!["--name=中文 空格"] && profiles == vec!["dev"]));
+        assert!(matches!(request.operation, JavaOperation::Restart { pid: Some(42), jvm_args, args, profiles, main_class: Some(_), .. } if jvm_args == vec!["-Xmx512m"] && args == vec!["--name=中文 空格"] && profiles == vec!["dev"]));
     }
 
     #[test]
@@ -568,6 +564,18 @@ mod tests {
         assert!(validate_args(&["-jar".into()], &[], &[]).is_err());
         assert!(validate_args(&[], &["bad\0arg".into()], &[]).is_err());
         assert!(validate_args(&[], &[], &["../prod".into()]).is_err());
+    }
+    #[test]
+    fn launch_build_options_are_optional_and_maven_profiles_are_separate() {
+        let legacy: JavaRequest = serde_json::from_value(serde_json::json!({
+            "projectPath": "D:/中文/app", "expectedRevision": 1, "operation": {"type": "start"}
+        })).unwrap();
+        assert!(matches!(legacy.operation, JavaOperation::Start { build_mode: BuildMode::Workspace, force_build: false, maven_profiles, .. } if maven_profiles.is_empty()));
+        let request: JavaRequest = serde_json::from_value(serde_json::json!({
+            "projectPath": "D:/中文/app", "expectedRevision": 1,
+            "operation": {"type": "start", "profiles": ["dev"], "mavenProfiles": ["build-local"], "buildMode": "install", "forceBuild": true}
+        })).unwrap();
+        assert!(matches!(request.operation, JavaOperation::Start { build_mode: BuildMode::Install, force_build: true, profiles, maven_profiles, .. } if profiles == ["dev"] && maven_profiles == ["build-local"]));
     }
     #[test]
     fn bounds_logs_and_detects_cursor_gaps() {

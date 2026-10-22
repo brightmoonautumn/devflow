@@ -7,6 +7,23 @@ let diagrams: Promise<typeof import('mermaid')> | undefined
 let renderQueue: Promise<unknown> = Promise.resolve()
 const diagramError = () => ({ svg: '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="72" viewBox="0 0 480 72"><text x="16" y="40" fill="#d97706" font-family="sans-serif" font-size="14">图表暂时无法渲染，请检查源码或重新打开文档。</text></svg>' })
 
+/** Complex HTML and diagrams must never round-trip through a contenteditable DOM. */
+export function needsSourcePreview(markdown: string): boolean {
+  let fence: { character: string; length: number } | null = null
+  for (const line of markdown.split(/\r?\n/)) {
+    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+    if (fence) {
+      if (match && match[1][0] === fence.character && match[1].length >= fence.length && !match[2].trim()) fence = null
+      continue
+    }
+    if (match) {
+      if (/^\s*mermaid\b/i.test(match[2])) return true
+      fence = { character: match[1][0], length: match[1].length }
+    } else if (/^\s*(?:<(?:table|thead|tbody|tr|td|th|div|details|summary)\b|<a\s+[^>]*(?:id|name)\s*=)/i.test(line)) return true
+  }
+  return false
+}
+
 function script(path: string, id: string): Promise<void> {
   if (document.getElementById(id)) return Promise.resolve()
   return new Promise((resolve, reject) => {

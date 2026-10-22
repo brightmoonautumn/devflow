@@ -19,7 +19,7 @@ impl CommandSpec {
     pub(crate) fn from(command: &Command) -> Self {
         Self { program: command.get_program().to_owned(), args: command.get_args().map(OsString::from).collect(), cwd: command.get_current_dir().map(Path::to_owned), env: command.get_envs().map(|(key, value)| (key.to_owned(), value.map(OsString::from))).collect() }
     }
-    fn command(&self) -> Command {
+    pub(super) fn command(&self) -> Command {
         let mut command = Command::new(&self.program);
         command.args(&self.args);
         if let Some(cwd) = &self.cwd { command.current_dir(cwd); }
@@ -34,6 +34,7 @@ impl CommandSpec {
 pub(crate) enum LaunchPlan {
     Node { command: CommandSpec },
     Java { build: CommandSpec, java: CommandSpec, root: PathBuf, classpath_file: PathBuf, main: String, args: Vec<String>, profiles: Vec<String> },
+    JavaCached { maven: super::maven::MavenPlan, java: CommandSpec, root: PathBuf, main: String, args: Vec<String>, profiles: Vec<String> },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -296,6 +297,17 @@ pub fn run_worker(directory: &Path) -> Result<()> {
                 let _ = fs::remove_file(classpath_file);
                 result
             },
+            LaunchPlan::JavaCached { maven, java, root, main, args, profiles } => {
+                let classpath = super::maven::build(&maven, directory, |command, tick| {
+                    execute_with(command, directory, &mut record, "starting", tick)
+                })?;
+                if let Some(classpath) = classpath {
+                    let mut command = java.command();
+                    command.arg("-cp").arg(classpath).arg(main).args(args).current_dir(root);
+                    if !profiles.is_empty() { command.arg(format!("--spring.profiles.active={}", profiles.join(","))); }
+                    execute(command, directory, &mut record, "running")
+                } else { Ok(None) }
+            },
         }
     })();
     record.pid = record.pid.filter(|pid| identity(pid.0) == Some(*pid));
@@ -309,7 +321,11 @@ pub fn run_worker(directory: &Path) -> Result<()> {
     write_json(&directory.join("state.json"), &record)
 }
 
-fn execute(mut command: Command, directory: &Path, record: &mut Record, phase: &str) -> Result<Option<i32>> {
+fn execute(command: Command, directory: &Path, record: &mut Record, phase: &str) -> Result<Option<i32>> {
+    execute_with(command, directory, record, phase, &mut || Ok(()))
+}
+
+fn execute_with(mut command: Command, directory: &Path, record: &mut Record, phase: &str, tick: &mut dyn FnMut() -> Result<()>) -> Result<Option<i32>> {
     if directory.join("stop").exists() { return Ok(None); }
     let stdout = fs::OpenOptions::new().append(true).create(true).open(directory.join("stdout.log"))?;
     let stderr = fs::OpenOptions::new().append(true).create(true).open(directory.join("stderr.log"))?;
@@ -323,6 +339,12 @@ fn execute(mut command: Command, directory: &Path, record: &mut Record, phase: &
     if let Err(err) = write_json(&directory.join("state.json"), record) { let _ = kill_tree(pid); let _ = child.wait(); return Err(err); }
     loop {
         if directory.join("stop").exists() { kill_tree(pid)?; }
+        if let Err(err) = tick() {
+            let _ = kill_tree(pid);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(err);
+        }
         if let Some(status) = child.try_wait()? { return Ok(status.code()); }
         thread::sleep(Duration::from_millis(100));
     }

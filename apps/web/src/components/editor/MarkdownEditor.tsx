@@ -5,7 +5,8 @@ import Vditor from 'vditor'
 import DOMPurify from 'dompurify'
 import { readOnlyShare } from '../../lib/access'
 import type { SourceEditorProps } from './SourceEditor'
-import { markdownAssetRoot, prepareMarkdownRuntime, releaseMarkdownEditor, resolveMarkdownLink } from './markdownRuntime'
+import { markdownAssetRoot, needsSourcePreview, prepareMarkdownRuntime, releaseMarkdownEditor, resolveMarkdownLink } from './markdownRuntime'
+import { MarkdownSourcePreview } from './MarkdownSourcePreview'
 import 'vditor/dist/index.css'
 import './markdown-editor.css'
 
@@ -13,7 +14,7 @@ const SourceEditor = lazy(() => import('./SourceEditor'))
 type Mode = 'document' | 'source' | 'split'
 
 /** Vditor is an implementation detail; persistence and authorization stay in the workbench. */
-export default function MarkdownEditor(props: SourceEditorProps & { active?: boolean; onOpenFile?: (path: string) => void; toolbarContainer?: HTMLElement | null; viewStateKey?: string }) {
+export default function MarkdownEditor(props: SourceEditorProps & { theme: 'dark' | 'light'; active?: boolean; onOpenFile?: (path: string) => void; toolbarContainer?: HTMLElement | null; viewStateKey?: string }) {
   const [mode, setMode] = useState<Mode>(() => {
     if (props.location && props.location.sequence !== 0) return 'source'
     try {
@@ -27,7 +28,7 @@ export default function MarkdownEditor(props: SourceEditorProps & { active?: boo
   const [error, setError] = useState('')
   const [diagram, setDiagram] = useState('')
   const [zoom, setZoom] = useState(1)
-  const [dark, setDark] = useState(false)
+  const dark = props.theme === 'dark'
   const host = useRef<HTMLDivElement>(null)
   const editor = useRef<Vditor | null>(null)
   const modal = useRef<HTMLDialogElement>(null)
@@ -37,6 +38,10 @@ export default function MarkdownEditor(props: SourceEditorProps & { active?: boo
   const appliedValue = useRef(props.value)
   const initialized = useRef(false)
   const appliedTheme = useRef<boolean | null>(null)
+  // Stay in the lossless renderer for this tab after complex content is introduced.
+  const sourcePreview = useRef(false)
+  sourcePreview.current ||= needsSourcePreview(props.value)
+  const preserveSource = sourcePreview.current
   // Keep initialized tabs alive, but never parse a hidden or source-only document just to open it.
   const shouldInitialize = ready || (mode !== 'source' && props.active !== false)
   const id = useId()
@@ -44,22 +49,13 @@ export default function MarkdownEditor(props: SourceEditorProps & { active?: boo
   currentMode.current = mode
 
   function acceptInput(value: string) {
-    if (!initialized.current || current.current.readonly || currentMode.current !== 'document' || value === baseline.current) return
+    if (sourcePreview.current || !initialized.current || current.current.readonly || currentMode.current !== 'document' || value === baseline.current) return
     baseline.current = value
     appliedValue.current = value
     current.current.onChange(value)
   }
   useEffect(() => {
-    const shell = host.current?.closest('.workspace-shell')
-    if (!shell) return
-    const update = () => setDark(shell.getAttribute('data-theme') === 'dark')
-    update()
-    const observer = new MutationObserver(update)
-    observer.observe(shell, { attributes: true, attributeFilter: ['data-theme'] })
-    return () => observer.disconnect()
-  }, [])
-  useEffect(() => {
-    if (!shouldInitialize) return
+    if (!shouldInitialize || preserveSource) return
     let disposed = false
     let instance: Vditor | undefined
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -69,7 +65,7 @@ export default function MarkdownEditor(props: SourceEditorProps & { active?: boo
     const initialize = () => {
       void prepareMarkdownRuntime().then(() => {
       if (disposed) return
-      const isDark = element.closest('.workspace-shell')?.getAttribute('data-theme') === 'dark'
+      const isDark = current.current.theme === 'dark'
       appliedTheme.current = isDark
       instance = new Vditor(element, {
         value: current.current.value, cdn: markdownAssetRoot, lang: 'zh_CN', height: '100%', minHeight: 180,
@@ -112,7 +108,7 @@ export default function MarkdownEditor(props: SourceEditorProps & { active?: boo
       initialized.current = false
       editor.current = null
     }
-  }, [props.path, shouldInitialize])
+  }, [props.path, shouldInitialize, preserveSource])
   useEffect(() => {
     if (!ready || !editor.current || props.active === false || mode === 'source' || appliedValue.current === props.value) return
     const timer = setTimeout(() => {
@@ -171,7 +167,7 @@ export default function MarkdownEditor(props: SourceEditorProps & { active?: boo
     if (!anchor) return
     const href = anchor.getAttribute('href') ?? ''
     event.preventDefault(); event.stopPropagation()
-    if (mode === 'document' && event.type !== 'dblclick' && !event.ctrlKey && !event.metaKey) return
+    if (!preserveSource && mode === 'document' && event.type !== 'dblclick' && !event.ctrlKey && !event.metaKey) return
     if (href.startsWith('#')) {
       let fragment: string
       try { fragment = decodeURIComponent(href.slice(1)) } catch { return }
@@ -217,8 +213,10 @@ export default function MarkdownEditor(props: SourceEditorProps & { active?: boo
         if ((event.target as Element).closest('a[href]')) linkClick(event)
         else expandDiagram(event)
       }}>
-        {!ready && !error && <p className="md-loading" role="status">正在打开 Markdown 文档…</p>}
-        <div className={`md-vditor-frame ${ready ? 'is-ready' : ''}`}><div ref={host} className="md-vditor-host" /></div>
+        {preserveSource ? <div ref={host} className="md-source-preview-host"><MarkdownSourcePreview value={props.value} active={props.active !== false && mode !== 'source'} dark={dark} readonly={props.readonly} onEdit={() => switchMode('split')} /></div> : <>
+          {!ready && !error && <p className="md-loading" role="status">正在打开 Markdown 文档…</p>}
+          <div className={`md-vditor-frame ${ready ? 'is-ready' : ''}`}><div ref={host} className="md-vditor-host" /></div>
+        </>}
       </div>
     </div>
     <dialog ref={modal} className="md-diagram-dialog" aria-labelledby={`${id}-title`} onClose={() => setDiagram('')} onKeyDown={event => event.stopPropagation()}>

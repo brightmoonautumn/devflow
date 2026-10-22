@@ -386,6 +386,19 @@ impl WorkspaceService {
             })
             .ok_or_else(|| error("outside_workspace", "服务不在当前工作区或没有可运行入口"))
     }
+    /// Building upstream modules may only expand inside an active, authorized
+    /// workspace folder, never merely inside a broader configured allowed root.
+    pub(crate) fn java_build_boundary(&self, path: &str, revision: u64) -> Result<PathBuf> {
+        let state = self.lock()?;
+        if state.revision != revision { return Err(error("conflict", "工作区已改变，请重新选择服务")); }
+        let path = self.authorize(Path::new(path))?;
+        self.snapshot_of(&state)?.folders.into_iter()
+            .filter(|folder| folder.status == "available")
+            .filter_map(|folder| self.authorize(Path::new(&folder.path)).ok())
+            .filter(|folder| path.starts_with(folder))
+            .min_by_key(|folder| folder.components().count())
+            .ok_or_else(|| error("outside_workspace", "构建路径不在当前工作区"))
+    }
     pub fn refresh(&self) -> Result<WorkspaceSnapshot> {
         self.discovery
             .lock()
@@ -762,8 +775,7 @@ impl WorkspaceService {
                 if source.len() as u64 > MAX_BYTES {
                     return Err(error("limit_exceeded", "工作区文件不能超过 2 MiB"));
                 }
-                session.source = source;
-                session.dirty = true;
+                self.update_workspace_source(session, source)?;
             }
             WorkspaceOperation::RemoveFolder { path } => {
                 let session = state
@@ -809,8 +821,7 @@ impl WorkspaceService {
                     .session
                     .as_mut()
                     .ok_or_else(|| error("no_workspace", "请先打开工作区"))?;
-                session.source = root.to_string();
-                session.dirty = true;
+                self.update_workspace_source(session, root.to_string())?;
             }
             WorkspaceOperation::Save { path } => {
                 let session = state
@@ -856,6 +867,32 @@ impl WorkspaceService {
             .err()
             .map(|err| format!("当前位置已打开，但记忆失败，下次重启可能无法恢复：{err}"));
         self.snapshot_of(&state)
+    }
+
+    /// Persist folder edits before publishing them to the active session. A failed
+    /// write leaves both membership and revision unchanged for HTTP and MCP.
+    fn update_workspace_source(&self, session: &mut Session, source: String) -> Result<()> {
+        if source.len() as u64 > MAX_BYTES {
+            return Err(error("limit_exceeded", "工作区文件不能超过 2 MiB"));
+        }
+        if let Some(file) = &session.file {
+            let saved = (|| -> Result<()> {
+                let target = self.save_target(file)?;
+                let current = read_workspace(&target)?;
+                if session.saved_source.as_deref() != Some(current.as_str()) {
+                    return Err(error("conflict", "工作区文件已被外部修改，请重新打开后再编辑"));
+                }
+                self.replace_file(&target, &source, &current)
+            })();
+            saved.map_err(|err| error(err.code, format!("自动保存失败，文件夹变更未应用：{}", err.message)))?;
+            session.saved_source = Some(source.clone());
+            session.dirty = false;
+        } else {
+            // Folder-only sessions have no user-selected workspace file destination.
+            session.dirty = true;
+        }
+        session.source = source;
+        Ok(())
     }
 
     fn snapshot_of(&self, state: &State) -> Result<WorkspaceSnapshot> {
@@ -1497,6 +1534,56 @@ mod tests {
     }
 
     #[test]
+    fn folder_autosave_conflict_and_io_failure_keep_membership_and_revision() {
+        let fixture = Fixture::new();
+        let service = fixture.service();
+        let config = fixture.0.join("自动保存.code-workspace");
+        let first = fixture.0.join("中文项目");
+        let second = fixture.0.join("第二项目");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        fixture.command(&service, WorkspaceOperation::Create { path: path(&config) }).unwrap();
+        let added = fixture.command(&service, WorkspaceOperation::AddFolder { path: path(&first), name: None }).unwrap();
+        assert!(!added.dirty);
+        let restored = WorkspaceService::new(vec![fixture.0.clone()], Some(config.clone())).unwrap();
+        assert_eq!(restored.snapshot().unwrap().folders[0].path, path(&first));
+
+        let external = read_workspace(&config).unwrap() + "\n// external editor change\n";
+        fs::write(&config, &external).unwrap();
+        for operation in [
+            WorkspaceOperation::AddFolder { path: path(&second), name: None },
+            WorkspaceOperation::RemoveFolder { path: path(&first) },
+        ] {
+            let failure = fixture.command(&service, operation).unwrap_err();
+            assert_eq!(failure.code, "conflict");
+            assert!(failure.message.contains("变更未应用"));
+            let snapshot = service.snapshot().unwrap();
+            assert_eq!(snapshot.revision, added.revision);
+            assert_eq!(snapshot.folders.len(), 1);
+            assert_eq!(snapshot.folders[0].path, path(&first));
+            assert!(!snapshot.dirty);
+            assert_eq!(read_workspace(&config).unwrap(), external);
+        }
+
+        fixture.command(&service, WorkspaceOperation::Open { path: path(&config) }).unwrap();
+        let revision = service.snapshot().unwrap().revision;
+        // A directory replacing the file produces a portable I/O/target failure.
+        let backup = config.with_extension("backup");
+        fs::rename(&config, &backup).unwrap();
+        fs::create_dir(&config).unwrap();
+        assert!(fixture.command(&service, WorkspaceOperation::RemoveFolder { path: path(&first) }).is_err());
+        assert_eq!(service.snapshot().unwrap().revision, revision);
+        assert_eq!(service.snapshot().unwrap().folders.len(), 1);
+        assert_eq!(read_workspace(&backup).unwrap(), external);
+        fs::remove_dir(&config).unwrap();
+        fs::rename(&backup, &config).unwrap();
+        let removed = fixture.command(&service, WorkspaceOperation::RemoveFolder { path: path(&first) }).unwrap();
+        assert!(!removed.dirty);
+        assert!(removed.folders.is_empty());
+        assert!(parse_document(&read_workspace(&config).unwrap()).unwrap()["folders"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
     fn remove_folder_only_removes_root_references_and_preserves_disk_and_jsonc() {
         let fixture = Fixture::new();
         let folder = fixture.0.join("中文项目");
@@ -1538,8 +1625,10 @@ mod tests {
             .unwrap();
         assert_eq!(removed.folders.len(), 1);
         assert_eq!(removed.folders[0].status, "unavailable");
-        assert!(removed.dirty);
-        assert_eq!(fs::read_to_string(&config).unwrap(), original);
+        assert!(!removed.dirty);
+        let persisted = read_workspace(&config).unwrap();
+        assert_ne!(persisted, original);
+        assert_eq!(folder_entries(&parse_document(&persisted).unwrap()).unwrap().len(), 1);
         assert_eq!(
             fs::read_to_string(folder.join("src/keep.txt")).unwrap(),
             "keep"
@@ -1569,9 +1658,6 @@ mod tests {
             )
             .unwrap();
         assert!(service.snapshot().unwrap().folders.is_empty());
-        fixture
-            .command(&service, WorkspaceOperation::Save { path: None })
-            .unwrap();
         let saved = fs::read_to_string(&config).unwrap();
         assert!(saved.contains("// keep workspace comment"));
         let value = parse_document(&saved).unwrap();
@@ -1683,6 +1769,8 @@ mod tests {
                 .is_err()
         );
         assert_eq!(original, fs::read(&target).unwrap());
+        // A folder-only session still needs a chosen destination before it can save.
+        fixture.command(&service, WorkspaceOperation::Open { path: path(&folder) }).unwrap();
         fixture
             .command(
                 &service,
@@ -1756,7 +1844,7 @@ mod tests {
     }
 
     #[test]
-    fn create_add_save_and_reopen_preserves_configuration_and_comments() {
+    fn create_add_autosave_and_reopen_preserves_configuration_and_comments() {
         let fixture = Fixture::new();
         let config = fixture.0.join("sample.code-workspace");
         let folder = fixture.0.join("后端");
@@ -1790,13 +1878,10 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(added.dirty);
+        assert!(!added.dirty);
         // A POM alone is a library descriptor, not evidence of a runnable service.
         assert!(added.projects.is_empty());
-        assert_eq!(read_workspace(&config).unwrap(), original);
-        fixture
-            .command(&service, WorkspaceOperation::Save { path: None })
-            .unwrap();
+        assert_ne!(read_workspace(&config).unwrap(), original);
         let saved = read_workspace(&config).unwrap();
         assert!(saved.contains("// keep me"));
         let value = parse_document(&saved).unwrap();
@@ -1902,11 +1987,14 @@ mod tests {
             },
         };
         assert_eq!(service.execute(stale, true).unwrap_err().code, "conflict");
+        fixture.command(&service, WorkspaceOperation::Open { path: path(&fixture.0) }).unwrap();
+        let second = fixture.0.join("第二项目");
+        fs::create_dir(&second).unwrap();
         fixture
             .command(
                 &service,
                 WorkspaceOperation::AddFolder {
-                    path: path(&fixture.0),
+                    path: path(&second),
                     name: None,
                 },
             )
@@ -1916,7 +2004,7 @@ mod tests {
                 .command(
                     &service,
                     WorkspaceOperation::AddFolder {
-                        path: path(&fixture.0),
+                        path: path(&second),
                         name: None
                     }
                 )

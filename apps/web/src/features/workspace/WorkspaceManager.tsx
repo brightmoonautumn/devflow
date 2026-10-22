@@ -5,7 +5,7 @@ import { WorkspaceBrowser } from './WorkspaceBrowser'
 
 export type WorkspaceManagerMode = 'open' | 'create' | 'add_folder' | 'save' | 'close'
 const titles = { open: '打开工作区', create: '新建工作区', add_folder: '添加文件夹到工作区', save: '保存工作区', close: '关闭工作区' }
-const descriptions = { open: '选择工作区文件，或直接以文件夹开始。', create: '从文件夹建立工作区，也可以创建一个空工作区。', add_folder: '选择现有文件夹，将它加入当前工作区。', save: '选择保存位置，保留工作区的配置与注释。', close: '关闭后可以随时重新打开，运行中的服务会继续运行。' }
+const descriptions = { open: '选择工作区文件，或直接以文件夹开始。', create: '从文件夹建立工作区，也可以创建一个空工作区。', add_folder: '选择现有文件夹；已有工作区文件时，添加后自动保存。', save: '选择保存位置，保留工作区的配置与注释。', close: '关闭后可以随时重新打开，运行中的服务会继续运行。' }
 type Props = { mode: WorkspaceManagerMode; data: WorkspaceResponse | null; onChange: (data: WorkspaceResponse) => void; onRefresh: () => void; onClose: () => void }
 
 export function WorkspaceManager({ mode: initialMode, data, onChange, onRefresh, onClose }: Props) {

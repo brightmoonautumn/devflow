@@ -12,6 +12,12 @@ last successful save time. Explorer file menus duplicate disk files as uniquely
 named siblings or confirm permanent deletion. Delete events pause the open editor
 and close its tab only after success; tree events refresh the containing folder.
 Both file operations use the authenticated, revision-checked Rust core via HTTP/MCP.
+`FileWorkbench.onActiveFileChange` reports the actual active tab, including restored
+tabs and tab switches. Explorer's locate button reveals that file under the most
+specific available workspace root, expands only its ancestor chain through the
+existing children API, then focuses and scrolls to the selected row. It supports
+compact folders and Windows path casing without changing tabs, drafts or files.
+No active file or a file outside the active roots disables the button.
 The shared editor loads CodeMirror language parsers by filename, including YAML,
 Python, SQL, shell, PowerShell, Dockerfile, TOML, properties, Go and Rust. A local
 log tokenizer highlights timestamps, severity levels and exception stacks.

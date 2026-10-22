@@ -168,7 +168,7 @@ export function getDevFlowMetrics(signal: AbortSignal) { return request<DevFlowM
 export interface JavaOptions { mainClasses: string[]; profiles: string[] }
 export interface JavaLogLine { sequence: number; stream: string; text: string }
 export interface JavaOutput { runId: string; state: string; pid: number | null; exitCode: number | null; lines: JavaLogLine[]; nextCursor: number; truncated: boolean; arthasUrl: string | null; attaching: boolean }
-type JavaLaunchOptions = { jvmArgs: string[]; args: string[]; profiles: string[]; mainClass: string }
+type JavaLaunchOptions = { jvmArgs: string[]; args: string[]; profiles: string[]; mainClass: string; mavenProfiles?: string[]; buildMode?: 'workspace' | 'install'; forceBuild?: boolean }
 export type JavaOperation = ({ type: 'start' } & JavaLaunchOptions) | ({ type: 'restart'; pid?: number } & JavaLaunchOptions) | { type: 'stop'; pid?: number } | { type: 'attach'; pid: number }
 export function getJavaOptions(projectPath: string, signal?: AbortSignal) { return request<JavaOptions>(`/api/runtime/java/options?${new URLSearchParams({ projectPath })}`, { signal }) }
 export function getJavaOutput(projectPath: string, after: number, runId: string, signal: AbortSignal) { return request<JavaOutput>(`/api/runtime/java/output?${new URLSearchParams({ projectPath, after: String(after), runId })}`, { signal }) }
