@@ -7,7 +7,8 @@ use std::{collections::{BTreeMap, BTreeSet}, fs, io::{Read, Write}, path::{Path,
 
 type Result<T> = std::result::Result<T, WorkspaceError>;
 const BRIDGE: &str = include_str!("maven_bridge.java");
-const VERSION: u32 = 1;
+// v1 could cache compile-only classpaths with runtime drivers missing.
+const VERSION: u32 = 2;
 
 pub(super) fn is_launcher_arg(arg: &str) -> bool {
     arg.contains("org.codehaus.plexus")
@@ -343,7 +344,10 @@ pub(crate) fn build(
     let flavor = hash(format!("{:?}:{:?}", plan.mode, plan.profiles).as_bytes());
     let cache_file = storage.join(format!("cache-{flavor}.json"));
     let mut cache: Cache = read_json(&cache_file).unwrap_or_default();
-    if cache.version != VERSION { cache = Cache::default(); cache.version = VERSION; }
+    if cache.version != VERSION {
+        if cache.version != 0 { log(directory, "Maven 缓存版本已更新，重新解析依赖并建立构建基线…")?; }
+        cache = Cache::default(); cache.version = VERSION;
+    }
     log(directory, "检查 Maven 构建输入和已有产物…")?;
     let external_changed = fingerprint(cache.external.iter().cloned(), false)? != cache.external_stamp;
     if !plan.force && !external_changed {
@@ -384,8 +388,8 @@ pub(crate) fn build(
         let current_inputs = inputs(&model, &current_global)?;
         if external_changed { cache.modules.clear(); }
         let mut selected = dirty(&model, &current_inputs, &cache, plan.force)?;
-        // The application always participates on a miss so Maven resolves its
-        // complete runtime artifact set with normal mediation/exclusions.
+        // The application always participates on a miss; the bridge explicitly
+        // resolves its runtime graph after selected outputs have been built.
         selected.insert(plan.target.clone());
         if plan.mode == BuildMode::Install {
             // Packaging plugins may require jars/classifiers from every upstream
@@ -541,6 +545,23 @@ mod tests {
         }).unwrap();
         assert!(result.is_some());
         assert!(build(&plan, &directory("second"), |_, _| panic!("a cache hit must never launch Maven")).unwrap().is_some());
+        // A v1 launch can have perfectly matching fingerprints while missing
+        // runtime dependencies. It must not survive the cache version upgrade.
+        let storage = first.ancestors().nth(2).unwrap().join("maven").join(hash(plan.reactor.to_string_lossy().as_bytes()));
+        let flavor = hash(format!("{:?}:{:?}", plan.mode, plan.profiles).as_bytes());
+        let cache_file = storage.join(format!("cache-{flavor}.json"));
+        let mut legacy: Cache = read_json(&cache_file).unwrap();
+        legacy.version = 1;
+        write_json(&cache_file, &legacy).unwrap();
+        let upgraded = directory("upgraded");
+        assert!(build(&plan, &upgraded, |_, tick| {
+            write_json(&upgraded.join("model.json"), &model)?; tick()?;
+            fs::create_dir_all(&module.output)?; fs::write(module.output.join("A.class"), b"bytecode")?;
+            write_json(&upgraded.join("classpath.json"), &vec![module.output.clone()])?;
+            Ok(Some(0))
+        }).unwrap().is_some());
+        assert_eq!(read_json::<Cache>(&cache_file).unwrap().version, VERSION);
+        assert!(build(&plan, &directory("upgraded-hit"), |_, _| panic!("upgraded cache should be reused")).unwrap().is_some());
         f.write("app/src/A.java", "class Changed {}");
         let failed = directory("failed");
         assert!(build(&plan, &failed, |_, tick| { write_json(&failed.join("model.json"), &model)?; tick()?; Ok(Some(1)) }).is_err());
@@ -551,6 +572,79 @@ mod tests {
             invoked = true; write_json(&retry.join("model.json"), &model)?; tick()?; Ok(Some(1))
         }).is_err());
         assert!(invoked);
+    }
+    #[test]
+    #[ignore = "requires MAVEN_HOME/M2_HOME, a full JDK 11+, and Maven plugin downloads"]
+    fn real_maven_resolves_runtime_graph_and_reuses_complete_classpath() {
+        let f = Fixture::new();
+        let home = PathBuf::from(std::env::var_os("MAVEN_HOME").or_else(|| std::env::var_os("M2_HOME"))
+            .expect("set MAVEN_HOME or M2_HOME to a Maven 3.6+ installation")).canonicalize().unwrap();
+        let group = format!("devflow.fixture.g{}", uuid::Uuid::new_v4().simple());
+        // Unique coordinates and a file repository avoid changing any real
+        // project's POM or relying on a particular database driver's version.
+        let dependency = |name: &str, scope: &str| format!("<dependency><groupId>{group}</groupId><artifactId>{name}</artifactId><version>1</version><scope>{scope}</scope></dependency>");
+        let publish = |name: &str, dependencies: &str| {
+            let base = format!("repo/{}/{name}/1/{name}-1", group.replace('.', "/"));
+            f.write(&format!("{base}.pom"), &format!("<project><modelVersion>4.0.0</modelVersion><groupId>{group}</groupId><artifactId>{name}</artifactId><version>1</version><dependencies>{dependencies}</dependencies></project>"));
+            // Valid empty ZIP/JAR: these fixtures exercise dependency resolution,
+            // including artifacts never referenced by application source code.
+            fs::write(f.0.join(format!("{base}.jar")), [b'P', b'K', 5, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+        };
+        publish("transitive", ""); publish("excluded", ""); publish("provided", ""); publish("test-only", "");
+        publish("driver", &format!("{}{}", dependency("transitive", "compile"), dependency("excluded", "compile")));
+        let repository = format!("file:///{}", display_path(&f.0.join("repo")).replace('\\', "/").trim_start_matches('/').replace(' ', "%20"));
+        f.write("pom.xml", &format!(r#"<project><modelVersion>4.0.0</modelVersion><groupId>{group}</groupId><artifactId>parent</artifactId><version>1</version><packaging>pom</packaging>
+<modules><module>library</module><module>app</module></modules>
+<repositories><repository><id>fixture</id><url>{repository}</url></repository></repositories>
+<build><plugins><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version><configuration><release>11</release></configuration></plugin></plugins></build></project>"#));
+        let parent = format!("<parent><groupId>{group}</groupId><artifactId>parent</artifactId><version>1</version></parent>");
+        f.write("library/pom.xml", &format!("<project><modelVersion>4.0.0</modelVersion>{parent}<artifactId>library</artifactId></project>"));
+        f.write("library/src/main/java/Library.java", "public class Library {} ");
+        let driver = format!("<dependency><groupId>{group}</groupId><artifactId>driver</artifactId><version>1</version><scope>runtime</scope><exclusions><exclusion><groupId>{group}</groupId><artifactId>excluded</artifactId></exclusion></exclusions></dependency>");
+        f.write("app/pom.xml", &format!("<project><modelVersion>4.0.0</modelVersion>{parent}<artifactId>app</artifactId><dependencies>{}{}{}{driver}</dependencies></project>", dependency("library", "compile"), dependency("provided", "provided"), dependency("test-only", "test")));
+        f.write("app/src/main/java/App.java", "public class App { Library library; public static void main(String[] args) {} }");
+        let target = f.0.join("app");
+        let plan = MavenPlan { reactor: f.0.clone(), configuration: f.0.clone(), boundary: f.0.clone(), target,
+            home, java: CommandSpec::from(&Command::new("java")), profiles: vec![], mode: BuildMode::Workspace, force: false };
+        let run = |name: &str| { let path = f.0.join("state/runtime/service").join(name); fs::create_dir_all(&path).unwrap(); path };
+        let execute = |mut command: Command, tick: &mut dyn FnMut() -> Result<()>| -> Result<Option<i32>> {
+            // Use production process configuration and always reap Maven,
+            // including tick errors and timeout paths on Windows.
+            super::super::process::configure(&mut command);
+            command.stdout(std::process::Stdio::inherit()).stderr(std::process::Stdio::inherit());
+            let mut child = command.spawn()?;
+            let identity = super::super::process::identity(child.id());
+            let deadline = std::time::Instant::now() + Duration::from_secs(180);
+            let result = loop {
+                if let Err(err) = tick() { break Err(err); }
+                match child.try_wait() {
+                    Ok(Some(status)) => break Ok(status.code()),
+                    Ok(None) => {},
+                    Err(err) => break Err(err.into()),
+                }
+                if std::time::Instant::now() >= deadline { break Err(error("Maven fixture timed out")); }
+                thread::sleep(Duration::from_millis(25));
+            };
+            if result.is_err() {
+                if let Some(identity) = identity { let _ = super::super::process::kill_tree(identity); }
+                let _ = child.kill(); let _ = child.wait();
+            }
+            result
+        };
+        let first = build(&plan, &run("first"), execute).unwrap().unwrap();
+        let paths: Vec<_> = std::env::split_paths(&first).collect();
+        assert!(paths.iter().any(|p| p.ends_with("driver-1.jar")));
+        assert!(paths.iter().any(|p| p.ends_with("transitive-1.jar")));
+        for absent in ["excluded-1.jar", "provided-1.jar", "test-only-1.jar"] {
+            assert!(!paths.iter().any(|p| p.ends_with(absent)), "unexpected runtime artifact: {absent}");
+        }
+        assert!(paths.iter().any(|p| p.ends_with("library/target/classes")));
+        let cached = build(&plan, &run("cached"), |_, _| panic!("complete runtime classpath should be reused")).unwrap().unwrap();
+        assert_eq!(first, cached);
+        // Rebuild the application while reusing the library through the
+        // workspace reader, then resolve the same complete runtime graph.
+        f.write("app/src/main/java/App.java", "public class App { Library library; public static void main(String[] args) { System.out.println(1); } }");
+        assert_eq!(first, build(&plan, &run("changed"), execute).unwrap().unwrap());
     }
     #[test]
     fn reactor_lock_excludes_other_handles_and_releases_on_drop() {

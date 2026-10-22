@@ -9,16 +9,21 @@ import org.apache.maven.MavenExecutionException;
 import org.apache.maven.cli.MavenCli;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.project.MavenProject;
+import org.apache.maven.project.DefaultDependencyResolutionRequest;
+import org.apache.maven.project.ProjectDependenciesResolver;
+import org.apache.maven.RepositoryUtils;
 import org.codehaus.plexus.PlexusContainer;
 import org.eclipse.aether.DefaultRepositorySystemSession;
 import org.eclipse.aether.artifact.Artifact;
 import org.eclipse.aether.repository.WorkspaceReader;
 import org.eclipse.aether.repository.WorkspaceRepository;
+import org.eclipse.aether.util.filter.DependencyFilterUtils;
 
 class DevflowMavenBridge {
     static Path exchange, target, boundary;
     static boolean install;
     static MavenProject application;
+    static ProjectDependenciesResolver dependencies;
     static final Map<String, MavenProject> reusable = new HashMap<>();
     static final Map<String, MavenProject> local = new HashMap<>();
 
@@ -29,6 +34,11 @@ class DevflowMavenBridge {
         install = Boolean.parseBoolean(args[3]);
         MavenCli cli = new MavenCli() {
             @Override protected void customizeContainer(PlexusContainer container) {
+                try {
+                    dependencies = container.lookup(ProjectDependenciesResolver.class);
+                } catch (Exception ex) {
+                    throw new IllegalStateException("DevFlow 无法获取 Maven 依赖解析器", ex);
+                }
                 container.addComponent(new Participant(), AbstractMavenLifecycleParticipant.class, "devflow");
             }
         };
@@ -150,11 +160,19 @@ class DevflowMavenBridge {
         @Override public void afterSessionEnd(MavenSession session) throws MavenExecutionException {
             if (session.getResult().hasExceptions() || application == null) return;
             try {
-                List<String> paths = new ArrayList<>();
+                // compile only resolves compile-scope artifacts. In particular,
+                // getArtifacts() can omit runtime drivers entirely. Resolve the
+                // runtime graph explicitly using Maven's own mediation, settings
+                // and reactor reader, after selected module outputs are ready.
+                var request = new DefaultDependencyResolutionRequest(application, session.getRepositorySession());
+                request.setResolutionFilter(DependencyFilterUtils.classpathFilter("runtime"));
+                var resolved = dependencies.resolve(request);
+                Set<String> paths = new LinkedHashSet<>();
                 paths.add(q(checked(application.getBuild().getOutputDirectory())));
-                for (org.apache.maven.artifact.Artifact artifact : application.getArtifacts()) {
-                    String scope = artifact.getScope();
+                for (var dependency : resolved.getResolvedDependencies()) {
+                    String scope = dependency.getScope();
                     if (!("compile".equals(scope) || "runtime".equals(scope))) continue;
+                    org.apache.maven.artifact.Artifact artifact = RepositoryUtils.toArtifact(dependency.getArtifact());
                     MavenProject project = local.get(artifact.getGroupId() + ":" + artifact.getArtifactId() + ":" + artifact.getVersion());
                     if (!install && project != null) {
                         if (!"jar".equals(project.getPackaging()) || artifact.hasClassifier() || !"jar".equals(artifact.getType()))
@@ -165,9 +183,12 @@ class DevflowMavenBridge {
                         paths.add(q(artifact.getFile().getCanonicalPath()));
                     }
                 }
+                System.out.println("[DevFlow] 已解析运行时依赖，启动 classpath 共 " + paths.size() + " 项。");
                 write("classpath.json", "[" + String.join(",", paths) + "]");
             } catch (Exception ex) {
-                throw new MavenExecutionException("DevFlow 运行 classpath 生成失败: " + ex.getMessage(), ex);
+                var failure = new MavenExecutionException("DevFlow 运行 classpath 生成失败: " + ex.getMessage(), ex);
+                session.getResult().addException(failure);
+                throw failure;
             }
         }
     }

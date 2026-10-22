@@ -294,6 +294,10 @@ Node 验收目录当前没有 `package.json`，需定位其所属主工程的启
 
 ### Maven 按需构建与缓存
 
+- 2026-10-22 运行时依赖修正：默认 `compile` 完成后，通过 Maven `ProjectDependenciesResolver` 显式解析 compile/runtime 依赖及传递依赖，保留 Maven 的版本选择、排除、仓库设置和 workspace reader；不再从可能只含编译依赖的 `application.getArtifacts()` 生成启动 classpath。provided/test 依赖不加入运行类路径，解析失败不写入成功缓存、不启动应用。HTTP 与 MCP 共用此修正，不修改业务项目 POM 或将 runtime 驱动改为 compile。
+- Maven 缓存版本升级为 2，升级后的首次启动自动拒绝旧版模块/类路径缓存并重新建立基线，避免继续复用缺少数据库驱动的旧记录；后续输入无变化仍跳过 Maven。无需手动删除 `.devflow`，正在运行的旧后端/宿主不会因源码修改自动更新，需用户编译并重启 DevFlow 后生效。
+- 补充旧版缓存失效及新版缓存复用的测试源码，以及默认忽略的真实 Maven 用例 `runtime::maven::tests::real_maven_resolves_runtime_graph_and_reuses_complete_classpath`，覆盖 runtime 驱动、传递依赖、exclusions、provided/test 排除、工作区库输出复用、中文/空格路径和热缓存。真实用例需要 MAVEN_HOME/M2_HOME、完整 JDK 11+ 及 Maven 插件下载条件，使用临时项目和唯一依赖坐标，不改业务工程。本轮仅静态检查源码差异，未运行编译、格式化、测试、Maven 或服务重启。
+
 - HTTP 与 MCP 的 Java start/restart 共用 `runtime/maven.rs`，构建规划、指纹检查及缓存写入在独立服务宿主中进行。服务发现不运行 Maven，也不在后台自动编译。首次启动或缓存失效需要建立构建基线；未做性能实测，不承诺具体启动时长。
 - 构建根根据聚合 POM 的 `modules` 声明向上定位，扩展范围限定在当前已导入、已授权的工作区文件夹；仅打开应用子目录时不会自动越界构建同级源码。当前支持字面量模块路径，含属性的聚合模块路径可能需要直接导入实际聚合目录。跨独立 Reactor 的同名项目不自动替换仓库依赖。
 - 缓存未命中时，内置 `maven_bridge.java` 由完整 JDK 11+ 的源文件启动器运行，使用本机 Maven 3.6+ 的 `MavenCli` 和生命周期参与者。Maven 负责有效模型、版本/BOM/继承、Profile、依赖排序及最终运行依赖解析，Rust 不自行解释依赖版本。尚未验证 Maven 4、裁剪 JRE 或第三方 Maven 发行版兼容性。构建会读取 `.mvn/maven.config`；不解释启动脚本的 shell 语法或额外 JVM 启动脚本。
