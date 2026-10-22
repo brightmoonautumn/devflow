@@ -18,7 +18,8 @@ import { WorkspaceManager, type WorkspaceManagerMode } from '../features/workspa
 import { FileWorkbench, type FileOpenRequest, type FileSaveStatus } from '../features/workspace/FileWorkbench'
 import { ShareDialog } from '../features/sharing/ShareDialog'
 import { BoardPage } from '../features/board/BoardPage'
-import { Kanban } from 'lucide-react'
+import { Kanban, ShieldCheck } from 'lucide-react'
+import { QaPage } from '../features/qa/QaPage'
 import { WorkspaceTree } from '../features/workspace/WorkspaceTree'
 import { DevFlowStatus } from '../features/runtime/DevFlowStatus'
 import extremePlusLogo from '../assets/extreme-plus-logo.svg'
@@ -45,6 +46,7 @@ export function App() {
   const [query, setQuery] = useState('')
   const [taskQuery, setTaskQuery] = useState('')
   const taskSearchRef = useRef<HTMLInputElement>(null)
+  const [qaOpen, setQaOpen] = useState(() => window.location.hash === '#qa')
   const [boardOpen, setBoardOpen] = useState(() => window.location.hash === '#board')
   const [savedLayout] = useState(() => readViewState('devflow.workbench-layout.v1'))
   const [explorerOpen, setExplorerOpen] = useState(() => typeof savedLayout.sidebarOpen === 'boolean' ? savedLayout.sidebarOpen : window.matchMedia('(min-width: 720px)').matches)
@@ -54,6 +56,7 @@ export function App() {
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
   const openFile = useCallback((path: string, pinned = false, line?: number, column?: number) => {
     setBoardOpen(false)
+    setQaOpen(false)
     setFileRequest(current => ({ path, pinned, line, column, sequence: (current?.sequence ?? 0) + 1 }))
     if (window.matchMedia('(max-width: 719px)').matches) setExplorerOpen(false)
   }, [])
@@ -62,6 +65,7 @@ export function App() {
     const search = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey || !((event.key.toLowerCase() === 'p' && !event.shiftKey) || (event.key.toLowerCase() === 'f' && event.shiftKey))) return
       event.preventDefault()
+      setQaOpen(false)
       setSidebarView('search')
       setBoardOpen(false)
       setExplorerOpen(true)
@@ -316,16 +320,18 @@ export function App() {
     <div className="workbench">
       <nav className="activity-bar" aria-label="功能入口">
         <div className="activity-primary">
-          {!readOnlyShare && <button className={`activity-button ${boardOpen ? 'active' : ''}`} aria-label="看板" title="看板" aria-pressed={boardOpen} onClick={() => { setBoardOpen(true); setTerminalOpen(false); setPanel(null) }}><Kanban size={20} strokeWidth={1.65} /></button>}
-          <button className={`activity-button ${!boardOpen && explorerOpen && sidebarView === 'explorer' ? 'active' : ''}`} aria-label="资源管理器" title="资源管理器" aria-pressed={!boardOpen && explorerOpen && sidebarView === 'explorer'} aria-controls="workspace-sidebar" onClick={() => { setBoardOpen(false); setExplorerOpen(boardOpen || sidebarView !== 'explorer' || !explorerOpen); setSidebarView('explorer') }}><FolderTree size={20} strokeWidth={1.65} /></button>
-          <button className={`activity-button ${!boardOpen && explorerOpen && sidebarView === 'search' ? 'active' : ''}`} aria-label="搜索文件" title="搜索 · Ctrl+Shift+F" aria-pressed={!boardOpen && explorerOpen && sidebarView === 'search'} aria-controls="workspace-sidebar" onClick={() => { setBoardOpen(false); setExplorerOpen(boardOpen || sidebarView !== 'search' || !explorerOpen); setSidebarView('search') }}><Search size={20} strokeWidth={1.65} /></button>
+          {!readOnlyShare && <button className={`activity-button ${boardOpen ? 'active' : ''}`} aria-label="看板" title="看板" aria-pressed={boardOpen} onClick={() => { setQaOpen(false); setBoardOpen(true); setTerminalOpen(false); setPanel(null) }}><Kanban size={20} strokeWidth={1.65} /></button>}
+          {!readOnlyShare && <button className={`activity-button ${qaOpen ? 'active' : ''}`} aria-label="质量保证" title="质量保证 · API 场景测试" aria-pressed={qaOpen} onClick={() => { setQaOpen(true); setBoardOpen(false); setTerminalOpen(false); setPanel(null) }}><ShieldCheck size={20} strokeWidth={1.65} /></button>}
+          <button className={`activity-button ${!qaOpen && !boardOpen && explorerOpen && sidebarView === 'explorer' ? 'active' : ''}`} aria-label="资源管理器" title="资源管理器" aria-pressed={!qaOpen && !boardOpen && explorerOpen && sidebarView === 'explorer'} aria-controls="workspace-sidebar" onClick={() => { setQaOpen(false); setBoardOpen(false); setExplorerOpen(boardOpen || sidebarView !== 'explorer' || !explorerOpen); setSidebarView('explorer') }}><FolderTree size={20} strokeWidth={1.65} /></button>
+          <button className={`activity-button ${!qaOpen && !boardOpen && explorerOpen && sidebarView === 'search' ? 'active' : ''}`} aria-label="搜索文件" title="搜索 · Ctrl+Shift+F" aria-pressed={!qaOpen && !boardOpen && explorerOpen && sidebarView === 'search'} aria-controls="workspace-sidebar" onClick={() => { setQaOpen(false); setBoardOpen(false); setExplorerOpen(boardOpen || sidebarView !== 'search' || !explorerOpen); setSidebarView('search') }}><Search size={20} strokeWidth={1.65} /></button>
         </div>
         <div className="activity-secondary"><button className="activity-button" aria-label="使用说明" title="使用说明" onClick={() => setPanel({ title: '使用说明', description: '点击服务卡片查看运行输出，点击箭头展开目录和启动入口。点击启动直接使用已保存或默认配置，更多操作中的“启动配置”可保存 JVM 参数、程序参数和 Spring Profile；支持停止项目进程树及向运行中的 Java 应用附加 Arthas。底部面板可拖拽调整高度。Node.js 服务支持 npm/pnpm/yarn 启动、停止和运行输出。' })}><CircleHelp size={19} /></button>{!readOnlyShare && <button className="activity-button" aria-label="设置" title="设置" onClick={explainWorkspace}><Settings2 size={19} /></button>}</div>
       </nav>
-      <WorkspaceTree activeFilePath={activeFilePath} key={shareError ? 'expired' : 'workspace'} hidden={boardOpen} open={explorerOpen && !boardOpen} view={sidebarView} onOpenFile={openFile} data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} onToggle={() => setExplorerOpen(value => !value)} />
+      <WorkspaceTree activeFilePath={activeFilePath} key={shareError ? 'expired' : 'workspace'} hidden={boardOpen || qaOpen} open={explorerOpen && !boardOpen && !qaOpen} view={sidebarView} onOpenFile={openFile} data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} onToggle={() => setExplorerOpen(value => !value)} />
       <div className="editor-area">
+        {qaOpen && !readOnlyShare && <QaPage />}
         {boardOpen && !readOnlyShare && <BoardPage workspaceRevision={data?.revision ?? 0} key={data?.workspaceFile ?? data?.workspaceRoot ?? 'demo'} query={taskQuery} onQueryChange={setTaskQuery} onSearchFocus={() => taskSearchRef.current?.focus()} workspaceName={data?.name ?? 'DevFlow'} workspaceKey={data?.workspaceFile ?? data?.workspaceRoot ?? 'demo'} />}
-        <div className="board-workbench-host" hidden={boardOpen && !readOnlyShare}>
+        <div className="board-workbench-host" hidden={(boardOpen || qaOpen) && !readOnlyShare}>
         <FileWorkbench theme={theme} onActiveFileChange={setActiveFilePath} key={shareError ? 'expired' : 'workspace'} workspace={data} openRequest={fileRequest} onSaveStatusChange={setEditorSaveStatus} onOpenFile={path => openFile(path, true)}>
           <main id="projects" className="main-content">
             <WorkspacePage key={data?.folders.map(folder => folder.path).join('|') ?? 'empty'} query={query} onQueryChange={setQuery} data={data} loading={loading} monitoringEnabled={connected} outputProjectKey={panel?.runtimeProject ? projectKey(panel.runtimeProject) : undefined} onRefresh={() => void load()} onConfigure={() => manage(hasWorkspace ? 'add_folder' : 'open')} onAction={projectAction} />
