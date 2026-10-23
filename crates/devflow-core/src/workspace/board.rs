@@ -104,6 +104,11 @@ fn validate(board: &BoardSnapshot) -> Result<()> {
 }
 
 impl WorkspaceService {
+    pub(crate) fn qa_location(&self, key: &str, revision: u64) -> Result<PathBuf> {
+        let state = self.lock()?;
+        self.check_board_scope(&state, key, revision)?;
+        Ok(self.board_location(key)?.with_extension("qa.json"))
+    }
     pub(crate) fn diagnosis_location(&self, key: &str, revision: u64) -> Result<PathBuf> {
         let state = self.lock()?;
         self.check_board_scope(&state, key, revision)?;

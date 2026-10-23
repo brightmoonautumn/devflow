@@ -101,6 +101,15 @@ pub async fn workspace_pick_cancel(
     let authenticated = security::authenticated(&headers, &state);
     response(call_core(state, move |engine| engine.workspace.cancel_local_pick(request, authenticated)).await)
 }
+pub async fn workspace_image_read(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(request): Query<devflow_core::workspace::WorkspaceFileReadRequest>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.workspace.read_image(request, authenticated)).await)
+}
+
 pub async fn workspace_file_read(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -333,4 +342,14 @@ pub async fn diagnosis_get(State(state): State<Arc<AppState>>, headers: HeaderMa
 pub async fn diagnosis_execute(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::runtime::diagnosis::DiagnosisRequest>) -> ApiResult {
     let authenticated = security::authenticated(&headers, &state);
     response(call_core(state, move |e| e.diagnosis_execute(request, authenticated)).await)
+}
+
+
+pub async fn qa_get(State(state): State<Arc<AppState>>, headers: HeaderMap, Query(query): Query<devflow_core::qa::Query>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |e| e.qa_get(query, authenticated)).await)
+}
+pub async fn qa_execute(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::qa::Request>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |e| e.qa_execute(request, authenticated)).await)
 }

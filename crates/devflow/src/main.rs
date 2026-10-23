@@ -110,6 +110,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/workspace/shares/revoke", post(share::revoke))
         .route("/api/session", get(http::session))
         .route("/api/workspace/board", get(http::board_read).post(http::board_execute))
+        .route("/api/qa", get(http::qa_get).post(http::qa_execute))
         .route("/api/projects", get(http::projects))
         .route(
             "/api/workspace",
@@ -137,6 +138,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                 .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
         .route("/api/workspace/file/copy", post(http::workspace_file_copy))
+        .route("/api/workspace/image", get(http::workspace_image_read))
         .route("/api/runtime/projects", get(http::runtime_projects))
         .route("/api/runtime/self", get(http::devflow_metrics))
         .route("/api/runtime/diagnostics", get(http::runtime_diagnostics))

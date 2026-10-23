@@ -40,7 +40,7 @@ export function QaSidebar({ open, onToggle, children }: { open: boolean; onToggl
   }, [])
   return <aside className={`workspace-sidebar qa-sidebar ${open ? '' : 'is-collapsed'} ${resizing ? 'is-resizing' : ''}`} style={{ '--explorer-width': `${width}px` } as CSSProperties} aria-label="QA 场景资源管理器">
     <button className="ws-sidebar-toggle" aria-label={open ? '向左收起场景目录' : '展开场景目录'} title={open ? '向左收起场景目录' : '展开场景目录'} aria-expanded={open} aria-controls="qa-sidebar-content" onClick={onToggle}>{open ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}</button>
-    <div id="qa-sidebar-content" className="ws-sidebar-content" hidden={!open}>
+    <div id="qa-sidebar-content" className="ws-sidebar-content" inert={!open} aria-hidden={!open}>
       <div className="qa-sidebar-scroll">{children}</div>
       <div className="ws-sidebar-resizer" role="separator" aria-label="调整场景目录宽度" aria-orientation="vertical" aria-valuemin={200} aria-valuemax={maxWidth()} aria-valuenow={width} tabIndex={0} title="拖拽调整宽度 · 双击恢复默认" onPointerDown={event => {
         if (event.button !== 0) return

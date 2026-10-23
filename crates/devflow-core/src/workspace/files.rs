@@ -2,6 +2,31 @@
 use super::*;
 
 const MAX_FILE_BYTES: usize = 1024 * 1024;
+const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceImage {
+    pub path: String,
+    pub revision: u64,
+    pub mime_type: &'static str,
+    pub size: usize,
+    pub data_url: String,
+}
+
+fn image_mime(path: &Path) -> Result<&'static str> {
+    match path.extension().and_then(|ext| ext.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+        "svg" => Ok("image/svg+xml"),
+        "png" => Ok("image/png"),
+        "jpg" | "jpeg" | "jfif" => Ok("image/jpeg"),
+        "gif" => Ok("image/gif"),
+        "webp" => Ok("image/webp"),
+        "bmp" => Ok("image/bmp"),
+        "ico" => Ok("image/x-icon"),
+        "avif" => Ok("image/avif"),
+        _ => Err(error("unsupported_file", "此格式不支持图片预览")),
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -40,6 +65,32 @@ pub struct WorkspaceFile {
 }
 
 impl WorkspaceService {
+    pub fn read_image(&self, request: WorkspaceFileReadRequest, authenticated: bool) -> Result<WorkspaceImage> {
+        use base64::Engine;
+        if !authenticated {
+            return Err(error("unauthorized", "需要有效的访问令牌"));
+        }
+        let state = self.lock()?;
+        let path = self.file_path(&state, &request.path, request.expected_revision)?;
+        let mime_type = image_mime(&path)?;
+        let file = fs::File::open(&path)?;
+        if !file.metadata()?.is_file() {
+            return Err(error("invalid_path", "只能打开已有的普通文件"));
+        }
+        if file.metadata()?.len() > MAX_IMAGE_BYTES {
+            return Err(error("limit_exceeded", "图片最多支持 20 MiB"));
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_IMAGE_BYTES + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_IMAGE_BYTES {
+            return Err(error("limit_exceeded", "图片最多支持 20 MiB"));
+        }
+        Ok(WorkspaceImage {
+            path: display_path(&path), revision: state.revision, mime_type, size: bytes.len(),
+            data_url: format!("data:{mime_type};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)),
+        })
+    }
+
     pub fn copy_file(
         &self,
         request: WorkspaceFileReadRequest,
@@ -365,6 +416,38 @@ fn read_text(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_reads_preserve_bytes_and_enforce_workspace_boundaries() {
+        let fixture = Fixture::new();
+        let outside = Fixture::new();
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><text>中文</text></svg>";
+        fs::write(fixture.0.join("图片.SVG"), svg).unwrap();
+        fs::write(fixture.0.join("photo.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+        fs::write(fixture.0.join("text.txt"), "text").unwrap();
+        fs::write(outside.0.join("private.svg"), svg).unwrap();
+        fs::create_dir(fixture.0.join("node_modules")).unwrap();
+        fs::write(fixture.0.join("node_modules/hidden.svg"), svg).unwrap();
+        let service = fixture.service();
+        let revision = service.lock().unwrap().revision;
+        let request = |path: PathBuf| WorkspaceFileReadRequest { path: display_path(&path), expected_revision: revision };
+        let image = service.read_image(request(fixture.0.join("图片.SVG")), true).unwrap();
+        assert_eq!(image.mime_type, "image/svg+xml");
+        assert_eq!(image.size, svg.len());
+        assert_eq!(image.revision, revision);
+        use base64::Engine;
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(image.data_url.split_once(',').unwrap().1).unwrap(), svg.as_bytes());
+        assert_eq!(service.read_image(request(fixture.0.join("photo.png")), true).unwrap().mime_type, "image/png");
+        assert_eq!(service.read_image(request(fixture.0.join("图片.SVG")), false).unwrap_err().code, "unauthorized");
+        assert_eq!(service.read_image(WorkspaceFileReadRequest { expected_revision: revision + 1, ..request(fixture.0.join("图片.SVG")) }, true).unwrap_err().code, "conflict");
+        assert_eq!(service.read_image(request(outside.0.join("private.svg")), true).unwrap_err().code, "outside_roots");
+        assert_eq!(service.read_image(request(fixture.0.join("node_modules/hidden.svg")), true).unwrap_err().code, "excluded_directory");
+        assert_eq!(service.read_image(request(fixture.0.join("text.txt")), true).unwrap_err().code, "unsupported_file");
+        let large = fs::File::create(fixture.0.join("large.png")).unwrap();
+        large.set_len(MAX_IMAGE_BYTES + 1).unwrap();
+        drop(large);
+        assert_eq!(service.read_image(request(fixture.0.join("large.png")), true).unwrap_err().code, "limit_exceeded");
+    }
 
     struct Fixture(PathBuf);
     impl Fixture {

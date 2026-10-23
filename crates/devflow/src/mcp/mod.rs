@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 mod board;
 mod diagnosis;
+mod qa;
 
 fn tool_result<T: serde::Serialize>(result: Result<T, WorkspaceError>) -> Value {
     match result {
@@ -67,6 +68,7 @@ fn tools() -> Value {
         json!({"name":"node_execute","description":"Start, restart or stop an authorized Node service using a discovered package script, never an arbitrary command. For aggregate projects pass nodeScript from workspace_get as script. npm/pnpm/yarn are supported; dependencies are not installed automatically. Restart validates launch options before stopping and waits for process-tree cleanup; pass the same launch options as start. External restart requires a single unambiguous service PID.","inputSchema":{"type":"object","properties":{"projectPath":{"type":"string"},"script":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0},"operation":{"oneOf":[{"type":"object","properties":{"type":{"const":"start"},"packageManager":{"enum":["npm","pnpm","yarn"]},"args":{"type":"array","items":{"type":"string"}}},"required":["type"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"restart"},"packageManager":{"enum":["npm","pnpm","yarn"]},"args":{"type":"array","items":{"type":"string"}},"pid":{"type":"integer"}},"required":["type"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"stop"},"pid":{"type":"integer"}},"required":["type"],"additionalProperties":false}]}},"required":["projectPath","expectedRevision","operation"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}}),
         json!({"name":"node_options","description":"Read discovered launch scripts and preferred package manager for an active workspace Node service.","inputSchema":{"type":"object","properties":{"projectPath":{"type":"string"},"script":{"type":"string"}},"required":["projectPath"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
         json!({"name":"node_output","description":"Read bounded Node stdout/stderr and run state; pass runId and nextCursor as runId/after. Include script for aggregate services.","inputSchema":{"type":"object","properties":{"projectPath":{"type":"string"},"script":{"type":"string"},"after":{"type":"integer","minimum":0},"runId":{"type":"string"}},"required":["projectPath"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
+        json!({"name":"workspace_image_read","description":"Read an image up to 20 MiB inside active authorized workspace folders. Supports SVG, PNG, JPEG/JFIF, GIF, WebP, BMP, ICO and AVIF. Returns MIME type, size and a base64 data URL; does not execute SVG content.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0}},"required":["path","expectedRevision"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}),
         json!({"name":"workspace_file_read","description":"Read an existing UTF-8 text file up to 1 MiB inside active authorized workspace folders. Returns exact content for expectedContent when saving. Binary files and ignored directories are rejected.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0}},"required":["path","expectedRevision"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}),
         json!({"name":"workspace_file_write","description":"Save an existing active workspace UTF-8 text file up to 1 MiB, preserving BOM and line endings. Pass exact content returned by workspace_file_read as expectedContent; external changes produce file_conflict. Does not create files or execute commands.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0},"expectedContent":{"type":"string"},"content":{"type":"string"}},"required":["path","expectedRevision","expectedContent","content"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}}),
         json!({"name":"workspace_search","description":"Search filenames/relative paths and UTF-8 content together by default (mode=both); files/content modes remain available for compatibility. Uses ripgrep in active authorized workspace folders. Respects ignore files; excludes dependency/build/metadata directories and symlinks. Bounded to 200 results and 5 seconds. Content results contain 1-based line/UTF-16 column and preview; searches disk, not unsaved drafts.","inputSchema":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":1024},"mode":{"enum":["files","content","both"],"default":"both"},"expectedRevision":{"type":"integer","minimum":0},"caseSensitive":{"type":"boolean"},"wholeWord":{"type":"boolean"},"regex":{"type":"boolean"},"includeGlob":{"type":"string","maxLength":1024},"excludeGlob":{"type":"string","maxLength":1024}},"required":["query","expectedRevision"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
@@ -141,6 +143,7 @@ fn tools() -> Value {
         ),
     ];
     tools.extend(diagnosis::tools());
+    tools.extend(qa::tools());
     json!({"tools": tools})
 }
 
@@ -269,6 +272,12 @@ pub async fn handle(
                     )),
                     Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
                 }
+            } else if name == "workspace_image_read" {
+                let authenticated = security::authenticated(&headers, &state);
+                match serde_json::from_value::<devflow_core::workspace::WorkspaceFileReadRequest>(arguments) {
+                    Ok(request) => Ok(tool_result(call_core(state, move |e| e.workspace.read_image(request, authenticated)).await)),
+                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
             } else if name == "workspace_file_read" {
                 let authenticated = security::authenticated(&headers, &state);
                 match serde_json::from_value::<devflow_core::workspace::WorkspaceFileReadRequest>(
@@ -294,6 +303,18 @@ pub async fn handle(
                         .await,
                     )),
                     Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
+            } else if name == "qa_get" {
+                let authenticated = security::authenticated(&headers, &state);
+                match serde_json::from_value::<devflow_core::qa::Query>(arguments) {
+                    Ok(query) => Ok(tool_result(call_core(state, move |e| e.qa_get(query, authenticated)).await)),
+                    Err(e) => Ok(tool_result(Err::<Value, _>(WorkspaceError { code: "invalid_request", message: e.to_string() }))),
+                }
+            } else if name == "qa_execute" {
+                let authenticated = security::authenticated(&headers, &state);
+                match serde_json::from_value::<devflow_core::qa::Request>(arguments) {
+                    Ok(request) => Ok(tool_result(call_core(state, move |e| e.qa_execute(request, authenticated)).await)),
+                    Err(e) => Ok(tool_result(Err::<Value, _>(WorkspaceError { code: "invalid_request", message: e.to_string() }))),
                 }
             } else if name == "diagnosis_get" {
                 let authenticated = security::authenticated(&headers, &state);
@@ -593,13 +614,14 @@ mod tests {
     fn workspace_tools_advertise_revision_and_required_paths() {
         let catalog = tools();
         let tools = catalog["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 40);
+        assert_eq!(tools.len(), 44);
         for name in [
             "board_get",
             "workspace_terminal",
             "workspace_share_create",
             "workspace_replace_apply",
             "workspace_search",
+            "workspace_image_read",
             "workspace_file_read",
             "workspace_file_write",
             "workspace_file_copy",

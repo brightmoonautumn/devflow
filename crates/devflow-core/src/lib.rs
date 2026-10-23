@@ -11,6 +11,7 @@ pub struct DevFlowEngine {
     pub java: runtime::java::JavaService,
     pub node: runtime::node::NodeService,
     diagnosis: std::sync::Arc<runtime::diagnosis::DiagnosisService>,
+    qa: std::sync::Arc<qa::QaService>,
     runtime_operations: std::sync::Mutex<()>,
 }
 
@@ -25,6 +26,7 @@ impl DevFlowEngine {
             java: runtime::java::JavaService::default(),
             node: runtime::node::NodeService::default(),
             diagnosis: Default::default(),
+            qa: Default::default(),
             runtime_operations: std::sync::Mutex::new(()),
         })
     }

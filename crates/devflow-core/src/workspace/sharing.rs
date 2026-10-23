@@ -49,6 +49,9 @@ pub enum ShareReadRequest {
     File {
         path: String,
     },
+    Image {
+        path: String,
+    },
     Search {
         query: String,
         #[serde(default)]
@@ -247,6 +250,9 @@ impl crate::DevFlowEngine {
                     expected_revision: revision
                 })?)
             }
+            ShareReadRequest::Image { path } => json!(workspace.read_image(
+                WorkspaceFileReadRequest { path, expected_revision: revision }, true,
+            )?),
             ShareReadRequest::File { path } => {
                 let mut file = workspace.read_file(
                     WorkspaceFileReadRequest {

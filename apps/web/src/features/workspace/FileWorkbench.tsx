@@ -3,13 +3,15 @@ import { pathWithin, readViewState, restoredTabs, viewPathKey, workspaceViewKey,
 import { useDialogs } from '../../components/form/BaseDialog'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, FileText, LoaderCircle, RefreshCw, Server, X } from 'lucide-react'
-import { readWorkspaceFile, writeWorkspaceFile, type WorkspaceFile, type WorkspaceResponse } from '../../lib/api'
+import { isImagePath, readWorkspaceImage, readWorkspaceFile, writeWorkspaceFile, type WorkspaceImage, type WorkspaceFile, type WorkspaceResponse } from '../../lib/api'
+import { FileTabMenu, type FileTabMenuAction } from './FileTabMenu'
 import './file-editor.css'
 
+const ImageViewer = lazy(() => import('../../components/editor/ImageViewer'))
 const FileEditor = lazy(() => import('../../components/editor/FileEditor'))
 export type FileOpenRequest = { path: string; pinned: boolean; sequence: number; line?: number; column?: number }
 export type FileSaveStatus = { text: string; failed: boolean }
-type FileTab = { key: string; path: string; file?: WorkspaceFile; draft: string; preview: boolean; loading: boolean; saving: boolean; error: string; savedAt?: number; deleting?: boolean; line: number; column: number; location?: { line: number; column: number; sequence: number } }
+type FileTab = { key: string; path: string; file?: WorkspaceFile; image?: WorkspaceImage; draft: string; preview: boolean; loading: boolean; saving: boolean; error: string; savedAt?: number; deleting?: boolean; line: number; column: number; location?: { line: number; column: number; sequence: number } }
 type Workbench = { tabs: FileTab[]; active: string | null }
 const snapshotFor = (value: Workbench): WorkspaceViewState => ({
   tabs: value.tabs.map(tab => ({ path: tab.path, preview: tab.preview, line: tab.line, column: tab.column })),
@@ -23,15 +25,25 @@ const nameFor = (path: string) => path.split(/[\\/]/).at(-1) ?? path
 export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSaveStatusChange, onActiveFileChange, children }: { theme: 'dark' | 'light'; workspace: WorkspaceResponse | null; openRequest: FileOpenRequest | null; onOpenFile?: (path: string) => void; onSaveStatusChange?: (status: FileSaveStatus | null) => void; onActiveFileChange?: (path: string | null) => void; children: ReactNode }) {
   const dialogs = useDialogs()
   const confirmations = useRef(new Set<string>())
+  const [tabMenu, setTabMenu] = useState<{ key: string | null; x: number; y: number } | null>(null)
+  const tabMenuTarget = useRef<HTMLElement | null>(null)
+  const closingBatch = useRef(false)
   const [state, setState] = useState<Workbench>({ tabs: [], active: null })
   const scope = workspaceViewKey(workspace)
   const [restoredScope, setRestoredScope] = useState<string | null>(null)
   const [editorActions, setEditorActions] = useState<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (tabMenu?.key && !state.tabs.some(tab => tab.key === tabMenu.key)) setTabMenu(null)
+  }, [state.tabs, tabMenu])
+  useEffect(() => {
+    const id = state.active === null ? 'services-tab' : `file-tab-${encodeURIComponent(state.active)}`
+    document.getElementById(id)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [state.active, state.tabs.length])
   const activeTab = state.tabs.find(tab => tab.key === state.active)
   const activePath = scope === restoredScope ? activeTab?.path ?? null : null
   useEffect(() => { onActiveFileChange?.(activePath) }, [activePath, onActiveFileChange])
   useEffect(() => () => onActiveFileChange?.(null), [onActiveFileChange])
-  const saveText = !activeTab ? '' : activeTab.deleting ? '删除中…' : activeTab.loading ? '读取中…' : activeTab.saving ? '保存中…' : activeTab.error && dirty(activeTab) ? '保存失败' : activeTab.error && !activeTab.file ? '读取失败' : dirty(activeTab) ? '等待自动保存…' : activeTab.savedAt ? `保存于 ${new Date(activeTab.savedAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : activeTab.file?.readonly ? '只读' : '自动保存'
+  const saveText = !activeTab ? '' : activeTab.deleting ? '删除中…' : activeTab.loading ? '读取中…' : activeTab.saving ? '保存中…' : activeTab.error && dirty(activeTab) ? '保存失败' : activeTab.error && !activeTab.file && !activeTab.image ? '读取失败' : activeTab.image ? '图片预览 · 只读' : dirty(activeTab) ? '等待自动保存…' : activeTab.savedAt ? `保存于 ${new Date(activeTab.savedAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : activeTab.file?.readonly ? '只读' : '自动保存'
   const saveFailed = !!activeTab?.error
   useEffect(() => { onSaveStatusChange?.(saveText ? { text: saveText, failed: saveFailed } : null) }, [saveText, saveFailed, onSaveStatusChange])
   useEffect(() => () => onSaveStatusChange?.(null), [onSaveStatusChange])
@@ -64,6 +76,11 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
     pending.current.set(key, controller)
     updateTab(key, tab => ({ ...tab, loading: true, error: '', savedAt: undefined }))
     try {
+      if (isImagePath(path)) {
+        const image = await readWorkspaceImage(path, workspace.revision, controller.signal)
+        if (!controller.signal.aborted) updateTab(key, tab => ({ ...tab, path: image.path, image, loading: false }))
+        return
+      }
       const file = await readWorkspaceFile(path, workspace.revision, controller.signal)
       if (!controller.signal.aborted) updateTab(key, tab => ({ ...tab, path: file.path, file, draft: textFor(file), loading: false }))
     } catch (err) {
@@ -78,9 +95,10 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
   useEffect(() => {
     if (scope === restoredScope) return
     if (restoredScope) writeViewState(restoredScope, snapshotFor(live.current))
+    setTabMenu(null)
     pending.current.forEach(controller => controller.abort()); pending.current.clear()
     const saved: WorkspaceViewState = scope ? readViewState(scope) : {}
-    const tabs: FileTab[] = restoredTabs(saved).map(tab => ({ ...tab, key: keyFor(tab.path), draft: '', loading: false, saving: false, error: '', location: { line: tab.line, column: tab.column, sequence: 0 } }))
+    const tabs: FileTab[] = restoredTabs(saved).map(tab => ({ ...tab, preview: false, key: keyFor(tab.path), draft: '', loading: false, saving: false, error: '', location: { line: tab.line, column: tab.column, sequence: 0 } }))
     const savedActive = typeof saved.active === 'string' ? keyFor(saved.active) : null
     const active = tabs.some(tab => tab.key === savedActive) ? savedActive : null
     change(() => ({ tabs, active }))
@@ -89,7 +107,7 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
   useEffect(() => {
     if (scope !== restoredScope || !scope) return
     const tab = live.current.tabs.find(tab => tab.key === live.current.active)
-    if (tab && !tab.file && !tab.error && !pending.current.has(tab.key)) void loadFile(tab.path, tab.key)
+    if (tab && !tab.file && !tab.image && !tab.error && !pending.current.has(tab.key)) void loadFile(tab.path, tab.key)
   }, [scope, restoredScope, state.active, loadFile])
   const persistView = useCallback(() => {
     if (!scope || scope !== restoredScope || workspaceViewKey(currentWorkspace.current) !== scope) return
@@ -107,18 +125,16 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
     const key = keyFor(openRequest.path)
     const existing = live.current.tabs.find(tab => tab.key === key)
     if (existing) {
-      change(value => ({ tabs: value.tabs.map(tab => tab.key === key ? { ...tab, preview: openRequest.pinned ? false : tab.preview, location: openRequest.line ? { line: openRequest.line, column: openRequest.column ?? 1, sequence: openRequest.sequence } : tab.location } : tab), active: key }))
+      change(value => ({ tabs: value.tabs.map(tab => tab.key === key ? { ...tab, preview: false, location: openRequest.line ? { line: openRequest.line, column: openRequest.column ?? 1, sequence: openRequest.sequence } : tab.location } : tab), active: key }))
       if (existing.loading && !pending.current.has(key)) void loadFile(existing.path, key)
       return
     }
-    const preview = live.current.tabs.find(tab => tab.preview && !dirty(tab) && !tab.saving && !tab.deleting)
-    if (!preview && live.current.tabs.length >= 12) {
+    if (live.current.tabs.length >= 12) {
       void dialogs.alert({ title: '打开标签已达上限', description: '最多同时打开 12 个文件，请先关闭部分标签。' })
       return
     }
-    if (preview) { pending.current.get(preview.key)?.abort(); pending.current.delete(preview.key) }
-    const tab: FileTab = { key, path: openRequest.path, draft: '', preview: !openRequest.pinned, loading: true, saving: false, error: '', savedAt: undefined, line: 1, column: 1, location: openRequest.line ? { line: openRequest.line, column: openRequest.column ?? 1, sequence: openRequest.sequence } : undefined }
-    change(value => ({ active: key, tabs: preview ? value.tabs.map(current => current.key === preview.key ? tab : current) : [...value.tabs, tab] }))
+    const tab: FileTab = { key, path: openRequest.path, draft: '', preview: false, loading: true, saving: false, error: '', savedAt: undefined, line: 1, column: 1, location: openRequest.line ? { line: openRequest.line, column: openRequest.column ?? 1, sequence: openRequest.sequence } : undefined }
+    change(value => ({ active: key, tabs: [...value.tabs, tab] }))
     void loadFile(tab.path, key)
   }, [openRequest, change, loadFile, dialogs])
 
@@ -160,12 +176,19 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
       const tab = live.current.tabs.find(tab => tab.key === key)
       const workspace = currentWorkspace.current
       if (!tab || !workspace) return
-      if (!tab.file || tab.loading || tab.saving || dirty(tab) || !navigator.onLine) { schedule(); return }
+      if ((!tab.file && !tab.image) || tab.loading || tab.saving || dirty(tab) || !navigator.onLine) { schedule(); return }
       lastAttempt = Date.now()
       const request = new AbortController()
       controller = request
       const timeout = setTimeout(() => request.abort(), 10000)
       try {
+        if (tab.image) {
+          const image = await readWorkspaceImage(tab.path, workspace.revision, request.signal)
+          if (disposed || request.signal.aborted) return
+          delay = 15000
+          updateTab(key, current => current.image !== tab.image ? current : current.image?.dataUrl === image.dataUrl && !current.error ? current : { ...current, image, error: '' })
+          return
+        }
         const file = await readWorkspaceFile(tab.path, workspace.revision, request.signal)
         if (disposed || request.signal.aborted) return
         delay = 15000
@@ -261,15 +284,17 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
     }
   }
   async function closeFile(tab: FileTab) {
-    if (!await confirmDiscard(tab.key, false) || !mounted.current) return
+    const closingScope = workspaceViewKey(currentWorkspace.current)
+    if (!await confirmDiscard(tab.key, false) || !mounted.current || workspaceViewKey(currentWorkspace.current) !== closingScope) return false
     const current = live.current.tabs.find(item => item.key === tab.key)
-    if (!current || current.saving || current.deleting) return
+    if (!current || current.saving || current.deleting) return false
     pending.current.get(tab.key)?.abort(); pending.current.delete(tab.key)
     change(value => {
       const index = value.tabs.findIndex(current => current.key === tab.key)
       const tabs = value.tabs.filter(current => current.key !== tab.key)
       return { tabs, active: value.active === tab.key ? tabs[Math.min(index, tabs.length - 1)]?.key ?? null : value.active }
     })
+    return true
   }
   async function reloadFile(tab: FileTab) {
     if (!await confirmDiscard(tab.key, true) || !mounted.current) return
@@ -277,9 +302,53 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
     if (current && !current.saving && !current.deleting) void loadFile(current.path, current.key)
   }
 
+  const dismissTabMenu = useCallback((restoreFocus: boolean) => {
+    setTabMenu(null)
+    if (restoreFocus && tabMenuTarget.current?.isConnected) tabMenuTarget.current.focus()
+  }, [])
+  function openTabMenu(key: string | null, x: number, y: number, target: HTMLElement) {
+    if (closingBatch.current) return
+    tabMenuTarget.current = target
+    setTabMenu({ key, x, y })
+  }
+  function menuTargets(action: FileTabMenuAction) {
+    const tabs = live.current.tabs, key = tabMenu?.key
+    if (action === 'current') return tabs.filter(tab => tab.key === key)
+    if (action === 'others') return tabs.filter(tab => tab.key !== key)
+    if (action === 'right') { const index = tabs.findIndex(tab => tab.key === key); return index < 0 ? [] : tabs.slice(index + 1) }
+    return tabs
+  }
+  async function closeFromMenu(action: FileTabMenuAction) {
+    if (closingBatch.current) return
+    const targets = menuTargets(action).map(tab => tab.key)
+    const closingScope = workspaceViewKey(currentWorkspace.current)
+    setTabMenu(null); closingBatch.current = true
+    try {
+      for (const key of targets) {
+        if (!mounted.current || workspaceViewKey(currentWorkspace.current) !== closingScope) break
+        const tab = live.current.tabs.find(item => item.key === key)
+        if (tab && !await closeFile(tab)) break
+      }
+    } finally {
+      closingBatch.current = false
+      if (mounted.current && workspaceViewKey(currentWorkspace.current) === closingScope) {
+        const id = live.current.active === null ? 'services-tab' : `file-tab-${encodeURIComponent(live.current.active)}`
+        requestAnimationFrame(() => document.getElementById(id)?.focus())
+      }
+    }
+  }
+
   return <div className="file-workbench">
     <div className="file-tabbar">
     <div className="file-tabs" role="tablist" aria-label="服务与打开的文件" onKeyDown={event => {
+      if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+        const target = (event.target as HTMLElement).closest<HTMLElement>('[role="tab"]')
+        if (!target) return
+        event.preventDefault(); event.stopPropagation()
+        const rect = target.getBoundingClientRect()
+        openTabMenu(target.id === 'services-tab' ? null : live.current.tabs.find(tab => target.id === `file-tab-${encodeURIComponent(tab.key)}`)?.key ?? null, rect.left, rect.bottom, target)
+        return
+      }
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || (event.target as HTMLElement).getAttribute('role') !== 'tab') return
       event.preventDefault()
       const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
@@ -287,8 +356,8 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowLeft' ? -1 : 1) + tabs.length) % tabs.length
       tabs[next]?.click(); tabs[next]?.focus()
     }}>
-      <button id="services-tab" role="tab" aria-selected={state.active === null} aria-controls="services-pane" tabIndex={state.active === null ? 0 : -1} className={`file-tab file-services-tab ${state.active === null ? 'is-active' : ''}`} onClick={() => change(value => ({ ...value, active: null }))}><Server size={14} />服务</button>
-      {state.tabs.map(tab => <div key={tab.key} className={`file-tab-group ${state.active === tab.key ? 'is-active' : ''}`}>
+      <button id="services-tab" role="tab" aria-selected={state.active === null} aria-controls="services-pane" tabIndex={state.active === null ? 0 : -1} className={`file-tab file-services-tab ${state.active === null ? 'is-active' : ''}`} onClick={() => change(value => ({ ...value, active: null }))} onContextMenu={event => { event.preventDefault(); openTabMenu(null, event.clientX, event.clientY, event.currentTarget) }}><Server size={14} />服务</button>
+      {state.tabs.map(tab => <div key={tab.key} className={`file-tab-group ${state.active === tab.key ? 'is-active' : ''}`} onContextMenu={event => { event.preventDefault(); const target = event.currentTarget.querySelector<HTMLButtonElement>('[role="tab"]')!; openTabMenu(tab.key, event.clientX, event.clientY, target) }}>
         <button id={`file-tab-${encodeURIComponent(tab.key)}`} className={`file-tab ${tab.preview ? 'is-preview' : ''}`} role="tab" tabIndex={state.active === tab.key ? 0 : -1} aria-selected={state.active === tab.key} aria-controls={`file-pane-${encodeURIComponent(tab.key)}`} title={`${tab.path}${dirty(tab) ? '\n未保存' : ''}`} onClick={() => change(value => ({ ...value, active: tab.key }))} onDoubleClick={() => updateTab(tab.key, current => ({ ...current, preview: false }))}>
           {tab.loading || tab.saving ? <LoaderCircle size={14} className="spinning" /> : <FileText size={14} />}<span>{nameFor(tab.path)}</span>{dirty(tab) && <i className="file-dirty" aria-label="未保存" />}
         </button>
@@ -305,8 +374,11 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
     {state.tabs.map(tab => <section key={tab.key} id={`file-pane-${encodeURIComponent(tab.key)}`} role="tabpanel" aria-labelledby={`file-tab-${encodeURIComponent(tab.key)}`} hidden={state.active !== tab.key} className="file-pane">
       {tab.error && <div className="file-notice is-error" role="alert">{tab.error}<button className="ws-outline-button" disabled={tab.loading || tab.saving || tab.deleting || !workspace} onClick={() => reloadFile(tab)}>重新读取</button></div>}
       {tab.file?.readonlyReason && !(readOnlyShare && tab.file.readonlyReason === '只读分享') && <p className="file-notice">{tab.file.readonlyReason}</p>}
-      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor theme={theme} key={tab.path} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} active={state.active === tab.key} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
-      {tab.file && <footer className="file-status"><span role="status">{tab.saving ? '保存中…' : dirty(tab) ? '未保存' : tab.savedAt ? <><Check size={12} />已保存</> : tab.preview ? '预览 · 双击标签固定' : '已打开'}</span><span>行 {tab.line}，列 {tab.column}</span><span>UTF-8{tab.file.bom ? ' BOM' : ''} · {tab.file.lineEnding}</span></footer>}
+      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.image ? <Suspense fallback={<div className="file-loading" role="status">正在加载图片查看器…</div>}><ImageViewer key={tab.path} image={tab.image} /></Suspense> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor theme={theme} key={tab.path} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} active={state.active === tab.key} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
+      {tab.file && <footer className="file-status"><span role="status">{tab.saving ? '保存中…' : dirty(tab) ? '未保存' : tab.savedAt ? <><Check size={12} />已保存</> : '已打开'}</span><span>行 {tab.line}，列 {tab.column}</span><span>UTF-8{tab.file.bom ? ' BOM' : ''} · {tab.file.lineEnding}</span></footer>}
     </section>)}
+    {tabMenu && <FileTabMenu key={tabMenu.key ?? 'services'} x={tabMenu.x} y={tabMenu.y} onClose={dismissTabMenu} onAction={action => void closeFromMenu(action)} items={tabMenu.key === null
+      ? [{ action: 'current', label: '服务标签常驻，无法关闭', disabled: true }, { action: 'all', label: '关闭所有文件标签', disabled: state.tabs.length === 0 || state.tabs.some(tab => tab.saving || tab.deleting) }]
+      : ([['current', '关闭标签'], ['others', '关闭其他文件标签'], ['right', '关闭右侧文件标签'], ['all', '关闭所有文件标签']] as const).map(([action, label]) => { const tabs = menuTargets(action); return { action, label, disabled: tabs.length === 0 || tabs.some(tab => tab.saving || tab.deleting) } })} />}
   </div>
 }

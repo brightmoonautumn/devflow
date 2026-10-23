@@ -43,6 +43,11 @@ export function pickWorkspaceLocation(kind: 'workspace_file' | 'folder', expecte
 export function cancelWorkspacePick(requestId: string) {
   return request<{ path: null }>('/api/workspace/pick/cancel', { method: 'POST', body: JSON.stringify({ requestId }) })
 }
+export interface WorkspaceImage { path: string; revision: number; mimeType: string; size: number; dataUrl: string }
+export const isImagePath = (path: string) => /\.(?:svg|png|jpe?g|jfif|gif|webp|bmp|ico|avif)$/i.test(path)
+export function readWorkspaceImage(path: string, expectedRevision: number, signal?: AbortSignal) {
+  return request<WorkspaceImage>(`/api/workspace/image?${new URLSearchParams({ path, expectedRevision: String(expectedRevision) })}`, { signal })
+}
 export interface WorkspaceFile {
   path: string; content: string; revision: number; readonly: boolean; readonlyReason: string | null
   lineEnding: 'LF' | 'CRLF' | 'CR'; bom: boolean

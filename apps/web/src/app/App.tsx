@@ -329,7 +329,7 @@ export function App() {
       </nav>
       <WorkspaceTree activeFilePath={activeFilePath} key={shareError ? 'expired' : 'workspace'} hidden={boardOpen || qaOpen} open={explorerOpen && !boardOpen && !qaOpen} view={sidebarView} onOpenFile={openFile} data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} onToggle={() => setExplorerOpen(value => !value)} />
       <div className="editor-area">
-        {qaOpen && !readOnlyShare && <QaPage />}
+        {qaOpen && !readOnlyShare && <QaPage workspace={data} />}
         {boardOpen && !readOnlyShare && <BoardPage workspaceRevision={data?.revision ?? 0} key={data?.workspaceFile ?? data?.workspaceRoot ?? 'demo'} query={taskQuery} onQueryChange={setTaskQuery} onSearchFocus={() => taskSearchRef.current?.focus()} workspaceName={data?.name ?? 'DevFlow'} workspaceKey={data?.workspaceFile ?? data?.workspaceRoot ?? 'demo'} />}
         <div className="board-workbench-host" hidden={(boardOpen || qaOpen) && !readOnlyShare}>
         <FileWorkbench theme={theme} onActiveFileChange={setActiveFilePath} key={shareError ? 'expired' : 'workspace'} workspace={data} openRequest={fileRequest} onSaveStatusChange={setEditorSaveStatus} onOpenFile={path => openFile(path, true)}>

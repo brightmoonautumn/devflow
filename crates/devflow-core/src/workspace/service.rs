@@ -31,7 +31,7 @@ const MAX_FOLDERS: usize = 512;
 #[path = "files.rs"]
 mod files;
 pub use files::{
-    WorkspaceFile, WorkspaceFileMutation, WorkspaceFileReadRequest, WorkspaceFileWriteRequest,
+    WorkspaceImage, WorkspaceFile, WorkspaceFileMutation, WorkspaceFileReadRequest, WorkspaceFileWriteRequest,
 };
 #[path = "search.rs"]
 mod search;

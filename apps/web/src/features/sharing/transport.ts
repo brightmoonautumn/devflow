@@ -11,6 +11,7 @@ export async function shareRequest<T>(url: string, options: RequestInit): Promis
   let read: object
   if (method === 'GET' && ['/api/projects', '/api/workspace'].includes(path)) read = { type: 'workspace' }
   else if (method === 'GET' && path === '/api/workspace/children') read = { type: 'children', path: query.get('path') }
+  else if (method === 'GET' && path === '/api/workspace/image') read = { type: 'image', path: query.get('path') }
   else if (method === 'GET' && path === '/api/workspace/file') read = { type: 'file', path: query.get('path') }
   else if (method === 'GET' && path === '/api/runtime/projects') read = { type: 'runtime' }
   else if (method === 'GET' && path === '/api/runtime/self') read = { type: 'metrics' }

@@ -1,0 +1,292 @@
+{
+  "name": "Extreme System · 200 环境",
+  "baseUrl": "http://192.168.1.200/prod-api/system/",
+  "siteUrl": "http://192.168.1.200/extreme-plus-system-ai/",
+  "publicKey": "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDSUi13ttnt7W2IwdE/5vtm6Yup9mEXop42iPn7DSYTZUlb16wLMLdp4nISrwCAliPwoHWBJ67tDGKZY+MCuaddfr7Mc1f1SKtBzuTdxqjnxagpzEFAyP3VerbPz/vdp7WQCbxmox0N/WUSUTfIm2g8yo3TogSJB48gLgbyRgwShwIDAQAB",
+  "actors": {
+    "anonymous": {
+      "label": "无需授权"
+    },
+    "admin": {
+      "label": "管理员",
+      "token": "adminToken",
+      "prefix": ""
+    },
+    "actorA": {
+      "label": "新账号 · 基本角色",
+      "token": "actorAToken",
+      "prefix": ""
+    }
+  },
+  "variables": {
+    "basicRoleCode": "cs_role_3035"
+  },
+  "scenarios": [
+    {
+      "id": "admin-login",
+      "module": "通用授权",
+      "title": "管理员登录",
+      "purpose": "验证码已关闭；使用 RSA 公钥加密密码登录，输出 adminToken，供其他场景引用。",
+      "uses": [],
+      "actions": [
+        {
+          "id": "admin-signin",
+          "title": "管理员登录",
+          "description": "账号 admin，默认密码 admin；密码仅用于本轮执行。",
+          "calls": [
+            {
+              "id": "admin-login-call",
+              "name": "管理员登录",
+              "method": "POST",
+              "path": "login",
+              "actor": "anonymous",
+              "body": {
+                "username": "admin",
+                "password": "{{adminPassword}}"
+              },
+              "extracts": {
+                "adminToken": "/data"
+              },
+              "assertions": [
+                {
+                  "path": "/data",
+                  "op": "nonempty"
+                }
+              ],
+              "encrypt": [
+                "/password"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "prepare-account",
+      "module": "通用授权",
+      "title": "开通账号并赋予基本角色",
+      "purpose": "引用管理员登录，查询基本角色，创建本轮唯一账号并赋权；不更改已有账号或角色权限。",
+      "uses": [
+        "admin-login"
+      ],
+      "actions": [
+        {
+          "id": "select-role",
+          "title": "确定基本角色",
+          "description": "按角色编码查询现有“测试”角色，禁止分配超级管理员。",
+          "calls": [
+            {
+              "id": "basic-role",
+              "name": "查询基本角色",
+              "method": "GET",
+              "path": "sys/role?code={{basicRoleCode}}",
+              "actor": "admin",
+              "body": null,
+              "extracts": {
+                "basicRoleId": "/data/id"
+              },
+              "assertions": [
+                {
+                  "path": "/data/code",
+                  "op": "equals",
+                  "value": "{{basicRoleCode}}"
+                },
+                {
+                  "path": "/data/code",
+                  "op": "not_equals",
+                  "value": "admin"
+                },
+                {
+                  "path": "/data/id",
+                  "op": "nonempty"
+                }
+              ],
+              "encrypt": []
+            }
+          ]
+        },
+        {
+          "id": "create-account",
+          "title": "开通本轮测试账号",
+          "description": "创建 qa_df_ 前缀唯一账号，从真实响应提取初始密码。",
+          "calls": [
+            {
+              "id": "create-account-call",
+              "name": "创建账号",
+              "method": "POST",
+              "path": "sys/account",
+              "actor": "admin",
+              "body": [
+                {
+                  "username": "{{accountName}}",
+                  "nickName": "DevFlow 场景验收",
+                  "valid": true
+                }
+              ],
+              "extracts": {
+                "initialPassword": "/data/0/initialPassword"
+              },
+              "assertions": [
+                {
+                  "path": "/data/0/username",
+                  "op": "equals",
+                  "value": "{{accountName}}"
+                },
+                {
+                  "path": "/data/0/initialPassword",
+                  "op": "nonempty"
+                }
+              ],
+              "encrypt": []
+            },
+            {
+              "id": "find-account",
+              "name": "读取新账号 ID",
+              "method": "GET",
+              "path": "sys/account?username={{accountName}}",
+              "actor": "admin",
+              "body": null,
+              "extracts": {
+                "accountId": "/data/id"
+              },
+              "assertions": [
+                {
+                  "path": "/data/username",
+                  "op": "equals",
+                  "value": "{{accountName}}"
+                },
+                {
+                  "path": "/data/id",
+                  "op": "nonempty"
+                }
+              ],
+              "encrypt": []
+            }
+          ]
+        },
+        {
+          "id": "assign-role",
+          "title": "赋予基本角色",
+          "description": "只对本轮创建的账号分配上述角色。",
+          "calls": [
+            {
+              "id": "assign-basic-role",
+              "name": "分配基本角色",
+              "method": "POST",
+              "path": "sys/account/batchAssignRole",
+              "actor": "admin",
+              "body": {
+                "roleId": "{{basicRoleId}}",
+                "accountIds": [
+                  "{{accountId}}"
+                ]
+              },
+              "extracts": {},
+              "assertions": [],
+              "encrypt": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "account-profile",
+      "module": "系统验收",
+      "title": "新账号登录并查看个人信息",
+      "purpose": "引用公共开户场景，以新账号独立登录；核对账号 ID、用户名和基本角色，验证不同 token 的身份隔离。",
+      "uses": [
+        "prepare-account"
+      ],
+      "actions": [
+        {
+          "id": "account-login",
+          "title": "新账号登录",
+          "description": "使用开户响应中的初始密码登录，不携带管理员 token。",
+          "calls": [
+            {
+              "id": "new-login",
+              "name": "新账号登录",
+              "method": "POST",
+              "path": "login",
+              "actor": "anonymous",
+              "body": {
+                "username": "{{accountName}}",
+                "password": "{{initialPassword}}"
+              },
+              "extracts": {
+                "actorAToken": "/data"
+              },
+              "assertions": [
+                {
+                  "path": "/data",
+                  "op": "nonempty"
+                }
+              ],
+              "encrypt": [
+                "/password"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "account-info",
+          "title": "查看个人信息并核验角色",
+          "description": "用新账号 token 查询本人信息，核对创建的账号与授权结果。",
+          "calls": [
+            {
+              "id": "new-info",
+              "name": "查询新账号个人信息",
+              "method": "GET",
+              "path": "info?roleInfo=true",
+              "actor": "actorA",
+              "body": null,
+              "extracts": {},
+              "assertions": [
+                {
+                  "path": "/data/id",
+                  "op": "equals",
+                  "value": "{{accountId}}"
+                },
+                {
+                  "path": "/data/username",
+                  "op": "equals",
+                  "value": "{{accountName}}"
+                },
+                {
+                  "path": "/data/roles",
+                  "op": "contains",
+                  "value": "{{basicRoleCode}}"
+                }
+              ],
+              "encrypt": []
+            }
+          ]
+        },
+        {
+          "id": "admin-isolation",
+          "title": "核对管理员身份未被覆盖",
+          "description": "重新使用 adminToken，确认仍是管理员。",
+          "calls": [
+            {
+              "id": "admin-info",
+              "name": "查询管理员个人信息",
+              "method": "GET",
+              "path": "info",
+              "actor": "admin",
+              "body": null,
+              "extracts": {},
+              "assertions": [
+                {
+                  "path": "/data/username",
+                  "op": "equals",
+                  "value": "admin"
+                }
+              ],
+              "encrypt": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

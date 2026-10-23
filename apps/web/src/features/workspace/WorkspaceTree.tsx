@@ -319,7 +319,7 @@ export function WorkspaceTree({ activeFilePath, data, open, hidden, view, onChan
   }
   return <aside ref={sidebarRef} hidden={hidden} className={`workspace-sidebar ${open ? '' : 'is-collapsed'} ${resizing ? 'is-resizing' : ''}`} style={{ '--explorer-width': `${width}px` } as CSSProperties} id="workspace-sidebar" aria-label={view === 'search' ? '工作区搜索' : '工作区资源管理器'}>
     <button className="ws-sidebar-toggle" aria-label={open ? '向左收起文件管理器' : '展开文件管理器'} title={open ? '向左收起文件管理器' : '展开文件管理器'} aria-expanded={open} aria-controls="workspace-sidebar-content" onClick={onToggle}>{open ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}</button>
-    <div id="workspace-sidebar-content" className="ws-sidebar-content" hidden={!open}>
+    <div id="workspace-sidebar-content" className="ws-sidebar-content" inert={!open} aria-hidden={!open}>
     <div className="ws-explorer-view" hidden={view !== 'explorer'}>
     <div className="ws-explorer-heading"><h2 className="ws-explorer-title" title={data?.workspaceFile ?? data?.workspaceRoot ?? ''}><span className="ws-explorer-name">{data?.name ?? '未选择工作区'}</span>{data?.dirty && <small className="ws-explorer-unsaved">未保存</small>}</h2><div>
       <button className="ws-icon-button" disabled={!activeFilePath || !revealRoot} aria-label="定位当前打开文件" title="定位当前打开文件" onClick={() => {

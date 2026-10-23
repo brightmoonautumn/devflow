@@ -21,3 +21,9 @@ notify = { version = "8.2", default-features = false, features = ["macos_fsevent
 
 # Native PTY / Windows ConPTY for interactive workspace terminals.
 portable-pty = "0.9"
+
+# Bounded HTTP scenario execution and the target's RSA public-key login format.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rsa = "0.9"
+rand = "0.8"
+base64 = "0.22"
