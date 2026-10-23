@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 mod board;
+mod diagnosis;
 
 fn tool_result<T: serde::Serialize>(result: Result<T, WorkspaceError>) -> Value {
     match result {
@@ -47,7 +48,8 @@ fn tools() -> Value {
     let search_schema = json!({"type":"object","properties":{"query":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0},"mode":{"enum":["files","content","both"]},"caseSensitive":{"type":"boolean"},"wholeWord":{"type":"boolean"},"regex":{"type":"boolean"},"includeGlob":{"type":"string"},"excludeGlob":{"type":"string"}},"required":["query","expectedRevision"],"additionalProperties":false});
     // Expand each schema independently; a single json! token-munching array
     // makes macro recursion grow with the total size of the tool catalog.
-    let tools = vec![
+    let mut tools = vec![
+        json!({"name":"runtime_diagnostics","description":"Export bounded, best-effort credential-redacted troubleshooting context for a Java/Node project in the active workspace. Returns a short Agent handoff in text and a separate redacted log excerpt. Pass the current runId to reject replaced runs; include script for Node aggregate services. Does not execute commands or restart services.","inputSchema":{"type":"object","properties":{"projectPath":{"type":"string"},"kind":{"enum":["java","node"]},"script":{"type":"string"},"runId":{"type":"string"}},"required":["projectPath","kind"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
         board::read_tool(),
         board::write_tool(),
         json!({"name":"workspace_terminal","description":"Manage local owner interactive PTY terminals in active workspace folders. Requires owner authentication and current revision. Operations list/create/read/input/resize/close use the same core as Web UI. Input executes with the local user shell privileges, not a filesystem sandbox. Switching or closing workspaces closes terminals; removing a folder closes its terminals. Save/add-folder retains remaining sessions. Output data is a byte array preserving ANSI and UTF-8; read incrementally with nextCursor, reset renderer when truncated. Maximum 12 sessions, 1 MiB retained per session.","inputSchema":{"type":"object","properties":{"expectedRevision":{"type":"integer","minimum":0},"operation":{"oneOf":[{"type":"object","properties":{"type":{"const":"list"}},"required":["type"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"create"},"folder":{"type":"string"},"cols":{"type":"integer","minimum":2,"maximum":500},"rows":{"type":"integer","minimum":1,"maximum":300}},"required":["type","folder","cols","rows"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"read"},"id":{"type":"string"},"after":{"type":"integer","minimum":0}},"required":["type","id","after"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"input"},"id":{"type":"string"},"data":{"type":"string","maxLength":65536}},"required":["type","id","data"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"resize"},"id":{"type":"string"},"cols":{"type":"integer","minimum":2,"maximum":500},"rows":{"type":"integer","minimum":1,"maximum":300}},"required":["type","id","cols","rows"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"close"},"id":{"type":"string"}},"required":["type","id"],"additionalProperties":false}]}},"required":["expectedRevision","operation"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}}),
@@ -138,6 +140,7 @@ fn tools() -> Value {
             false,
         ),
     ];
+    tools.extend(diagnosis::tools());
     json!({"tools": tools})
 }
 
@@ -290,6 +293,23 @@ pub async fn handle(
                         })
                         .await,
                     )),
+                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
+            } else if name == "diagnosis_get" {
+                let authenticated = security::authenticated(&headers, &state);
+                match serde_json::from_value::<devflow_core::runtime::diagnosis::DiagnosisQuery>(arguments) {
+                    Ok(query) => Ok(tool_result(call_core(state, move |e| e.diagnosis_get(query, authenticated)).await)),
+                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
+            } else if name == "diagnosis_execute" {
+                let authenticated = security::authenticated(&headers, &state);
+                match serde_json::from_value::<devflow_core::runtime::diagnosis::DiagnosisRequest>(arguments) {
+                    Ok(request) => Ok(tool_result(call_core(state, move |e| e.diagnosis_execute(request, authenticated)).await)),
+                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
+                }
+            } else if name == "runtime_diagnostics" {
+                match serde_json::from_value::<devflow_core::runtime::diagnostics::DiagnosticsQuery>(arguments) {
+                    Ok(query) => Ok(tool_result(call_core(state, move |e| e.runtime_diagnostics(query)).await)),
                     Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
                 }
             } else if name == "node_execute" {
@@ -538,6 +558,14 @@ pub async fn handle(
 mod tests {
     use super::*;
     #[test]
+    fn diagnostics_tool_is_read_only_and_identifies_node_services_and_runs() {
+        let catalog = tools();
+        let tool = catalog["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == "runtime_diagnostics").unwrap();
+        assert_eq!(tool["annotations"]["readOnlyHint"], true);
+        for property in ["projectPath", "kind", "script", "runId"] { assert!(tool["inputSchema"]["properties"][property].is_object()); }
+        assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+    }
+    #[test]
     fn runtime_tools_advertise_restart_with_launch_options() {
         let catalog = tools();
         for (name, option) in [
@@ -565,7 +593,7 @@ mod tests {
     fn workspace_tools_advertise_revision_and_required_paths() {
         let catalog = tools();
         let tools = catalog["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 38);
+        assert_eq!(tools.len(), 40);
         for name in [
             "board_get",
             "workspace_terminal",

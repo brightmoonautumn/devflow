@@ -2,6 +2,9 @@
 pub mod java;
 pub mod node;
 pub mod managed;
+pub mod diagnostics;
+pub mod diagnosis;
+mod java_classpath;
 mod maven;
 mod logs;
 mod ports;
@@ -1029,6 +1032,16 @@ mod tests {
         let metrics = aggregate(&[system, dependency], &[java, tooling], 20, 1);
         assert_eq!(metrics[0].pids, vec![1]);
         assert!(metrics[1].pids.is_empty());
+    }
+    #[test]
+    fn shortened_java_command_keeps_main_class_process_attribution() {
+        let mut app = project("app", "d:/code/app");
+        app.node = false;
+        app.main_classes = vec!["example.Application".into()];
+        let mut process = process(20, None, "java.exe", "unused");
+        process.cwd = Some("d:/code/app".into());
+        process.args = ["java.exe", "-Dfile.encoding=UTF-8", "@d:/devflow/java-classpath.args", "example.Application", "--spring.profiles.active=dev"].into_iter().map(str::to_owned).collect();
+        assert_eq!(aggregate(&[app], &[process], 20, 1)[0].java_pids, vec![20]);
     }
     #[test]
     fn java_jar_launch_uses_executable_jar_not_classpath_or_unrelated_cwd() {

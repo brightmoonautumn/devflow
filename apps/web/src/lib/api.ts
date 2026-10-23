@@ -181,3 +181,39 @@ function nodeParams(project: Project) { return { projectPath: project.path, ...(
 export function getNodeOptions(project: Project, signal?: AbortSignal) { return request<NodeOptions>(`/api/runtime/node/options?${new URLSearchParams(nodeParams(project))}`, { signal }) }
 export function getNodeOutput(project: Project, after: number, runId: string, signal: AbortSignal) { return request<JavaOutput>(`/api/runtime/node/output?${new URLSearchParams({ ...nodeParams(project), after: String(after), runId })}`, { signal }) }
 export function executeNode(project: Project, expectedRevision: number, operation: NodeOperation, script?: string) { return request<JavaOutput>('/api/runtime/node', { method: 'POST', body: JSON.stringify({ ...nodeParams(project), ...(script ? { script } : {}), expectedRevision, operation }) }) }
+
+export interface RuntimeDiagnostics { runId: string; state: string; truncated: boolean; redacted: boolean; text: string; excerpt?: string }
+export async function getRuntimeDiagnostics(project: Project, runId: string, signal?: AbortSignal) {
+  const params = new URLSearchParams({ projectPath: project.path, kind: project.kind === 'node' ? 'node' : 'java', ...(runId ? { runId } : {}), ...(project.nodeScript ? { script: project.nodeScript } : {}) })
+  try {
+    return await request<RuntimeDiagnostics>(`/api/runtime/diagnostics?${params}`, { signal })
+  } catch (err) {
+    if (err instanceof SyntaxError || (err instanceof ApiError && err.message === 'HTTP 404')) {
+      throw new ApiError('backend_outdated', '当前后端尚不支持复制排查上下文，请编译并重启 DevFlow 后重试。')
+    }
+    throw err
+  }
+}
+
+export interface DiagnosisEvidence { command: string; output: string; truncated: boolean; timedOut: boolean; recordedAt: number }
+export interface Diagnosis {
+  id: string; revision: number; projectPath: string; pid: number; processStarted: number; runId: string | null
+  problem: string; status: string; progress: string; conclusion: string; evidence: DiagnosisEvidence[]
+  createdAt: number; updatedAt: number; agentPrompt: string
+}
+export type DiagnosisOperation = { type: 'create'; pid: number; problem: string; runId?: string } | { type: 'cancel'; id: string; revision: number }
+async function diagnosisRequest<T>(url: string, options: RequestInit) {
+  try { return await request<T>(url, options) }
+  catch (err) {
+    if (err instanceof SyntaxError || (err instanceof ApiError && ['HTTP 404', 'HTTP 405'].includes(err.message))) {
+      throw new ApiError('backend_outdated', '当前后端尚不支持 AI 诊断，请更新并重启 DevFlow 后重试。')
+    }
+    throw err
+  }
+}
+export function getDiagnoses(projectPath: string, expectedRevision: number, signal?: AbortSignal) {
+  return diagnosisRequest<Diagnosis[]>(`/api/runtime/diagnosis?${new URLSearchParams({ projectPath, expectedRevision: String(expectedRevision) })}`, { signal })
+}
+export function executeDiagnosis(projectPath: string, expectedRevision: number, operation: DiagnosisOperation) {
+  return diagnosisRequest<Diagnosis>('/api/runtime/diagnosis', { method: 'POST', body: JSON.stringify({ projectPath, expectedRevision, operation }), signal: AbortSignal.timeout(15000) })
+}

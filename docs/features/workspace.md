@@ -1,5 +1,11 @@
 # 工作区
 
+## 服务运行输出清屏（2026-10-23）
+
+- Java / Node.js 服务的运行输出区域支持右键菜单「清空当前输出」，聚焦输出后也可按 Shift+F10 或菜单键打开；菜单支持 Escape 关闭并恢复焦点，点击外部、滚动或窗口布局变化时关闭。
+- 清空仅作用于当前面板已显示的日志，保留增量读取游标，后续新输出继续显示并跟随到底部；不删除后端保留的日志，不影响服务、其他服务输出或 Agent 日志读取。属于 Web 展示状态，无需新增 HTTP / MCP 业务接口。
+- 按项目约定未编译或运行测试，待验收：Java / Node.js 清空后持续追加、停止状态清空、切换服务隔离、键盘操作及窄屏深浅主题。
+
 ## 工作区配置自动保存（2026-10-22）
 
 - 已打开或已创建 `.code-workspace` 文件时，新增/移除根文件夹后立即自动保存，无需再次点击保存。HTTP 与 MCP 共用核心事务，返回 `dirty: false`，只递增一次工作区版本；JSONC 注释、其他设置和扩展配置继续保留。
@@ -284,13 +290,23 @@ Node 验收目录当前没有 `package.json`，需定位其所属主工程的启
 - 资源指标的 `pids` 包含关联的进程树，另提供 `javaPids` 作为 Java 操作候选，排除 conhost 和 Maven 启动器。托管服务优先选择其应用主 PID，外部服务存在多个 Java 进程时要求选择目标。
 - 输出保留每个会话最近 2000 条、单条最多 16 KiB，每次最多返回 500 条。将返回的 `runId`、`nextCursor` 作为下次 `runId`、`after`，新会话自动从头读取。输出区保留最近 2000 条，支持手动查看历史和回到底部；独立宿主的进程身份、运行状态与文件日志可跨后端重启恢复，磁盘日志按上述轮转和历史保留策略管理。
 - 输出面板的运行状态、PID 选择、停止与 Arthas 操作和“运行输出”标题同排，不再额外占一行；窄屏缩为带提示和无障碍名称的图标按钮。正文不显示 stdout/stderr 等来源前缀。Spring Boot 标准日志按字段着色：时间与应用/线程上下文为次级文字色，INFO 绿色、WARN 黄色、ERROR/FATAL 红色、DEBUG 蓝紫色、TRACE 灰色，PID 洋红色、类名青色，普通正文保持正常文字色；警告/错误正文分别用黄色/红色，构建/启动成功正文为绿色。非标准格式仍识别级别文字并单独着色，异常堆栈延续错误/警告色，无级别 stderr 默认标红。保留原始空格、字段和文本，适配深浅主题，移除 ANSI 控制码，使用 React 文本节点渲染。
-- 从 [Arthas 官方来源](https://arthas.aliyun.com/en/doc/quick-start.html) 下载 `arthas-boot.jar` 到 `.devflow/tools/arthas-boot.jar`，或配置 `DEVFLOW_ARTHAS_BOOT`。首次挂载官方启动器可能下载完整发行包。独立附加应用 JVM，使用 `--attach-only`，随机 HTTP/Telnet 端口仅绑定 `127.0.0.1`，附加最长等待 90 秒，端口就绪后才提供控制台链接；目标应用需允许 JDK Attach 且具有相同用户权限。Arthas 的控制台由官方工具提供，DevFlow 当前不转发任意诊断命令。
+- 从 [Arthas 官方来源](https://arthas.aliyun.com/en/doc/quick-start.html) 下载 `arthas-boot.jar` 到 `.devflow/tools/arthas-boot.jar`，或配置 `DEVFLOW_ARTHAS_BOOT`。首次挂载官方启动器可能下载完整发行包。独立附加应用 JVM，使用 `--attach-only`，随机 HTTP/Telnet 端口仅绑定 `127.0.0.1`，附加最长等待 90 秒，端口就绪后才提供控制台链接；目标应用需允许 JDK Attach 且具有相同用户权限。Arthas 的控制台由官方工具提供，DevFlow 不转发任意诊断命令；下述 AI 诊断通过固定模板调用官方 HTTP API。
 
 写操作需要先读取当前 `revision`，再以 `expectedRevision` 提交。HTTP 请求为 `{ expectedRevision, discardChanges?, operation: { type, path?, name? } }`；MCP 将 `expectedRevision`、`discardChanges`、`path`、`name` 放在工具 arguments 中。版本过期或文件被外部修改时返回 `conflict`，不得盲目重试覆盖；只有明确放弃未保存更改时才传 `discardChanges: true`。
 
 `create_from_folder` 另需 `folder`，`close` 无路径参数。原有工具与请求保持兼容，文件浏览和工作区操作的授权均由共享核心校验。
 
 兼容工具 `workspace_list` 继续返回项目数组的文本内容，新增 `workspace_get` 提供完整工作区快照。`runtime_list` 和 HTTP 指标接口改为跟随当前工作区的全部可访问项目。MCP 传输仍为实验性 JSON-RPC 基础，完整协议兼容待后续完善。
+
+### 复制给 Agent 与 Java 长命令行处理
+
+- 2026-10-23：「复制给 Agent」（Java/Node 共用）只复制项目路径、类型、Node 聚合脚本、运行 ID 和简短排查意图，不再复制大段日志或工具调用说明。Agent 通过 MCP 按需读取日志和源码。复制成功/失败反馈在面板底部显示；按钮不发送消息、不执行 AI、不启动或停止服务，只读分享页不显示。
+- HTTP `GET /api/runtime/diagnostics?projectPath=...&kind=java|node&script=...&runId=...` 与 MCP `runtime_diagnostics` 共用 `DevFlowEngine::runtime_diagnostics`，沿用所有者入口认证及工作区项目授权。Node 聚合服务必须提供对应脚本。返回 `runId/state/truncated/redacted/text/excerpt`；`text` 是简短交接信息，新增 `excerpt` 单独提供脱敏日志摘要，原有运行输出 DTO 不变；分享监听器不提供此接口。
+- 导出绑定一轮运行及读取上界，发现 runId 改变时返回 conflict，提示等待刷新重试；外部进程明确说明无托管日志，不能把临时 runId 当成历史记录。最多读取保留的 2,000 行，摘取首次错误前 5/后 24 行与最后 100 行，日志摘录最多 24,000 个 Unicode 字符，省略情况明确标记。复制指令包含 workspace_get、java_output/node_output 的准确项目/脚本/runId 查询条件，并要求核对返回 runId。
+- 不导出启动环境变量、JVM 参数或程序参数。复制日志对 Authorization/Cookie、Bearer/Basic、常见 password/secret/token/api-key、URI 用户信息和 PEM 私钥做尽力脱敏，先脱敏再截取，原日志不改写；不能承诺识别所有自定义业务敏感信息。
+- Java 独立宿主的旧计划及缓存计划统一使用命令行缩短：ASCII classpath 写入本轮运行目录的 UTF-8 `java-classpath.args`，Java 通过 `@文件` 读取；非 ASCII classpath（或显式禁用参数文件时）使用单清单 `java-classpath.jar`，通过百分号编码的 file URL 避免旧 Windows JDK 参数文件本地编码与 UTF-8 不一致。无需新增依赖或执行 jar 工具。主类、JVM 选项、应用参数与 Spring Profile 保持原有顺序和字面传递，工作目录仍是业务项目目录。日志仅打印缩短方式，不打印完整启动参数。
+- 参数文件正确引用空格、引号、反斜杠和控制字符；清单按规范折行、保留 classpath 顺序及目录尾斜杠。运行目录沿用既有保留清理策略，停止仍由原宿主按 PID 身份清理进程树。修复针对 classpath 过长，不承诺任意超长 JVM/程序参数都可启动。
+- 本轮补充参数文件转义、超长 classpath、中文/空格清单、ZIP 结构、日志脱敏/摘要上限/运行切换、MCP 工具契约及进程主类识别的测试源码；真实 JDK 资源加载用例默认忽略，显式运行时需要完整 JDK 11+。未执行格式化、编译、测试、Maven 或服务重启，实际启动及复制端到端验收待用户编译重启 DevFlow 后进行；现有进程不会自动使用新宿主代码。
 
 ### Maven 按需构建与缓存
 
@@ -430,3 +446,22 @@ Node 验收目录当前没有 `package.json`，需定位其所属主工程的启
 - 原生选择窗口注册器补齐：修复 WorkspaceService 已使用 PickerRegistry、但 picker 模块缺少定义导致的 E0433 / E0425。注册器串行管理选择请求，以请求 ID 匹配取消，取消与授权提交互斥；会话释放、取消或超时时回收自身持有的原生窗口进程。新增注册互斥、释放、取消阻止授权和 Windows 子进程回收测试源码；本轮未运行编译或测试。
 
 - 2026-10-21 用户授权执行验证后：后端开发版编译、前端 TypeScript/Vite 构建与实际启动通过；随后通过 DevFlow-Restart.cmd（Windows PowerShell 入口）连续重启，确认后端/前端均显示无变化并跳过构建，脚本退出码为 0，/api/health 返回 name=devflow、status=ok。原生选择注册器测试 3 项和服务层 native_picker 测试 3 项全部通过；verify-build-cache.ps1、verify-restart.ps1 在 Windows PowerShell 下通过。验证中修复缓存替换时空备份路径兼容问题、改用 .NET 流式 SHA-256 避免依赖 Get-FileHash 模块自动加载，并确保产物指纹包含嵌套 vendor/**/dist 资源。前端仍有既有大 chunk 提示，不影响构建成功。
+
+
+### Agent 驱动的 Arthas 诊断
+
+2026-10-23：新增第一版代码，尚未编译、运行测试或完成真实 JVM 验收。
+
+- Java 服务的运行输出新增「AI 诊断」：填写问题、接口或复现步骤，创建记录，再点击「复制给 Agent」粘贴到当前 Agent。创建记录不会启动 Agent，也不会自行挂载 Arthas。Agent 接手后通过 MCP 自动挂载、采样、分析并回写。已有手动挂载可以复用；普通复制入口仍用于轻量日志排查。
+- 对话框支持当前诊断、历史记录、进度、取消、展开采样证据和结论。状态包括等待 Agent、分析中、等待复现、采样中、取消中、已完成、已取消和已中断。关闭对话框不取消诊断；取消中的采样在本次时间上限内退出，另有连接和会话清理时间，不承诺即时取消。
+- HTTP `GET /api/runtime/diagnosis?projectPath=...&expectedRevision=...` / MCP `diagnosis_get` 读取当前工作区所选 Java 项目的诊断列表。HTTP `POST /api/runtime/diagnosis` / MCP `diagnosis_execute` 共用 core：`{projectPath, expectedRevision, operation}`。两入口都要求所有者认证；分享监听器不提供诊断接口。
+- `create` 操作为 `{type:"create", pid, problem, runId?}`。托管进程必须传当前 `runId`，外部进程省略。记录绑定规范项目路径、工作区标识、PID 和进程启动时间，避免 PID 复用和运行切换后误采样。工作区 revision 与诊断 revision 分开校验；每次修改需重新读取当前 revision，版本冲突不自动重放。
+- 后续操作均包含 `id/revision`：`attach` 挂载；`observe` 携带 `observation/seconds` 异步采样；`progress` 携带 `text/waiting` 更新进度；`finish` 携带 `conclusion` 保存结论；`cancel` 取消。采样期间只接受读取和取消，完成采样后 revision 会更新。`progress(waiting=true)` 表示需要用户复现；已有明确授权与复现方式时，由 Agent 使用自己的工具触发。
+- `observation.kind` 支持 `jvm`、`threads`、`class`、`methods`、`trace`、`stack`、`watch`。类相关操作传精确 `className`，方法相关操作再传精确 `methodName`。拒绝通配符、命令拼接和用户自定义表达式；禁止 JDK/Arthas 类。`watch` 只用固定 `{params,returnObj,throwExp}` 表达式并限制展开深度 1；不会开放任意 OGNL、热替换、静态字段修改或 shell 执行。
+- 每次方法采样最多 3 次命中、1 个匹配类、1–20 秒；HTTP 响应最多 1 MiB，保存证据最多 24,000 字符并标识截断/超时，敏感字段按已有规则尽力脱敏。每条诊断最多 20 次采样、每个工作区最多 20 条记录；新建时只淘汰已结束的记录，同一服务只允许一条进行中的诊断。
+- 每次采样创建独立 Arthas 会话，通过官方 `execTimeout` 限时执行，并关闭本次会话；不执行全局 `reset/stop`，不关闭人的控制台。仅连接 DevFlow 为该 JVM 挂载后生成的 `127.0.0.1` 地址，不接受调用方传入 URL。清理失败和目标变化会显式中断；普通命令失败保存为证据，允许 Agent 调整方案继续。
+- 记录以 UTF-8 JSON 原子保存到最近工作区配置旁的 `boards/<工作区哈希>.diagnosis.json`；完整工作区标识用于防止碰撞串读。DevFlow 重启后遗留的采样状态标记为中断，不自动重放诊断命令；后端意外退出时依靠 Arthas 命令自身的时间上限结束观测，不能保证已执行客户端清理。
+
+Agent 操作顺序：先 `workspace_get` 核对工作区和项目，再 `diagnosis_get` 找到交接 ID；`attach` 后轮询 `java_output` 等待 `arthasUrl`；读取源码/日志后选择具体类方法执行 `observe`，轮询 `diagnosis_get` 读取证据，按需重复；以证据、根因、不确定项和修复建议调用 `finish`。这些工具不会编译、重启或停止业务服务。
+
+Arthas 接口依据：[官方 HTTP API](https://arthas.aliyun.com/en/doc/http-api.html)、[trace 参数](https://arthas.aliyun.com/en/doc/trace.html)。待用户验证：已有/外部 JVM 挂载、真实接口复现与采样、超时无命中、取消清理、JVM 重启/PID 复用、版本冲突、中文/空格路径、窄屏深浅主题。新增 core 与 MCP 测试源码，覆盖命令限制、HTTP 响应解析、会话清理、认证/版本和持久化恢复；按项目约定未运行。

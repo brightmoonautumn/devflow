@@ -316,7 +316,10 @@ pub fn run_worker(directory: &Path) -> Result<()> {
                     if !classes.starts_with(&root) { return Err(error("编译输出超出项目目录")); }
                     let dependencies = fs::read_to_string(&classpath_file)?;
                     let mut command = java.command();
-                    command.arg("-cp").arg(format!("{}{}{}", crate::workspace::display_path(&classes), if cfg!(windows) { ";" } else { ":" }, dependencies.trim())).arg(main).args(args).current_dir(root);
+                    let classpath = format!("{}{}{}", crate::workspace::display_path(&classes), if cfg!(windows) { ";" } else { ":" }, dependencies.trim());
+                    let mode = super::java_classpath::apply(&mut command, directory, &classpath)?;
+                    logs::append(directory, "stdout", format!("[DevFlow] 已启用命令行缩短：{mode}。\n").as_bytes())?;
+                    command.arg(main).args(args).current_dir(root);
                     if !profiles.is_empty() { command.arg(format!("--spring.profiles.active={}", profiles.join(","))); }
                     execute(command, directory, &mut record, "running")
                 })();
@@ -329,7 +332,9 @@ pub fn run_worker(directory: &Path) -> Result<()> {
                 })?;
                 if let Some(classpath) = classpath {
                     let mut command = java.command();
-                    command.arg("-cp").arg(classpath).arg(main).args(args).current_dir(root);
+                    let mode = super::java_classpath::apply(&mut command, directory, &classpath)?;
+                    logs::append(directory, "stdout", format!("[DevFlow] 已启用命令行缩短：{mode}。\n").as_bytes())?;
+                    command.arg(main).args(args).current_dir(root);
                     if !profiles.is_empty() { command.arg(format!("--spring.profiles.active={}", profiles.join(","))); }
                     execute(command, directory, &mut record, "running")
                 } else { Ok(None) }

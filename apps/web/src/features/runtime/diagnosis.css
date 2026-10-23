@@ -1,0 +1,12 @@
+.diagnosis-dialog { width: min(640px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); }
+.diagnosis-dialog[open] { display: flex; flex-direction: column; }
+.diagnosis-body { padding: 16px; overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 16px; }
+.diagnosis-create { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.diagnosis-create .df-field { width: 100%; }
+.diagnosis-status, .diagnosis-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.diagnosis-status span, .diagnosis-progress { color: var(--ws-muted); font-size: 12px; }
+.diagnosis-problem, .diagnosis-conclusion p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.diagnosis-session h3 { font-size: 13px; margin: 16px 0 8px; }
+.diagnosis-evidence details { padding: 8px 0; }
+.diagnosis-evidence summary { cursor: pointer; overflow-wrap: anywhere; font-size: 12px; }
+.diagnosis-evidence pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font-size: 11px; }

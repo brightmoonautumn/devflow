@@ -139,6 +139,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/workspace/file/copy", post(http::workspace_file_copy))
         .route("/api/runtime/projects", get(http::runtime_projects))
         .route("/api/runtime/self", get(http::devflow_metrics))
+        .route("/api/runtime/diagnostics", get(http::runtime_diagnostics))
+        .route("/api/runtime/diagnosis", get(http::diagnosis_get).post(http::diagnosis_execute))
         .route("/api/runtime/java", post(http::java_execute))
         .route("/api/runtime/java/options", get(http::java_options))
         .route("/api/runtime/java/output", get(http::java_output))

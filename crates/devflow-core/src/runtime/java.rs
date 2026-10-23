@@ -438,6 +438,10 @@ impl JavaService {
             .clone();
         {
             let mut state = run.lock().unwrap();
+            if state.arthas_target.is_some_and(|old| java_identity(old.0).ok() != Some(old)) {
+                state.arthas_target = None;
+                state.arthas_url = None;
+            }
             if state.attaching || state.arthas_url.is_some() {
                 return Err(error("conflict", "Arthas 已附加或正在附加，请查看诊断输出"));
             }
@@ -507,6 +511,7 @@ impl JavaService {
             state.attaching = false;
             match outcome {
                 Ok(()) => {
+                    state.arthas_target = Some(target);
                     state.arthas_url = Some(format!("http://127.0.0.1:{port}"));
                     state.log("arthas", format!("Arthas 已附加，HTTP 端口 {port}"));
                 }
@@ -514,6 +519,20 @@ impl JavaService {
             }
         });
         Ok(result)
+    }
+
+    /// Only return an endpoint created by our attach operation for this exact JVM.
+    pub(crate) fn diagnosis_endpoint(&self, project: &DetectedProject, target: (u32, u64)) -> Result<String> {
+        if java_identity(target.0)? != target {
+            return Err(error("conflict", "诊断目标 JVM 已变化，请创建新的诊断"));
+        }
+        let runs = self.runs.lock().unwrap();
+        let run = runs.get(&key(project)).ok_or_else(|| error("conflict", "请先挂载 Arthas"))?;
+        let state = run.lock().unwrap();
+        if state.arthas_target != Some(target) {
+            return Err(error("conflict", "Arthas 尚未就绪，或挂载的是其他 JVM"));
+        }
+        state.arthas_url.clone().ok_or_else(|| error("conflict", "请先挂载 Arthas"))
     }
 }
 

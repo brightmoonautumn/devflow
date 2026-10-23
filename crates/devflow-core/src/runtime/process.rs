@@ -48,6 +48,7 @@ pub(crate) struct Run {
     pub(crate) logs: VecDeque<LogLine>,
     pub(crate) sequence: u64,
     pub(crate) arthas_url: Option<String>,
+    pub(crate) arthas_target: Option<(u32, u64)>,
     pub(crate) attaching: bool,
 }
 impl Run {
@@ -63,6 +64,7 @@ impl Run {
             logs: VecDeque::new(),
             sequence: 0,
             arthas_url: None,
+            arthas_target: None,
             attaching: false,
         }
     }

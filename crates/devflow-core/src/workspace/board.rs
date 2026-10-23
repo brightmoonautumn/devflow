@@ -104,6 +104,11 @@ fn validate(board: &BoardSnapshot) -> Result<()> {
 }
 
 impl WorkspaceService {
+    pub(crate) fn diagnosis_location(&self, key: &str, revision: u64) -> Result<PathBuf> {
+        let state = self.lock()?;
+        self.check_board_scope(&state, key, revision)?;
+        Ok(self.board_location(key)?.with_extension("diagnosis.json"))
+    }
     // App-owned storage alongside recent-workspace.json, never a caller-supplied path.
     fn board_location(&self, key: &str) -> Result<PathBuf> {
         let recent = self.recent_path.lock().map_err(|_| error("unavailable", "存储暂不可用"))?;

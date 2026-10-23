@@ -316,3 +316,21 @@ pub async fn terminal_execute(
         .await,
     )
 }
+
+/// Owner listener only; the normal API authentication guard applies.
+pub async fn runtime_diagnostics(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<devflow_core::runtime::diagnostics::DiagnosticsQuery>,
+) -> ApiResult {
+    response(call_core(state, move |engine| engine.runtime_diagnostics(query)).await)
+}
+
+/// Owner listener only. Authentication is also enforced by the core service.
+pub async fn diagnosis_get(State(state): State<Arc<AppState>>, headers: HeaderMap, Query(query): Query<devflow_core::runtime::diagnosis::DiagnosisQuery>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |e| e.diagnosis_get(query, authenticated)).await)
+}
+pub async fn diagnosis_execute(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::runtime::diagnosis::DiagnosisRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |e| e.diagnosis_execute(request, authenticated)).await)
+}
