@@ -163,3 +163,7 @@ body:has(.qa-panel-divider.is-dragging), body:has(.qa-panel-divider.is-dragging)
 @keyframes qa-request-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .qa-execution-spinner { animation: none; } .qa-call-group { transition: none; } }
 @media (max-width: 600px) { .qa-prerequisite-failure { margin-inline: 12px; } .qa-replay-step-name { max-width: 120px; } }
+
+.qa-call-replaying, .qa-reference-replaying { color: var(--ws-accent); font-size: var(--ws-font-caption); font-weight: 600; white-space: nowrap; }
+.qa-call.is-executing > .qa-call-summary { box-shadow: inset 4px 0 var(--ws-accent); }
+.qa-references button.is-running { border-color: var(--ws-accent); box-shadow: inset 3px 0 var(--ws-accent), 0 0 0 2px var(--ws-accent-bg); }

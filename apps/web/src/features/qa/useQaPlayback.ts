@@ -46,7 +46,7 @@ export function useQaPlayback(run: QaRun | undefined, context: string, callIds: 
       return value.index + 1 >= value.steps.length || value.steps[value.index].status === 'failed'
         ? { ...value, playing: false }
         : { ...value, index: value.index + 1 }
-    }), 380)
+    }), 750)
     return () => clearTimeout(timer)
   }, [playing, current])
   const currentCall = playing ? current!.steps[current!.index]?.callId : active(run?.status) ? run?.currentCall : null
@@ -60,5 +60,5 @@ export function useQaPlayback(run: QaRun | undefined, context: string, callIds: 
     setLiveFollow(false)
     setPlayback(value => !value || !value.follow ? value : { ...value, follow: false })
   }
-  return { playing, waitingToReplay, currentCall, index: playing ? current!.index : -1, steps: current?.steps ?? [], following: playing ? current!.follow : liveFollow, reducedMotion, replay, skip, stopFollowing }
+  return { playing, waitingToReplay, currentCall, revealed: playing ? current!.steps.slice(0, current!.index + 1) : null, index: playing ? current!.index : -1, steps: current?.steps ?? [], following: playing ? current!.follow : liveFollow, reducedMotion, replay, skip, stopFollowing }
 }
