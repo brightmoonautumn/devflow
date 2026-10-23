@@ -145,3 +145,21 @@ body:has(.qa-panel-divider.is-dragging), body:has(.qa-panel-divider.is-dragging)
 .qa-toolbar, .qa-run-actions, .qa-toolbar-left { flex-wrap: wrap; }
 .qa-environment { font-size: var(--ws-font-caption); }
 @media (max-width: 600px) { .qa-run-history, .qa-notice { padding-inline: 12px; } }
+
+.qa-replay-status { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 4px 7px; border: 1px solid var(--ws-accent); border-radius: 4px; background: var(--ws-accent-bg); color: var(--ws-accent); font-size: var(--ws-font-caption); }
+.qa-replay-status > svg { flex-shrink: 0; }
+.qa-replay-step-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 180px; }
+.qa-page .qa-playback-control { display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; border: 1px solid var(--ws-border); border-radius: 4px; color: var(--ws-muted); font-size: var(--ws-font-small); }
+.qa-playback-control:not(:disabled):hover { background: var(--ws-hover); color: var(--ws-ink); }
+.qa-call.is-executing, .qa-page .qa-flow-node.is-executing { border-color: var(--ws-accent); box-shadow: inset 3px 0 var(--ws-accent), 0 0 0 2px var(--ws-accent-bg); background: var(--ws-accent-bg); }
+.qa-call.is-failed, .qa-page .qa-flow-node.is-failed, .qa-references button.is-failed { border-color: var(--ws-error); }
+.qa-execution-spinner { color: var(--ws-accent); flex-shrink: 0; animation: qa-request-spin 1s linear infinite; }
+.qa-flow-step { scroll-margin: 12px; }
+.qa-prerequisite-failure { margin: 0 24px 12px; padding: 9px 12px; max-height: 180px; overflow: auto; border: 1px solid var(--ws-error); border-radius: 5px; background: var(--ws-error-bg); font-size: var(--ws-font-small); }
+.qa-prerequisite-failure summary { color: var(--ws-error); cursor: pointer; }
+.qa-prerequisite-failure p { margin: 8px 0; color: var(--ws-muted); }
+.qa-prerequisite-failure > div { padding: 3px 0; }
+.qa-prerequisite-failure small { display: block; margin-top: 6px; color: var(--ws-muted); }
+@keyframes qa-request-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .qa-execution-spinner { animation: none; } .qa-call-group { transition: none; } }
+@media (max-width: 600px) { .qa-prerequisite-failure { margin-inline: 12px; } .qa-replay-step-name { max-width: 120px; } }

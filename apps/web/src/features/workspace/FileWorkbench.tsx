@@ -24,6 +24,7 @@ const nameFor = (path: string) => path.split(/[\\/]/).at(-1) ?? path
 
 export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSaveStatusChange, onActiveFileChange, children }: { theme: 'dark' | 'light'; workspace: WorkspaceResponse | null; openRequest: FileOpenRequest | null; onOpenFile?: (path: string) => void; onSaveStatusChange?: (status: FileSaveStatus | null) => void; onActiveFileChange?: (path: string | null) => void; children: ReactNode }) {
   const dialogs = useDialogs()
+  const workbenchRef = useRef<HTMLDivElement>(null)
   const confirmations = useRef(new Set<string>())
   const [tabMenu, setTabMenu] = useState<{ key: string | null; x: number; y: number } | null>(null)
   const tabMenuTarget = useRef<HTMLElement | null>(null)
@@ -338,7 +339,7 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
     }
   }
 
-  return <div className="file-workbench">
+  return <div ref={workbenchRef} className="file-workbench">
     <div className="file-tabbar">
     <div className="file-tabs" role="tablist" aria-label="服务与打开的文件" onKeyDown={event => {
       if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
@@ -377,7 +378,7 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
       {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.image ? <Suspense fallback={<div className="file-loading" role="status">正在加载图片查看器…</div>}><ImageViewer key={tab.path} image={tab.image} /></Suspense> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor theme={theme} key={tab.path} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} active={state.active === tab.key} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
       {tab.file && <footer className="file-status"><span role="status">{tab.saving ? '保存中…' : dirty(tab) ? '未保存' : tab.savedAt ? <><Check size={12} />已保存</> : '已打开'}</span><span>行 {tab.line}，列 {tab.column}</span><span>UTF-8{tab.file.bom ? ' BOM' : ''} · {tab.file.lineEnding}</span></footer>}
     </section>)}
-    {tabMenu && <FileTabMenu key={tabMenu.key ?? 'services'} x={tabMenu.x} y={tabMenu.y} onClose={dismissTabMenu} onAction={action => void closeFromMenu(action)} items={tabMenu.key === null
+    {tabMenu && <FileTabMenu container={workbenchRef.current?.closest('.workspace-shell') ?? document.body} key={tabMenu.key ?? 'services'} x={tabMenu.x} y={tabMenu.y} onClose={dismissTabMenu} onAction={action => void closeFromMenu(action)} items={tabMenu.key === null
       ? [{ action: 'current', label: '服务标签常驻，无法关闭', disabled: true }, { action: 'all', label: '关闭所有文件标签', disabled: state.tabs.length === 0 || state.tabs.some(tab => tab.saving || tab.deleting) }]
       : ([['current', '关闭标签'], ['others', '关闭其他文件标签'], ['right', '关闭右侧文件标签'], ['all', '关闭所有文件标签']] as const).map(([action, label]) => { const tabs = menuTargets(action); return { action, label, disabled: tabs.length === 0 || tabs.some(tab => tab.saving || tab.deleting) } })} />}
   </div>

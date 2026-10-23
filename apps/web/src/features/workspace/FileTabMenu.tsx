@@ -2,8 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 export type FileTabMenuAction = 'current' | 'others' | 'right' | 'all'
-export function FileTabMenu({ x, y, items, onAction, onClose }: {
-  x: number; y: number; items: { action: FileTabMenuAction; label: string; disabled: boolean }[]
+export function FileTabMenu({ container, x, y, items, onAction, onClose }: {
+  container: Element; x: number; y: number; items: { action: FileTabMenuAction; label: string; disabled: boolean }[]
   onAction: (action: FileTabMenuAction) => void; onClose: (restoreFocus: boolean) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -30,5 +30,5 @@ export function FileTabMenu({ x, y, items, onAction, onClose }: {
     const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
     buttons[next]?.focus()
-  }}>{items.map(item => <button key={item.action} role="menuitem" disabled={item.disabled} onClick={() => onAction(item.action)}>{item.label}</button>)}</div>, document.body)
+  }}>{items.map(item => <button key={item.action} role="menuitem" disabled={item.disabled} onClick={() => onAction(item.action)}>{item.label}</button>)}</div>, container)
 }
