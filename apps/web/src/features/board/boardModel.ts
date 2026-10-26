@@ -13,7 +13,7 @@ export type BoardOperation =
   | ({ type: 'task_create' } & Pick<BoardTask, 'title' | 'description' | 'acceptance' | 'feature' | 'priority'>)
   | ({ type: 'task_update' } & Pick<BoardTask, 'id' | 'title' | 'description' | 'acceptance' | 'feature' | 'priority'>)
   | { type: 'task_delete'; id: string }
-  | { type: 'action'; id: string; action: 'claim' | 'release' | 'submit' | 'progress' | 'approve' | 'reject' | 'reopen' | 'block' | 'unblock'; text?: string }
+  | { type: 'action'; id: string; action: 'complete' | 'claim' | 'release' | 'submit' | 'progress' | 'approve' | 'reject' | 'reopen' | 'block' | 'unblock'; text?: string }
   | { type: 'import'; features: BoardFeature[]; tasks: BoardTask[]; edges: [string, string][] }
 
 export function activityText(entry: string) {

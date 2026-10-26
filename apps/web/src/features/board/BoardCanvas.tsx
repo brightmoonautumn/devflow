@@ -1,16 +1,29 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Check, Focus, Minus, Plus, Workflow } from 'lucide-react'
 import { type BoardFeature, type BoardTask } from './boardModel'
 
-export function BoardCanvas({ features: savedFeatures, edges, disabled, tasks, activeFeature, onFeature, onTask, onMove }: {
+export function BoardCanvas({ features: savedFeatures, edges, disabled, tasks, activeFeature, onFeature, onTask, onMove, onInteractionChange }: {
   features: BoardFeature[]; edges: [string, string][]; disabled: boolean; tasks: BoardTask[]; activeFeature: string
-  onFeature: (id: string) => void; onTask: (task: BoardTask) => void; onMove: (id: string, x: number, y: number) => void
+  onFeature: (id: string) => void; onTask: (task: BoardTask) => void; onMove: (id: string, x: number, y: number) => Promise<boolean>
+  onInteractionChange: (active: boolean) => void
 }) {
   const [camera, setCamera] = useState({ x: 30, y: 30, zoom: 1 })
   const [moving, setMoving] = useState<{ id: string; x: number; y: number } | null>(null)
   const features = savedFeatures.map(f => moving?.id === f.id ? { ...f, x: moving.x, y: moving.y } : f)
   const viewport = useRef<HTMLDivElement>(null)
   const gesture = useRef<{ id?: string; x: number; y: number; startX: number; startY: number; moved: boolean } | null>(null)
+  const saving = useRef(false)
+  const mounted = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false; gesture.current = null; onInteractionChange(false) }
+  }, [onInteractionChange])
+  function cancelGesture() {
+    if (!gesture.current) return
+    gesture.current = null
+    setMoving(null)
+    onInteractionChange(false)
+  }
   function fit() {
     const el = viewport.current
     if (!el || !features.length) return
@@ -32,12 +45,13 @@ export function BoardCanvas({ features: savedFeatures, edges, disabled, tasks, a
     if (event.ctrlKey || event.metaKey) return
     setCamera(c => ({ ...c, x: c.x - event.deltaX, y: c.y - event.deltaY }))
   }} onPointerDown={event => {
-    if (event.button !== 0 || (event.target as Element).closest('button, input')) return
+    if (event.button !== 0 || gesture.current || saving.current || (event.target as Element).closest('button, input')) return
     const node = (event.target as Element).closest<HTMLElement>('[data-feature]')
     const feature = features.find(f => f.id === node?.dataset.feature)
     if (feature && disabled) return
     gesture.current = { id: feature?.id, x: event.clientX, y: event.clientY, startX: feature?.x ?? camera.x, startY: feature?.y ?? camera.y, moved: false }
     event.currentTarget.setPointerCapture(event.pointerId)
+    onInteractionChange(true)
   }} onPointerMove={event => {
     const g = gesture.current
     if (!g) return
@@ -48,12 +62,26 @@ export function BoardCanvas({ features: savedFeatures, edges, disabled, tasks, a
     else setCamera(c => ({ ...c, x: g.startX + dx, y: g.startY + dy }))
   }} onPointerUp={event => {
     const g = gesture.current
-    if (g?.id && !g.moved) onFeature(g.id)
-    if (g?.id && g.moved) onMove(g.id, g.startX + (event.clientX - g.x) / camera.zoom, g.startY + (event.clientY - g.y) / camera.zoom)
-    setMoving(null)
     gesture.current = null
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-  }} onPointerCancel={() => { gesture.current = null; setMoving(null) }}>
+    if (g?.id && g.moved) {
+      const position = { id: g.id, x: g.startX + (event.clientX - g.x) / camera.zoom, y: g.startY + (event.clientY - g.y) / camera.zoom }
+      // Keep the node AND its edges at the drop position until canonical coordinates arrive.
+      setMoving(position)
+      saving.current = true
+      void onMove(position.id, position.x, position.y).catch(() => false).finally(() => {
+        saving.current = false
+        if (!mounted.current) return
+        // Failed saves return to the persisted position; the parent retains the error notice.
+        setMoving(null)
+        onInteractionChange(false)
+      })
+    } else {
+      setMoving(null)
+      onInteractionChange(false)
+      if (g?.id) onFeature(g.id)
+    }
+  }} onPointerCancel={cancelGesture} onLostPointerCapture={cancelGesture}>
     <div className="kb-canvas-world" style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})` }}>
       <svg className="kb-edges" aria-hidden="true"><defs><marker id="kb-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="var(--ws-dim)" /></marker></defs>{edges.map(([source, target]) => {
         const a = features.find(f => f.id === source), b = features.find(f => f.id === target)

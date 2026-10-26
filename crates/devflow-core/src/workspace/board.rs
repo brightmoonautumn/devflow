@@ -2,6 +2,9 @@
 //! the workspace lock, so switching workspaces cannot redirect an in-flight write.
 use super::*;
 use std::time::{SystemTime, UNIX_EPOCH};
+#[path = "board_sync.rs"]
+mod sync;
+pub use sync::{BoardSyncRequest, BoardSyncSettings, BoardSyncStatus};
 
 const BOARD_LIMIT: u64 = 8 * 1024 * 1024;
 
@@ -33,6 +36,7 @@ pub struct Task {
 pub struct BoardSnapshot {
     pub workspace_key: String, pub revision: u64, pub next_task: u64,
     pub features: Vec<Feature>, pub tasks: Vec<Task>, pub edges: Vec<[String; 2]>,
+    #[serde(default)]
     pub activity: Vec<String>,
 }
 #[derive(Deserialize)]
@@ -50,12 +54,14 @@ pub enum BoardOperation {
     FeatureSave { feature: Feature },
     FeatureDelete { id: String, move_to: Option<String> },
     Edges { edges: Vec<[String; 2]> },
-    TaskCreate { title: String, description: String, acceptance: String, feature: String, priority: String },
+    TaskCreate { title: String, #[serde(default)] description: String, #[serde(default)] acceptance: String, #[serde(default)] feature: String, #[serde(default = "normal_priority")] priority: String },
     TaskUpdate { id: String, title: String, description: String, acceptance: String, feature: String, priority: String },
     TaskDelete { id: String },
     Action { id: String, action: String, text: Option<String> },
     Import { features: Vec<Feature>, tasks: Vec<Task>, edges: Vec<[String; 2]> },
+    Restore { board: BoardSnapshot },
 }
+fn normal_priority() -> String { "普通".into() }
 
 fn text(value: &str, max: usize, required: bool) -> Result<()> {
     if value.len() > max || (required && value.trim().is_empty()) {
@@ -85,7 +91,7 @@ fn validate(board: &BoardSnapshot) -> Result<()> {
     for t in &board.tasks {
         text(&t.id, 100, true)?; text(&t.title, 480, true)?;
         text(&t.description, 16000, false)?; text(&t.acceptance, 16000, false)?;
-        if !ids.contains(&t.feature) || !task_ids.insert(&t.id)
+        if (!t.feature.is_empty() && !ids.contains(&t.feature)) || !task_ids.insert(&t.id)
             || !["todo", "doing", "review", "done"].contains(&t.status.as_str())
             || !["高", "普通"].contains(&t.priority.as_str()) {
             return Err(error("invalid_request", "任务标识、所属功能、状态或优先级无效"));
@@ -163,6 +169,7 @@ impl WorkspaceService {
         lock.try_lock().map_err(|e| error("conflict", format!("看板正在写入，请稍后重试：{e}")))?;
         let mut board = load(&path, &request.workspace_key)?;
         if board.revision != request.board_revision { return Err(error("conflict", "看板已被其他入口修改，请刷新后重试；当前编辑尚未保存")); }
+        let restore_backup = if matches!(&request.operation, BoardOperation::Restore { .. }) { Some(board.clone()) } else { None };
         let event = apply(&mut board, request.operation, actor, human)?;
         validate(&board)?;
         board.revision = board.revision.checked_add(1).ok_or_else(|| error("conflict", "看板版本已达上限"))?;
@@ -170,6 +177,9 @@ impl WorkspaceService {
         if board.activity.len() > 1000 { board.activity.remove(0); }
         let bytes = serde_json::to_vec_pretty(&board).map_err(|e| error("io_error", e.to_string()))?;
         if bytes.len() as u64 > BOARD_LIMIT { return Err(error("invalid_request", "看板数据超过 8 MiB")); }
+        if let Some(backup) = restore_backup {
+            sync::save_json(&path.with_extension(format!("{}.backup.json", uuid::Uuid::new_v4())), &backup)?;
+        }
         let temp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
         let result = (|| -> Result<()> {
             let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temp).map_err(io_error)?;
@@ -203,6 +213,23 @@ fn load(path: &Path, key: &str) -> Result<BoardSnapshot> {
 fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, human: bool) -> Result<String> {
     use BoardOperation::*;
     let event = match operation {
+        Restore { board: restored } => {
+            if !human { return Err(error("permission_denied", "恢复需由本机用户确认")); }
+            let revision = board.revision;
+            let key = board.workspace_key.clone();
+            let next = board.next_task.max(restored.next_task);
+            let local_activity = board.activity.clone();
+            let local_tasks = board.tasks.clone();
+            *board = restored;
+            board.workspace_key = key; board.revision = revision; board.next_task = next;
+            board.activity = local_activity;
+            for task in &mut board.tasks {
+                task.activity = local_tasks.iter().find(|local| local.id == task.id).map(|local| local.activity.clone()).unwrap_or_default();
+                task.owner = None; task.owner_id = None;
+                if task.status == "doing" { task.status = "todo".into(); }
+            }
+            "从 Gitee 恢复看板；执行身份已清除".into()
+        }
         FeatureSave { feature } => {
             let name = feature.name.clone();
             if let Some(current) = board.features.iter_mut().find(|f| f.id == feature.id) { *current = feature; }
@@ -241,6 +268,7 @@ fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, huma
             let note = note.unwrap_or_default().trim().to_owned(); text(&note, 16000, false)?;
             let owned = t.owner_id.as_deref() == Some(actor);
             let allowed = match action.as_str() {
+                "complete" => human && t.status != "done",
                 "claim" => t.status == "todo" && t.blocked.is_none() && t.owner_id.is_none(),
                 "release" | "submit" | "progress" => t.status == "doing" && (owned || human),
                 "approve" => human && t.status == "review" && t.blocked.is_none(),
@@ -252,6 +280,7 @@ fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, huma
             if !allowed { return Err(error("conflict", "当前状态或执行者不允许此操作，请刷新后检查任务")); }
             if ["submit", "progress", "block", "reject"].contains(&action.as_str()) { text(&note, 16000, true)?; }
             match action.as_str() {
+                "complete" => { t.status = "done".into(); t.owner = None; t.owner_id = None; t.blocked = None; }
                 "claim" => { t.status = "doing".into(); t.owner = Some(actor.into()); t.owner_id = Some(actor.into()); }
                 "release" => { t.status = "todo".into(); t.owner = None; t.owner_id = None; }
                 "submit" => { if t.blocked.is_some() { return Err(error("conflict", "请先解除阻塞")); } t.status = "review".into(); t.result = Some(note.clone()); }
@@ -261,7 +290,7 @@ fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, huma
                 "block" => t.blocked = Some(note.clone()), "unblock" => t.blocked = None,
                 _ => (),
             }
-            let label = match action.as_str() { "claim" => "认领任务", "release" => "释放任务", "submit" => "提交验收", "approve" => "通过验收", "reject" => "退回修改", "reopen" => "重新打开", "block" => "标记阻塞", "unblock" => "解除阻塞", _ => "记录进展" };
+            let label = match action.as_str() { "complete" => "用户手动标记完成", "claim" => "认领任务", "release" => "释放任务", "submit" => "提交验收", "approve" => "通过验收", "reject" => "退回修改", "reopen" => "重新打开", "block" => "标记阻塞", "unblock" => "解除阻塞", _ => "记录进展" };
             t.activity.push(stamp(actor, &format!("{label}{}", if note.is_empty() { String::new() } else { format!("：{note}") })));
             format!("{id}：{label}")
         }
@@ -286,6 +315,70 @@ fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, huma
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_humans_can_complete_directly_without_delivery() {
+        for phase in ["todo", "doing", "review"] {
+            let f = Fixture::new(); let id = f.seed();
+            if phase != "todo" { f.execute(BoardOperation::Action { id: id.clone(), action: "claim".into(), text: None }, "Codex:worker", false).unwrap(); }
+            if phase == "review" { f.execute(BoardOperation::Action { id: id.clone(), action: "submit".into(), text: Some("真实交付".into()) }, "Codex:worker", false).unwrap(); }
+            f.execute(BoardOperation::Action { id: id.clone(), action: "block".into(), text: Some("人工已解决".into()) }, "你", true).unwrap();
+            assert!(f.execute(BoardOperation::Action { id: id.clone(), action: "complete".into(), text: None }, "Codex:worker", false).is_err());
+            let board = f.execute(BoardOperation::Action { id: id.clone(), action: "complete".into(), text: None }, "你", true).unwrap();
+            let task = &board.tasks[0];
+            assert_eq!(task.status, "done"); assert!(task.owner_id.is_none()); assert!(task.blocked.is_none());
+            assert_eq!(task.result.as_deref(), if phase == "review" { Some("真实交付") } else { None });
+            assert!(task.activity.last().unwrap().contains("用户手动标记完成"));
+            assert!(f.execute(BoardOperation::Action { id: id.clone(), action: "complete".into(), text: None }, "你", true).is_err());
+            let reopened = f.execute(BoardOperation::Action { id, action: "reopen".into(), text: None }, "你", true).unwrap();
+            assert_eq!(reopened.tasks[0].status, "todo");
+        }
+    }
+
+    #[test]
+    fn quick_task_can_start_unclassified_and_be_refined() {
+        let f = Fixture::new();
+        let operation = serde_json::from_value(serde_json::json!({"type":"task_create","title":"先粗略记录中文待办"})).unwrap();
+        let board = f.execute(operation, "你", true).unwrap();
+        assert_eq!(board.tasks[0].feature, ""); assert_eq!(board.tasks[0].priority, "普通");
+        f.execute(BoardOperation::FeatureSave { feature: feature("later") }, "你", true).unwrap();
+        let board = f.execute(BoardOperation::TaskUpdate { id: board.tasks[0].id.clone(), title: "整理后的标题".into(), description: "补充范围".into(), acceptance: "验收目标".into(), feature: "later".into(), priority: "普通".into() }, "Codex:refine", false).unwrap();
+        assert_eq!(board.tasks[0].status, "todo"); assert_eq!(board.tasks[0].feature, "later");
+        assert!(board.tasks[0].owner_id.is_none());
+    }
+    #[test]
+    fn restore_preserves_local_revision_sequence_and_releases_claims() {
+        let f = Fixture::new(); f.seed();
+        f.execute(BoardOperation::Action { id: "DF-001".into(), action: "claim".into(), text: None }, "Codex:old", false).unwrap();
+        let mut restored = f.read(); restored.workspace_key = "D:/other/machine".into(); restored.revision = 999;
+        let local_history = restored.tasks[0].activity.clone();
+        restored.activity = vec!["不应导入的远端活动".into()];
+        restored.tasks[0].activity = vec!["不应导入的远端任务活动".into()];
+        let before = f.read().revision;
+        assert!(f.execute(BoardOperation::Restore { board: restored.clone() }, "Codex:other", false).is_err());
+        let board = f.execute(BoardOperation::Restore { board: restored }, "你", true).unwrap();
+        assert_eq!(board.revision, before + 1); assert_eq!(board.workspace_key, f.key);
+        assert_eq!(board.tasks[0].activity, local_history);
+        assert!(!board.activity.iter().any(|entry| entry.contains("不应导入")));
+        assert_eq!(board.tasks[0].status, "todo"); assert!(board.tasks[0].owner_id.is_none());
+        let directory = f.service.board_location(&f.key).unwrap().parent().unwrap().to_owned();
+        let backups: Vec<_> = fs::read_dir(directory).unwrap().map(|e| e.unwrap().path()).filter(|p| p.to_string_lossy().ends_with(".backup.json")).collect();
+        assert_eq!(backups.len(), 1);
+        let backup: BoardSnapshot = serde_json::from_slice(&fs::read(&backups[0]).unwrap()).unwrap();
+        assert_eq!(backup.revision, before); assert_eq!(backup.tasks[0].owner_id.as_deref(), Some("Codex:old"));
+    }
+    #[test]
+    fn sync_config_requires_scope_auth_and_current_board_revision() {
+        let f = Fixture::new();
+        let request = |revision, action: &str| BoardSyncRequest { workspace_key: f.key.clone(), expected_revision: 0, board_revision: revision, action: action.into(), settings: Some(BoardSyncSettings { owner: "team".into(), repo: "board".into(), branch: "main".into(), board_id: uuid::Uuid::new_v4().to_string(), automatic: false }) };
+        assert!(f.service.board_sync(request(0, "status"), false, true).is_err());
+        assert!(f.service.board_sync(request(1, "configure"), true, true).is_err());
+        f.service.board_sync(request(0, "configure"), true, true).unwrap();
+        let file = f.service.board_location(&f.key).unwrap().with_extension("sync.json");
+        assert!(!fs::read_to_string(file).unwrap().contains("access_token"));
+        let mut stale = request(0, "status"); stale.expected_revision = 999;
+        assert!(f.service.board_sync(stale, true, true).is_err());
+    }
 
     struct Fixture { root: PathBuf, service: WorkspaceService, key: String }
     impl Fixture {

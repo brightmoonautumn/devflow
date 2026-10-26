@@ -110,6 +110,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/workspace/shares/revoke", post(share::revoke))
         .route("/api/session", get(http::session))
         .route("/api/workspace/board", get(http::board_read).post(http::board_execute))
+        .route("/api/workspace/board/sync", post(http::board_sync))
         .route("/api/qa", get(http::qa_get).post(http::qa_execute))
         .route("/api/projects", get(http::projects))
         .route(
@@ -192,11 +193,20 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+    let sync_workspace = terminal_workspace.clone();
+    let sync_worker = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            let workspace = sync_workspace.clone();
+            let _ = tokio::task::spawn_blocking(move || workspace.board_sync_tick()).await;
+        }
+    });
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await;
+    sync_worker.abort();
     terminal_workspace.close_terminals()?;
     result?;
     Ok(())

@@ -53,6 +53,7 @@ fn tools() -> Value {
         json!({"name":"runtime_diagnostics","description":"Export bounded, best-effort credential-redacted troubleshooting context for a Java/Node project in the active workspace. Returns a short Agent handoff in text and a separate redacted log excerpt. Pass the current runId to reject replaced runs; include script for Node aggregate services. Does not execute commands or restart services.","inputSchema":{"type":"object","properties":{"projectPath":{"type":"string"},"kind":{"enum":["java","node"]},"script":{"type":"string"},"runId":{"type":"string"}},"required":["projectPath","kind"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
         board::read_tool(),
         board::write_tool(),
+        board::sync_tool(),
         json!({"name":"workspace_terminal","description":"Manage local owner interactive PTY terminals in active workspace folders. Requires owner authentication and current revision. Operations list/create/read/input/resize/close use the same core as Web UI. Input executes with the local user shell privileges, not a filesystem sandbox. Switching or closing workspaces closes terminals; removing a folder closes its terminals. Save/add-folder retains remaining sessions. Output data is a byte array preserving ANSI and UTF-8; read incrementally with nextCursor, reset renderer when truncated. Maximum 12 sessions, 1 MiB retained per session.","inputSchema":{"type":"object","properties":{"expectedRevision":{"type":"integer","minimum":0},"operation":{"oneOf":[{"type":"object","properties":{"type":{"const":"list"}},"required":["type"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"create"},"folder":{"type":"string"},"cols":{"type":"integer","minimum":2,"maximum":500},"rows":{"type":"integer","minimum":1,"maximum":300}},"required":["type","folder","cols","rows"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"read"},"id":{"type":"string"},"after":{"type":"integer","minimum":0}},"required":["type","id","after"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"input"},"id":{"type":"string"},"data":{"type":"string","maxLength":65536}},"required":["type","id","data"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"resize"},"id":{"type":"string"},"cols":{"type":"integer","minimum":2,"maximum":500},"rows":{"type":"integer","minimum":1,"maximum":300}},"required":["type","id","cols","rows"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"close"},"id":{"type":"string"}},"required":["type","id"],"additionalProperties":false}]}},"required":["expectedRevision","operation"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}}),
         json!({"name":"workspace_share_create","description":"Create a read-only invitation for the current workspace, frozen to its included folders. Valid 5–1440 minutes, revoked on restart. Return token only once; attach to /share/#token on the dedicated LAN listener. Guests can read files/search/logs, never mutate. Only local owner may create.","inputSchema":{"type":"object","properties":{"expectedRevision":{"type":"integer","minimum":0},"lifetimeMinutes":{"type":"integer","minimum":5,"maximum":1440}},"required":["expectedRevision","lifetimeMinutes"],"additionalProperties":false},"annotations":{"readOnlyHint":false}}),
         read(
@@ -171,7 +172,14 @@ pub async fn handle(
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-            if name == "board_get" || name == "board_execute" {
+            if name == "board_sync" {
+                let authenticated = security::authenticated(&headers, &state);
+                let result = call_core(state, move |e| {
+                    let request = serde_json::from_value(arguments).map_err(|err: serde_json::Error| WorkspaceError { code: "invalid_request", message: err.to_string() })?;
+                    e.workspace.board_sync(request, authenticated, false)
+                }).await;
+                Ok(tool_result(result))
+            } else if name == "board_get" || name == "board_execute" {
                 let authenticated = security::authenticated(&headers, &state);
                 Ok(tool_result(board::execute(state, name, arguments, authenticated).await))
             } else if name == "workspace_terminal" {

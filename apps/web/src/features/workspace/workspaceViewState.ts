@@ -2,7 +2,7 @@ import { readOnlyShare } from '../../lib/access'
 import type { WorkspaceResponse } from '../../lib/api'
 
 export type SavedFileTab = { path: string; preview: boolean; line: number; column: number }
-export type WorkspaceViewState = { tabs?: SavedFileTab[]; active?: string | null; expanded?: string[]; selected?: string | null; sidebarOpen?: boolean; sidebarView?: 'explorer' | 'search' }
+export type WorkspaceViewState = { tabs?: SavedFileTab[]; active?: string | null; expanded?: string[]; selected?: string | null; sidebarOpen?: boolean; sidebarView?: 'explorer' | 'search'; activePage?: 'services' | 'board' | 'qa' }
 export const viewPathKey = (path: string) => /^[a-z]:[\\/]|^\\\\/i.test(path) ? path.replace(/\\/g, '/').toLowerCase() : path
 
 export function pathWithin(path: string, parent: string) {

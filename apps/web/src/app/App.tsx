@@ -46,12 +46,37 @@ export function App() {
   const [query, setQuery] = useState('')
   const [taskQuery, setTaskQuery] = useState('')
   const taskSearchRef = useRef<HTMLInputElement>(null)
-  const [qaOpen, setQaOpen] = useState(() => window.location.hash === '#qa')
-  const [boardOpen, setBoardOpen] = useState(() => window.location.hash === '#board')
   const [savedLayout] = useState(() => readViewState('devflow.workbench-layout.v1'))
+  const [initialPage] = useState(() => {
+    if (readOnlyShare) return 'services'
+    const hash = window.location.hash
+    if (hash === '#board') return 'board'
+    if (hash === '#qa') return 'qa'
+    if (hash === '#services') return 'services'
+    return savedLayout.activePage === 'board' || savedLayout.activePage === 'qa' ? savedLayout.activePage : 'services'
+  })
+  const [qaOpen, setQaOpen] = useState(initialPage === 'qa')
+  const [boardOpen, setBoardOpen] = useState(initialPage === 'board')
   const [explorerOpen, setExplorerOpen] = useState(() => typeof savedLayout.sidebarOpen === 'boolean' ? savedLayout.sidebarOpen : window.matchMedia('(min-width: 720px)').matches)
   const [sidebarView, setSidebarView] = useState<'explorer' | 'search'>(() => savedLayout.sidebarView === 'search' ? savedLayout.sidebarView : 'explorer')
-  useEffect(() => { writeViewState('devflow.workbench-layout.v1', { sidebarOpen: explorerOpen, sidebarView }) }, [explorerOpen, sidebarView])
+  useEffect(() => {
+    const activePage = !readOnlyShare && boardOpen ? 'board' : !readOnlyShare && qaOpen ? 'qa' : 'services'
+    writeViewState('devflow.workbench-layout.v1', { sidebarOpen: explorerOpen, sidebarView, activePage })
+    if (readOnlyShare) return
+    // Keep explicit deep links and persisted state in agreement after navigation.
+    const hash = `#${activePage}`
+    if (window.location.hash !== hash) window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${hash}`)
+  }, [explorerOpen, sidebarView, boardOpen, qaOpen])
+  useEffect(() => {
+    if (readOnlyShare) return
+    const navigate = () => {
+      const hash = window.location.hash
+      if (!['#board', '#qa', '#services'].includes(hash)) return
+      setBoardOpen(hash === '#board'); setQaOpen(hash === '#qa')
+    }
+    window.addEventListener('hashchange', navigate)
+    return () => window.removeEventListener('hashchange', navigate)
+  }, [])
   const [fileRequest, setFileRequest] = useState<FileOpenRequest | null>(null)
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
   const openFile = useCallback((path: string, pinned = false, line?: number, column?: number) => {
@@ -321,8 +346,8 @@ export function App() {
       <nav className="activity-bar" aria-label="功能入口">
         <div className="activity-primary">
           {!readOnlyShare && <button className={`activity-button ${boardOpen ? 'active' : ''}`} aria-label="看板" title="看板" aria-pressed={boardOpen} onClick={() => { setQaOpen(false); setBoardOpen(true); setTerminalOpen(false); setPanel(null) }}><Kanban size={20} strokeWidth={1.65} /></button>}
-          <button className={`activity-button ${!qaOpen && !boardOpen && explorerOpen && sidebarView === 'explorer' ? 'active' : ''}`} aria-label="资源管理器" title="资源管理器" aria-pressed={!qaOpen && !boardOpen && explorerOpen && sidebarView === 'explorer'} aria-controls="workspace-sidebar" onClick={() => { setQaOpen(false); setBoardOpen(false); setExplorerOpen(boardOpen || sidebarView !== 'explorer' || !explorerOpen); setSidebarView('explorer') }}><FolderTree size={20} strokeWidth={1.65} /></button>
-          <button className={`activity-button ${!qaOpen && !boardOpen && explorerOpen && sidebarView === 'search' ? 'active' : ''}`} aria-label="搜索文件" title="搜索 · Ctrl+Shift+F" aria-pressed={!qaOpen && !boardOpen && explorerOpen && sidebarView === 'search'} aria-controls="workspace-sidebar" onClick={() => { setQaOpen(false); setBoardOpen(false); setExplorerOpen(boardOpen || sidebarView !== 'search' || !explorerOpen); setSidebarView('search') }}><Search size={20} strokeWidth={1.65} /></button>
+          <button className={`activity-button ${!qaOpen && !boardOpen && explorerOpen && sidebarView === 'explorer' ? 'active' : ''}`} aria-label="资源管理器" title="资源管理器" aria-pressed={!qaOpen && !boardOpen && explorerOpen && sidebarView === 'explorer'} aria-controls="workspace-sidebar" onClick={() => { setQaOpen(false); setBoardOpen(false); setExplorerOpen(boardOpen || qaOpen || sidebarView !== 'explorer' || !explorerOpen); setSidebarView('explorer') }}><FolderTree size={20} strokeWidth={1.65} /></button>
+          <button className={`activity-button ${!qaOpen && !boardOpen && explorerOpen && sidebarView === 'search' ? 'active' : ''}`} aria-label="搜索文件" title="搜索 · Ctrl+Shift+F" aria-pressed={!qaOpen && !boardOpen && explorerOpen && sidebarView === 'search'} aria-controls="workspace-sidebar" onClick={() => { setQaOpen(false); setBoardOpen(false); setExplorerOpen(boardOpen || qaOpen || sidebarView !== 'search' || !explorerOpen); setSidebarView('search') }}><Search size={20} strokeWidth={1.65} /></button>
           {!readOnlyShare && <button className={`activity-button ${qaOpen ? 'active' : ''}`} aria-label="质量保证" title="质量保证 · API 场景测试" aria-pressed={qaOpen} onClick={() => { setQaOpen(true); setBoardOpen(false); setTerminalOpen(false); setPanel(null) }}><ShieldCheck size={20} strokeWidth={1.65} /></button>}
         </div>
         <div className="activity-secondary"><button className="activity-button" aria-label="使用说明" title="使用说明" onClick={() => setPanel({ title: '使用说明', description: '点击服务卡片查看运行输出，点击箭头展开目录和启动入口。点击启动直接使用已保存或默认配置，更多操作中的“启动配置”可保存 JVM 参数、程序参数和 Spring Profile；支持停止项目进程树及向运行中的 Java 应用附加 Arthas。底部面板可拖拽调整高度。Node.js 服务支持 npm/pnpm/yarn 启动、停止和运行输出。' })}><CircleHelp size={19} /></button>{!readOnlyShare && <button className="activity-button" aria-label="设置" title="设置" onClick={explainWorkspace}><Settings2 size={19} /></button>}</div>

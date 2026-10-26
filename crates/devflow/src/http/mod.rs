@@ -44,6 +44,13 @@ pub async fn board_read(
     let authenticated = security::authenticated(&headers, &state);
     response(call_core(state, move |e| e.workspace.board_read(request, authenticated)).await)
 }
+pub async fn board_sync(
+    State(state): State<Arc<AppState>>, headers: HeaderMap,
+    Json(request): Json<devflow_core::workspace::BoardSyncRequest>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |e| e.workspace.board_sync(request, authenticated, true)).await)
+}
 pub async fn board_execute(
     State(state): State<Arc<AppState>>, headers: HeaderMap,
     Json(request): Json<devflow_core::workspace::BoardRequest>,

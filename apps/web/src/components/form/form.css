@@ -4,6 +4,7 @@
 }
 .df-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .df-field-label { color: var(--ws-ink); font-size: var(--ws-font-body); font-weight: 500; }
+.df-field-heading { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
 .df-field-hint { color: var(--ws-muted); font-size: var(--ws-font-small); line-height: 1.7; }
 .df-control {
   width: 100%; min-width: 0; min-height: 38px; padding: 8px 11px;
