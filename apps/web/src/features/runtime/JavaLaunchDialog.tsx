@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Save, Settings2, X } from 'lucide-react'
-import { getJavaOptions, type JavaOptions, type Project } from '../../lib/api'
+import { executeJava, getJavaOptions, type JavaOptions, type LocalJavaDependency, type Project } from '../../lib/api'
 import { readJavaLaunchConfig, saveJavaLaunchConfig } from './javaLaunchConfig'
 import { BaseButton } from '../../components/form/BaseButton'
 import { BaseCheckbox } from '../../components/form/BaseCheckbox'
@@ -9,25 +9,38 @@ import { BaseInput } from '../../components/form/BaseInput'
 import { BaseSelect } from '../../components/form/BaseSelect'
 import { BaseTextarea } from '../../components/form/BaseTextarea'
 
-export function JavaLaunchDialog({ project, onClose }: { project: Project; onClose: () => void }) {
+export function JavaLaunchDialog({ project, revision, onClose }: { project: Project; revision: number; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const formId = useId()
   const [options, setOptions] = useState<JavaOptions | null>(null)
   const [error, setError] = useState('')
+  const [dependencies, setDependencies] = useState<LocalJavaDependency[]>([])
+  const [dependencyDraft, setDependencyDraft] = useState('')
+  const [saving, setSaving] = useState(false)
   const [config, setConfig] = useState(() => readJavaLaunchConfig(project))
   useEffect(() => { const current = dialog.current; current?.showModal(); return () => current?.close() }, [])
-  useEffect(() => { const controller = new AbortController(); getJavaOptions(project.path, controller.signal).then(value => { if (!controller.signal.aborted) setOptions(value) }).catch(err => { if (!controller.signal.aborted) setError(String(err)) }); return () => controller.abort() }, [project.path])
-  function save() {
+  useEffect(() => { const controller = new AbortController(); getJavaOptions(project.path, controller.signal).then(value => { if (!controller.signal.aborted) { setOptions(value); setDependencies(value.localDependencies ?? []) } }).catch(err => { if (!controller.signal.aborted) setError(String(err)) }); return () => controller.abort() }, [project.path])
+  function addDependency() {
+    const value = dependencyDraft.trim()
+    if (value && !dependencies.some(item => item.value === value)) setDependencies(current => [...current, { value, enabled: true }])
+    setDependencyDraft('')
+  }
+  async function save() {
     if (!options || !options.mainClasses.includes(config.main)) return
     setError('')
+    setSaving(true)
     try {
       saveJavaLaunchConfig(project, config)
+      const value = dependencyDraft.trim()
+      const values = value && !dependencies.some(item => item.value === value) ? [...dependencies, { value, enabled: true }] : dependencies
+      await executeJava(project.path, revision, { type: 'configure_dependencies', dependencies: values })
       onClose()
-    } catch { setError('无法保存启动配置，请检查浏览器是否允许本地存储。') }
+    } catch (err) { setError(`无法保存启动配置：${String(err)}`) }
+    finally { setSaving(false) }
   }
   return <dialog ref={dialog} className="ws-dialog ws-location-dialog java-launch-dialog" aria-labelledby="java-launch-title" onCancel={onClose}>
     <header className="ws-location-heading"><div className="ws-dialog-symbol"><Settings2 size={21} /></div><div><h2 id="java-launch-title">启动配置</h2><p>{project.name}</p></div><button className="ws-icon-button" aria-label="关闭启动配置" onClick={onClose}><X size={17} /></button></header>
-    <form onSubmit={event => { event.preventDefault(); save() }}>
+    <form onSubmit={event => { event.preventDefault(); if (!saving) void save() }}>
       <div className="ws-location-body java-launch-fields">
         <BaseField htmlFor={`${formId}-main`} label="启动主类">
           <BaseSelect id={`${formId}-main`} required mono value={config.main} disabled={!options} onValueChange={main => setConfig(current => ({ ...current, main }))} placeholder={!options ? error ? '启动主类读取失败' : '正在读取启动主类…' : options.mainClasses.length ? '请选择启动主类' : '未发现启动主类'} options={(options?.mainClasses ?? project.mainClasses ?? []).map(main => ({ value: main, label: main }))} />
@@ -45,6 +58,17 @@ export function JavaLaunchDialog({ project, onClose }: { project: Project; onClo
           <BaseInput id={`${formId}-maven-profiles`} value={config.mavenProfiles} onChange={event => setConfig({ ...config, mavenProfiles: event.target.value })} placeholder="例如 local-build" />
         </BaseField>
         <BaseCheckbox label="每次重新构建目标及上游（忽略缓存）" checked={config.forceBuild} onCheckedChange={forceBuild => setConfig(current => ({ ...current, forceBuild }))} />
+        <fieldset className="java-profile-fields" disabled={saving || !options}><legend>本地运行依赖</legend>
+          <p className="df-field-hint">仅本机启动时追加，Web 与 MCP 共用；不修改 POM，不参与编译和打包。本地 JAR 须位于当前工作区项目目录内。</p>
+          {dependencies.map((item, index) => <div key={item.value} className="local-dependency-row">
+            <BaseCheckbox label={item.value} checked={item.enabled} onCheckedChange={enabled => setDependencies(current => current.map((entry, i) => i === index ? { ...entry, enabled } : entry))} />
+            <BaseButton aria-label={`删除 ${item.value}`} onClick={() => setDependencies(current => current.filter((_, i) => i !== index))}><X size={13} /></BaseButton>
+          </div>)}
+          <BaseField htmlFor={`${formId}-dependency`} label="Maven 坐标或 JAR 绝对路径" hint="Maven 坐标会解析运行时传递依赖；取消勾选可临时禁用。">
+            <BaseInput id={`${formId}-dependency`} value={dependencyDraft} onChange={event => setDependencyDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addDependency() } }} placeholder="dm.jdbc.driver:dm8:20250513" />
+          </BaseField>
+          <BaseButton onClick={addDependency} disabled={!dependencyDraft.trim() || dependencies.length >= 64}>添加依赖</BaseButton>
+        </fieldset>
         <fieldset className="java-profile-fields"><legend>Spring Profile</legend>
           <div className="java-profile-list">{options?.profiles.map(profile => <BaseCheckbox key={profile} label={profile} checked={config.profiles.includes(profile)} onCheckedChange={checked => setConfig(current => ({ ...current, profiles: checked ? [...current.profiles, profile] : current.profiles.filter(value => value !== profile) }))} />)}</div>
           {options && !options.profiles.length && <p className="df-field-hint java-profile-empty">未发现预设 Profile，可在下方填写。</p>}
@@ -55,7 +79,7 @@ export function JavaLaunchDialog({ project, onClose }: { project: Project; onClo
         <p className="java-launch-hint">保存后，下次点击服务的启动按钮时使用这些配置；正在运行的服务不受影响。</p>
         {error && <p className="java-console-error" role="alert">{error}</p>}
       </div>
-      <footer className="ws-location-footer java-launch-footer"><BaseButton onClick={onClose}>取消</BaseButton><BaseButton type="submit" variant="primary" disabled={!options || !options.mainClasses.includes(config.main)}><Save size={13} />保存配置</BaseButton></footer>
+      <footer className="ws-location-footer java-launch-footer"><BaseButton onClick={onClose} disabled={saving}>取消</BaseButton><BaseButton type="submit" variant="primary" disabled={saving || !options || !options.mainClasses.includes(config.main)}><Save size={13} />{saving ? '正在保存…' : '保存配置'}</BaseButton></footer>
     </form>
   </dialog>
 }

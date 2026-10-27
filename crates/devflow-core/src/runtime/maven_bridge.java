@@ -24,6 +24,7 @@ class DevflowMavenBridge {
     static boolean install;
     static MavenProject application;
     static ProjectDependenciesResolver dependencies;
+    static org.eclipse.aether.RepositorySystem repositorySystem;
     static final Map<String, MavenProject> reusable = new HashMap<>();
     static final Map<String, MavenProject> local = new HashMap<>();
 
@@ -36,6 +37,7 @@ class DevflowMavenBridge {
             @Override protected void customizeContainer(PlexusContainer container) {
                 try {
                     dependencies = container.lookup(ProjectDependenciesResolver.class);
+                    repositorySystem = container.lookup(org.eclipse.aether.RepositorySystem.class);
                 } catch (Exception ex) {
                     throw new IllegalStateException("DevFlow 无法获取 Maven 依赖解析器", ex);
                 }
@@ -168,11 +170,13 @@ class DevflowMavenBridge {
                 request.setResolutionFilter(DependencyFilterUtils.classpathFilter("runtime"));
                 var resolved = dependencies.resolve(request);
                 Set<String> paths = new LinkedHashSet<>();
+                Map<String, String> versions = new HashMap<>();
                 paths.add(q(checked(application.getBuild().getOutputDirectory())));
                 for (var dependency : resolved.getResolvedDependencies()) {
                     String scope = dependency.getScope();
                     if (!("compile".equals(scope) || "runtime".equals(scope))) continue;
                     org.apache.maven.artifact.Artifact artifact = RepositoryUtils.toArtifact(dependency.getArtifact());
+                    checkVersion(versions, dependency.getArtifact());
                     MavenProject project = local.get(artifact.getGroupId() + ":" + artifact.getArtifactId() + ":" + artifact.getVersion());
                     if (!install && project != null) {
                         if (!"jar".equals(project.getPackaging()) || artifact.hasClassifier() || !"jar".equals(artifact.getType()))
@@ -181,6 +185,30 @@ class DevflowMavenBridge {
                     } else {
                         if (artifact.getFile() == null || !artifact.getFile().exists()) throw new IOException("依赖产物缺失: " + artifact);
                         paths.add(q(artifact.getFile().getCanonicalPath()));
+                    }
+                }
+                Path extras = exchange.resolve("local-dependencies.txt");
+                if (Files.exists(extras)) {
+                    var collect = new org.eclipse.aether.collection.CollectRequest();
+                    collect.setRepositories(application.getRemoteProjectRepositories());
+                    for (String coordinate : Files.readAllLines(extras, StandardCharsets.UTF_8)) {
+                        if (coordinate.isBlank()) continue;
+                        String[] parts = coordinate.split(":");
+                        if (parts.length != 3) throw new IOException("无效本地依赖坐标: " + coordinate);
+                        var artifact = new org.eclipse.aether.artifact.DefaultArtifact(parts[0], parts[1], "jar", parts[2]);
+                        checkVersion(versions, artifact);
+                        collect.addDependency(new org.eclipse.aether.graph.Dependency(artifact, "runtime"));
+                    }
+                    if (!collect.getDependencies().isEmpty()) {
+                        var extraRequest = new org.eclipse.aether.resolution.DependencyRequest(collect, DependencyFilterUtils.classpathFilter("runtime"));
+                        var extraResult = repositorySystem.resolveDependencies(session.getRepositorySession(), extraRequest);
+                        for (var result : extraResult.getArtifactResults()) {
+                            var artifact = result.getArtifact();
+                            checkVersion(versions, artifact);
+                            if (artifact.getFile() == null || !artifact.getFile().isFile()) throw new IOException("本地依赖产物缺失: " + artifact);
+                            paths.add(q(artifact.getFile().getCanonicalPath()));
+                            System.out.println("[DevFlow] 追加本地运行依赖: " + artifact);
+                        }
                     }
                 }
                 System.out.println("[DevFlow] 已解析运行时依赖，启动 classpath 共 " + paths.size() + " 项。");
@@ -193,6 +221,12 @@ class DevflowMavenBridge {
         }
     }
 
+    static void checkVersion(Map<String, String> versions, Artifact artifact) throws IOException {
+        String key = artifact.getGroupId() + ":" + artifact.getArtifactId() + ":" + artifact.getExtension() + ":" + artifact.getClassifier();
+        String previous = versions.putIfAbsent(key, artifact.getVersion());
+        if (previous != null && !previous.equals(artifact.getVersion()))
+            throw new IOException("本地运行依赖版本冲突: " + key + " (" + previous + " / " + artifact.getVersion() + ")，请调整本地依赖版本");
+    }
     static String gav(MavenProject p) { return p.getGroupId() + ":" + p.getArtifactId() + ":" + p.getVersion(); }
     static String gav(Artifact a) { return a.getGroupId() + ":" + a.getArtifactId() + ":" + a.getVersion(); }
     static void watch(Set<String> paths, File file) throws IOException {

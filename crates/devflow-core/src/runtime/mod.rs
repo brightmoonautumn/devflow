@@ -5,6 +5,7 @@ pub mod managed;
 pub mod diagnostics;
 pub mod diagnosis;
 mod java_classpath;
+pub mod local_dependencies;
 mod maven;
 mod logs;
 mod ports;

@@ -35,6 +35,8 @@ pub struct JavaRequest {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum JavaOperation {
     #[serde(rename_all = "camelCase")]
+    ConfigureDependencies { dependencies: Vec<super::local_dependencies::LocalDependency> },
+    #[serde(rename_all = "camelCase")]
     Start {
         #[serde(default)]
         jvm_args: Vec<String>,
@@ -87,6 +89,7 @@ pub struct JavaQuery {
 pub struct JavaOptions {
     pub main_classes: Vec<String>,
     pub profiles: Vec<String>,
+    pub local_dependencies: Vec<super::local_dependencies::LocalDependency>,
 }
 #[derive(Default)]
 pub struct JavaService {
@@ -131,6 +134,7 @@ pub fn options(project: &DetectedProject) -> Result<JavaOptions> {
     Ok(JavaOptions {
         main_classes: project.main_classes.clone(),
         profiles,
+        local_dependencies: super::local_dependencies::get(&project.path)?,
     })
 }
 fn valid_profile(value: &str) -> bool {
@@ -239,8 +243,10 @@ fn maven_plan(root: &Path, boundary: &Path, options: BuildOptions) -> Result<Mav
     let reactor = maven::reactor_root(root, &boundary)?;
     let configuration = reactor.ancestors().take_while(|path| path.starts_with(&boundary))
         .find(|path| path.join(".mvn").is_dir()).unwrap_or(&reactor).to_owned();
+    let local_dependencies = super::local_dependencies::validate(&super::local_dependencies::get(&crate::workspace::display_path(root))?, &boundary)?;
     Ok(MavenPlan { reactor, configuration, boundary, target: root.to_owned(), home, java: CommandSpec::from(&java_command()?),
-        profiles: options.maven_profiles, mode: options.build_mode, force: options.force_build })
+        profiles: options.maven_profiles, mode: options.build_mode, force: options.force_build,
+        local_dependencies })
 }
 pub fn java_identity(pid: u32) -> Result<(u32, u64)> {
     let system = process_system();
@@ -583,6 +589,18 @@ mod tests {
         assert!(validate_args(&["-jar".into()], &[], &[]).is_err());
         assert!(validate_args(&[], &["bad\0arg".into()], &[]).is_err());
         assert!(validate_args(&[], &[], &["../prod".into()]).is_err());
+    }
+    #[test]
+    fn local_dependencies_configuration_is_strict_and_defaults_to_enabled() {
+        let request: JavaRequest = serde_json::from_value(serde_json::json!({
+            "projectPath": "D:/中文/app", "expectedRevision": 1,
+            "operation": {"type": "configure_dependencies", "dependencies": [{"value": "dm.jdbc.driver:dm8:20250513"}]}
+        })).unwrap();
+        assert!(matches!(request.operation, JavaOperation::ConfigureDependencies { dependencies } if dependencies.len() == 1 && dependencies[0].enabled));
+        assert!(serde_json::from_value::<JavaRequest>(serde_json::json!({
+            "projectPath": "D:/中文/app", "expectedRevision": 1,
+            "operation": {"type": "configure_dependencies", "dependencies": [{"value": "g:a:1", "shell": "anything"}]}
+        })).is_err());
     }
     #[test]
     fn launch_build_options_are_optional_and_maven_profiles_are_separate() {

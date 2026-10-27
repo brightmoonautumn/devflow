@@ -41,6 +41,8 @@ pub(crate) struct MavenPlan {
     pub profiles: Vec<String>,
     pub mode: BuildMode,
     pub force: bool,
+    #[serde(default)]
+    pub local_dependencies: Vec<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -83,7 +85,11 @@ fn normalize_model(model: &mut Model) -> Result<()> {
 #[derive(Clone, Deserialize, Serialize)]
 struct Built { input: String, output: String }
 #[derive(Clone, Deserialize, Serialize)]
-struct Launch { model: Model, global: String, classpath: Vec<PathBuf>, artifacts: String }
+struct Launch {
+    model: Model, global: String, classpath: Vec<PathBuf>, artifacts: String,
+    #[serde(default)]
+    local_dependencies: Vec<String>,
+}
 #[derive(Default, Deserialize, Serialize)]
 struct Cache {
     version: u32,
@@ -349,10 +355,11 @@ pub(crate) fn build(
         cache = Cache::default(); cache.version = VERSION;
     }
     log(directory, "检查 Maven 构建输入和已有产物…")?;
+    for dependency in &plan.local_dependencies { log(directory, &format!("本地运行依赖: {dependency}"))?; }
     let external_changed = fingerprint(cache.external.iter().cloned(), false)? != cache.external_stamp;
     if !plan.force && !external_changed {
         if let Some(launch) = cache.launches.get(&plan.target) {
-            if validate_model(&launch.model, plan).is_ok() {
+            if launch.local_dependencies == plan.local_dependencies && validate_model(&launch.model, plan).is_ok() {
                 let current_global = global(plan, &launch.model)?;
                 let current_inputs = inputs(&launch.model, &current_global)?;
                 if current_global == launch.global && dirty(&launch.model, &current_inputs, &cache, false)?.is_empty()
@@ -365,6 +372,7 @@ pub(crate) fn build(
         }
     }
     log(directory, "解析 Maven 有效模型及目标模块上游依赖…")?;
+    fs::write(directory.join("local-dependencies.txt"), plan.local_dependencies.iter().filter(|value| super::local_dependencies::coordinate(value)).cloned().collect::<Vec<_>>().join("\n"))?;
     let bridge = storage.join("DevflowMavenBridge.java");
     if fs::read_to_string(&bridge).ok().as_deref() != Some(BRIDGE) { fs::write(&bridge, BRIDGE)?; }
     let mut command = plan.java.command();
@@ -435,7 +443,14 @@ pub(crate) fn build(
         return Err(error("构建期间源码或配置发生变化，本次结果不缓存也不启动，请重新启动服务"));
     }
     let returned: Vec<PathBuf> = read_json(&directory.join("classpath.json"))?;
-    let paths = returned.iter().map(|path| resolved_path(path)).collect::<Result<Vec<_>>>()?;
+    let mut paths = returned.iter().map(|path| resolved_path(path)).collect::<Result<Vec<_>>>()?;
+    for value in &plan.local_dependencies {
+        if !super::local_dependencies::coordinate(value) {
+            let path = Path::new(value).canonicalize()?;
+            if !path.starts_with(&plan.boundary) || !path.is_file() { return Err(error("本地 JAR 已失效或超出工作区")); }
+            if !paths.contains(&path) { paths.push(path); }
+        }
+    }
     if paths.is_empty() || paths.len() > 16384 || paths.iter().any(|p| !p.is_absolute() || !p.exists()) {
         return Err(error("Maven 返回的运行 classpath 无效或产物缺失"));
     }
@@ -457,7 +472,7 @@ pub(crate) fn build(
         }
     }
     cache.external_stamp = fingerprint(cache.external.iter().cloned(), false)?;
-    cache.launches.insert(plan.target.clone(), Launch { model, global: after_global, classpath: paths, artifacts });
+    cache.launches.insert(plan.target.clone(), Launch { model, global: after_global, classpath: paths, artifacts, local_dependencies: plan.local_dependencies.clone() });
     write_json(&cache_file, &cache)?;
     log(directory, "构建成功，已记录构建指纹和运行 classpath。")?;
     Ok(Some(result))
@@ -533,7 +548,7 @@ mod tests {
         let target = f.0.join("app");
         let module = Module { path: target.clone(), name: "app".into(), packaging: "jar".into(), directory: target.join("target"), output: target.join("target/classes"), inputs: vec![target.join("src")], upstream: vec![] };
         let model = Model { modules: vec![module.clone()], descriptors: vec![f.0.join("pom.xml"), target.join("pom.xml")], watched: vec![], activation: vec![] };
-        let plan = MavenPlan { reactor: f.0.clone(), configuration: f.0.clone(), boundary: f.0.clone(), target: target.clone(), home: f.0.join("tools/maven"), java: CommandSpec::from(&Command::new("java")), profiles: vec![], mode: BuildMode::Workspace, force: false };
+        let plan = MavenPlan { reactor: f.0.clone(), configuration: f.0.clone(), boundary: f.0.clone(), target: target.clone(), home: f.0.join("tools/maven"), java: CommandSpec::from(&Command::new("java")), profiles: vec![], mode: BuildMode::Workspace, force: false, local_dependencies: vec![] };
         let directory = |name: &str| { let path = f.0.join("state/runtime/service").join(name); fs::create_dir_all(&path).unwrap(); path };
         let first = directory("first");
         let result = build(&plan, &first, |_, tick| {
@@ -592,6 +607,8 @@ mod tests {
         };
         publish("transitive", ""); publish("excluded", ""); publish("provided", ""); publish("test-only", "");
         publish("driver", &format!("{}{}", dependency("transitive", "compile"), dependency("excluded", "compile")));
+        publish("local-only", "");
+        publish("local-driver", &dependency("local-only", "runtime"));
         let repository = format!("file:///{}", display_path(&f.0.join("repo")).replace('\\', "/").trim_start_matches('/').replace(' ', "%20"));
         f.write("pom.xml", &format!(r#"<project><modelVersion>4.0.0</modelVersion><groupId>{group}</groupId><artifactId>parent</artifactId><version>1</version><packaging>pom</packaging>
 <modules><module>library</module><module>app</module></modules>
@@ -604,8 +621,8 @@ mod tests {
         f.write("app/pom.xml", &format!("<project><modelVersion>4.0.0</modelVersion>{parent}<artifactId>app</artifactId><dependencies>{}{}{}{driver}</dependencies></project>", dependency("library", "compile"), dependency("provided", "provided"), dependency("test-only", "test")));
         f.write("app/src/main/java/App.java", "public class App { Library library; public static void main(String[] args) {} }");
         let target = f.0.join("app");
-        let plan = MavenPlan { reactor: f.0.clone(), configuration: f.0.clone(), boundary: f.0.clone(), target,
-            home, java: CommandSpec::from(&Command::new("java")), profiles: vec![], mode: BuildMode::Workspace, force: false };
+        let mut plan = MavenPlan { reactor: f.0.clone(), configuration: f.0.clone(), boundary: f.0.clone(), target,
+            home, java: CommandSpec::from(&Command::new("java")), profiles: vec![], mode: BuildMode::Workspace, force: false, local_dependencies: vec![format!("{group}:local-driver:1")] };
         let run = |name: &str| { let path = f.0.join("state/runtime/service").join(name); fs::create_dir_all(&path).unwrap(); path };
         let execute = |mut command: Command, tick: &mut dyn FnMut() -> Result<()>| -> Result<Option<i32>> {
             // Use production process configuration and always reap Maven,
@@ -635,6 +652,9 @@ mod tests {
         let paths: Vec<_> = std::env::split_paths(&first).collect();
         assert!(paths.iter().any(|p| p.ends_with("driver-1.jar")));
         assert!(paths.iter().any(|p| p.ends_with("transitive-1.jar")));
+        assert!(paths.iter().any(|p| p.ends_with("local-driver-1.jar")));
+        assert!(paths.iter().any(|p| p.ends_with("local-only-1.jar")));
+        assert!(!fs::read_to_string(f.0.join("app/pom.xml")).unwrap().contains("local-driver"));
         for absent in ["excluded-1.jar", "provided-1.jar", "test-only-1.jar"] {
             assert!(!paths.iter().any(|p| p.ends_with(absent)), "unexpected runtime artifact: {absent}");
         }
@@ -645,6 +665,11 @@ mod tests {
         // workspace reader, then resolve the same complete runtime graph.
         f.write("app/src/main/java/App.java", "public class App { Library library; public static void main(String[] args) { System.out.println(1); } }");
         assert_eq!(first, build(&plan, &run("changed"), execute).unwrap().unwrap());
+        plan.local_dependencies.clear();
+        let without = build(&plan, &run("without-local"), execute).unwrap().unwrap();
+        assert!(!without.contains("local-driver-1.jar"));
+        assert!(!without.contains("local-only-1.jar"));
+        assert_eq!(without, build(&plan, &run("without-local-cached"), |_, _| panic!("removed local dependencies must also cache correctly")).unwrap().unwrap());
     }
     #[test]
     fn reactor_lock_excludes_other_handles_and_releases_on_drop() {

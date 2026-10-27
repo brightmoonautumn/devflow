@@ -414,6 +414,9 @@ body:has(.ws-bottom-panel.is-resizing) * { cursor: row-resize !important; }
 .java-launch-dialog { width: min(560px, calc(100vw - 24px)); }
 .java-launch-dialog form { min-height: 0; overflow-y: auto; }
 .java-launch-fields { display: flex; flex-direction: column; gap: 17px; }
+.local-dependency-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; }
+.local-dependency-row > :first-child { min-width: 0; overflow-wrap: anywhere; }
+.local-dependency-row > button { flex-shrink: 0; }
 .java-launch-hint { margin: 0; font-size: var(--ws-font-small); line-height: 1.8; color: var(--ws-muted); }
 .java-profile-fields { margin: 0; border: 1px solid var(--ws-border); border-radius: 8px; padding: 14px; min-width: 0; }
 .java-profile-fields legend { padding: 0 6px; font-size: var(--ws-font-body); font-weight: 500; }

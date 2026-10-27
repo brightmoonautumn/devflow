@@ -170,11 +170,12 @@ export interface DevFlowMetrics {
 }
 export function getDevFlowMetrics(signal: AbortSignal) { return request<DevFlowMetrics>('/api/runtime/self', { signal }) }
 
-export interface JavaOptions { mainClasses: string[]; profiles: string[] }
+export interface LocalJavaDependency { value: string; enabled: boolean }
+export interface JavaOptions { mainClasses: string[]; profiles: string[]; localDependencies: LocalJavaDependency[] }
 export interface JavaLogLine { sequence: number; stream: string; text: string }
 export interface JavaOutput { runId: string; state: string; pid: number | null; exitCode: number | null; lines: JavaLogLine[]; nextCursor: number; truncated: boolean; arthasUrl: string | null; attaching: boolean }
 type JavaLaunchOptions = { jvmArgs: string[]; args: string[]; profiles: string[]; mainClass: string; mavenProfiles?: string[]; buildMode?: 'workspace' | 'install'; forceBuild?: boolean }
-export type JavaOperation = ({ type: 'start' } & JavaLaunchOptions) | ({ type: 'restart'; pid?: number } & JavaLaunchOptions) | { type: 'stop'; pid?: number } | { type: 'attach'; pid: number }
+export type JavaOperation = ({ type: 'start' } & JavaLaunchOptions) | ({ type: 'restart'; pid?: number } & JavaLaunchOptions) | { type: 'stop'; pid?: number } | { type: 'attach'; pid: number } | { type: 'configure_dependencies'; dependencies: LocalJavaDependency[] }
 export function getJavaOptions(projectPath: string, signal?: AbortSignal) { return request<JavaOptions>(`/api/runtime/java/options?${new URLSearchParams({ projectPath })}`, { signal }) }
 export function getJavaOutput(projectPath: string, after: number, runId: string, signal: AbortSignal) { return request<JavaOutput>(`/api/runtime/java/output?${new URLSearchParams({ projectPath, after: String(after), runId })}`, { signal }) }
 export function executeJava(projectPath: string, expectedRevision: number, operation: JavaOperation) { return request<JavaOutput>('/api/runtime/java', { method: 'POST', body: JSON.stringify({ projectPath, expectedRevision, operation }) }) }

@@ -109,6 +109,11 @@ impl DevFlowEngine {
             runtime::java::java_identity(pid)
         };
         let result = match request.operation {
+            JavaOperation::ConfigureDependencies { dependencies } => {
+                let boundary = self.workspace.java_build_boundary(&project.path, request.expected_revision)?;
+                runtime::local_dependencies::save(&project.path, dependencies, &boundary)?;
+                self.java.output(&project, 0, None)
+            }
             JavaOperation::Start {
                 jvm_args,
                 args,

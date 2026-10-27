@@ -1,5 +1,28 @@
 # 工作区
 
+## Java 本地运行依赖（2026-10-27）
+
+- 服务的启动配置增加“本地运行依赖”：可添加 `groupId:artifactId:version` 或项目工作区内 JAR 的绝对路径，支持逐项启用、禁用及删除。依赖不写入业务 POM，也不注入 Maven 编译、install/package 或复制依赖插件；只在普通构建完成后加入 Java 启动 classpath。源码直接 import 的编译依赖仍应由项目 POM 管理。
+- 配置保存在 DevFlow 启动工作目录下的 `.devflow/local-java-dependencies.json`，该目录已被本仓库 Git 忽略，不进入业务项目。`projectDefaults` 按规范化的小写绝对目录匹配，最长祖先目录优先；`services` 为服务目录的完整覆盖，空数组明确关闭该服务的默认依赖。Web 读取和保存后端配置，MCP 启动、重启同样自动应用，不依赖浏览器 localStorage。
+- `java_options` 增加 `localDependencies: [{ value, enabled }]`；`java_execute` 增加 `operation: { type: "configure_dependencies", dependencies: [...] }`。沿用鉴权、当前工作区成员及版本校验，HTTP/MCP 共用核心保存和启动逻辑。未配置的老客户端仍按原方式启动。
+- Maven 坐标通过已有 Maven 安装、用户 settings、项目仓库和运行时解析器解析传递依赖；不会修改 Maven 项目模型中的 dependencies。解析失败或与项目运行依赖存在同坐标不同版本时停止启动并输出原因；手动添加的 JAR 不做内容级重复类分析。本地文件校验绝对路径、扩展名、文件存在及 canonical 工作区边界，拒绝相对路径和越界链接。每个服务最多 64 项，启动输出显示本次启用的依赖。
+- 启用的依赖列表进入启动 classpath 缓存匹配；新增、删除、禁用或改变版本均重新生成 classpath，不复用旧依赖组合。新增依赖的产物沿用既有指纹检查，解析过程复用独立宿主的取消和进程树清理。
+- 本机已为 `D:/CompanyProject/extreme-plus` 写入项目级默认 `dm.jdbc.driver:dm8:20250513`，涵盖该目录内现有及以后发现的 Java 服务；其他项目不受影响。该默认值仅存在本机配置，没有硬编码进产品源码。需要编译并重启新版 DevFlow 后生效。
+- 新增路径边界、中文/空格 JAR、禁用、版本冲突和请求反序列化的测试代码；扩展真实 Maven 集成用例，覆盖本地依赖及传递依赖、POM 不变、移除后的缓存刷新。按约定未编译、未运行测试，尚待用户验收：保存与刷新、Web/MCP 启动及重启、驱动加载、版本冲突、解析失败、取消期间进程树回收，以及 CI 构建不包含本地依赖。
+
+本机配置格式示例（此配置文件本身不提交）：
+
+```json
+{
+  "projectDefaults": {
+    "d:/companyproject/extreme-plus": [
+      { "value": "dm.jdbc.driver:dm8:20250513", "enabled": true }
+    ]
+  },
+  "services": {}
+}
+```
+
 ## 左侧导航刷新恢复（2026-10-26）
 
 - 将当前主页面（服务/文件工作台、看板、质量保证）加入已有 `devflow.workbench-layout.v1` 浏览器本地视图状态，刷新后恢复；资源管理器/搜索选择及侧栏展开状态继续沿用已有持久化。无历史或状态无效时回到服务/文件工作台。

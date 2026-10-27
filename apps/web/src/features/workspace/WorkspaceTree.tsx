@@ -332,8 +332,8 @@ export function WorkspaceTree({ activeFilePath, data, open, hidden, view, onChan
       <button className="ws-icon-button" aria-label="紧凑文件夹" title="紧凑文件夹：合并连续单子目录" aria-pressed={compact} onClick={() => {
         const next = !compact; setReveal(null); setCompact(next); setMenu(null)
       }}><Settings2 size={14} /></button>
-      <button className="ws-icon-button" aria-label="刷新目录树" title="刷新目录树" onClick={() => { setReveal(null); setGeneration(current => current + 1) }}><RefreshCw size={14} /></button>
       <button className="ws-icon-button" aria-label="折叠所有文件夹" title="折叠所有文件夹" onClick={() => { setReveal(null); if (scope) writeViewState(scope, { expanded: [] }); setGeneration(current => current + 1) }}><ChevronsDownUp size={14} /></button>
+      <button className="ws-icon-button" aria-label="刷新目录树" title="刷新目录树" onClick={() => { setReveal(null); setGeneration(current => current + 1) }}><RefreshCw size={14} /></button>
       <button className="ws-icon-button" aria-label="向左收起文件管理器" title="向左收起文件管理器" onClick={() => { onClose(); sidebarRef.current?.querySelector<HTMLButtonElement>('.ws-sidebar-toggle')?.focus() }}><ChevronLeft size={14} /></button>
     </div></div>
     <div className="ws-tree-scroll">
