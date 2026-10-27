@@ -1,6 +1,6 @@
 .board-workbench-host { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .board-workbench-host[hidden] { display: none; }
-.kb-quick-create { display: flex; gap: 8px; padding: 8px 16px 12px; }
+.kb-quick-create { display: flex; flex: 1 1 100px; min-width: 0; }
 .kb-page { --kb-purple: #a89ae8; --kb-purple-bg: #a89ae814; --kb-orange: #dba45e; position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--ws-bg); color: var(--ws-ink); font-size: var(--ws-font-body); }
 [data-theme='light'] .kb-page { --kb-purple: #7860ba; --kb-purple-bg: #7860ba0c; --kb-orange: #a86b27; }
 /* Keep button defaults below card/tab/overlay rules; exclusions must not raise specificity. */
@@ -137,7 +137,7 @@
 @media (prefers-reduced-motion: reduce) { .kb-page :where(button:not(.df-button, .df-control, .df-checkbox)) { transition: none; } }
 .kb-page .kb-columns { padding-bottom: 72px; }
 
-.kb-board-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 8px 16px; font-size: var(--ws-font-small); flex-shrink: 0; }
+.kb-board-tools { display: flex; align-items: center; gap: 6px; padding: 8px 16px; font-size: var(--ws-font-small); flex-shrink: 0; }
 .kb-board-tools button:not(:is(.df-button, .df-control)) { padding: 5px; color: var(--ws-muted); white-space: nowrap; }
 .kb-empty-board { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center; color: var(--ws-muted); }
 .kb-error { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; color: var(--ws-ink); background: var(--kb-purple-bg); border-bottom: 1px solid var(--ws-border); font-size: var(--ws-font-small); overflow-wrap: anywhere; }
@@ -165,7 +165,10 @@
 .kb-detail-edit-actions { flex-wrap: wrap; }
 .kb-create-dialog .kb-error { margin: 0 0 12px; }
 .kb-quick-create > .df-control { flex: 1; }
-.kb-feature-filter { flex: 0 1 180px; }
+.kb-feature-filter { flex: 0 1 150px; min-width: 100px; }
+.kb-board-tools > .df-button { flex: 0 0 auto; padding: 8px; }
+.kb-task-menu { position: fixed; z-index: 110; min-width: 130px; padding: 4px; background: var(--ws-surface); border: 1px solid var(--ws-border); border-radius: 6px; box-shadow: var(--ws-shadow); }
+.kb-page .kb-task-menu button { width: 100%; justify-content: flex-start; padding: 8px 10px; color: var(--ws-error); }
 .kb-editor-fields > .df-field, .kb-editor-fields > .kb-form-row,
 .kb-detail-editor fieldset > .df-field, .kb-detail-editor fieldset > .kb-form-row { margin-bottom: 16px; }
 .kb-editor-fields > .df-checkbox-field { margin-bottom: 16px; }

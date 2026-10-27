@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
-import { X } from 'lucide-react'
+import { GitBranch, X } from 'lucide-react'
 import { request } from '../../lib/api'
 import { useDialogs } from '../../components/form/BaseDialog'
 
@@ -30,7 +30,7 @@ export function BoardSyncButton({ workspaceKey, workspaceRevision, boardRevision
     const timer = setInterval(() => { if (document.visibilityState === 'visible') void refresh() }, 5000)
     return () => { active = false; clearInterval(timer) }
   }, [workspaceKey, workspaceRevision, boardRevision])
-  return <BaseButton type="button" disabled={disabled} onClick={onClick}>{label}</BaseButton>
+  return <BaseButton type="button" disabled={disabled} title={label} aria-label={label} onClick={onClick}><GitBranch size={16} /></BaseButton>
 }
 
 export function BoardSyncPanel({ workspaceKey, workspaceRevision, boardRevision, onClose }: Props) {

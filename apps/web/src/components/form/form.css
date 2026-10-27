@@ -32,7 +32,8 @@
   animation: df-select-in 120ms ease-out;
 }
 .df-select-viewport { padding: 4px; }
-.df-select-item { position: relative; padding: 8px 30px 8px 9px; border-radius: 5px; outline: none; cursor: default; overflow-wrap: anywhere; user-select: none; }
+.df-select-item { position: relative; padding: 8px 30px 8px 9px; border-radius: 5px; outline: none; cursor: pointer; overflow-wrap: anywhere; user-select: none; }
+.df-select-item[data-disabled] { cursor: default; }
 .df-select-item[data-highlighted] { background: var(--ws-hover); }
 .df-select-item[data-state='checked'] { background: var(--ws-accent-bg); color: var(--ws-accent); }
 .df-select-indicator { position: absolute; right: 9px; top: 0; bottom: 0; display: flex; align-items: center; }
@@ -41,6 +42,7 @@
 .df-checkbox-field:has([data-state='checked']) { border-color: var(--ws-accent); background: var(--ws-accent-bg); }
 .df-checkbox-field[data-disabled] { opacity: .55; }
 .df-checkbox-field label { cursor: pointer; overflow-wrap: anywhere; }
+.df-checkbox-field[data-disabled] label { cursor: default; }
 .df-checkbox { display: grid; place-items: center; width: 16px; height: 16px; padding: 0; flex-shrink: 0; border: 1px solid var(--ws-muted); border-radius: 4px; background: var(--ws-bg); color: var(--ws-bg); }
 .df-checkbox[data-state='checked'] { background: var(--ws-accent); border-color: var(--ws-accent); }
 .df-checkbox-indicator { display: flex; }
