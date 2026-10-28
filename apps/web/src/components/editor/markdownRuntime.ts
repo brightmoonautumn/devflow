@@ -19,7 +19,7 @@ export function needsSourcePreview(markdown: string): boolean {
     if (match) {
       if (/^\s*mermaid\b/i.test(match[2])) return true
       fence = { character: match[1][0], length: match[1].length }
-    } else if (/^\s*(?:<(?:table|thead|tbody|tr|td|th|div|details|summary)\b|<a\s+[^>]*(?:id|name)\s*=)/i.test(line)) return true
+    } else if (/!\[[^\]]*\]|<img\b|^\s*(?:<(?:table|thead|tbody|tr|td|th|div|details|summary)\b|<a\s+[^>]*(?:id|name)\s*=)/i.test(line)) return true
   }
   return false
 }

@@ -268,6 +268,7 @@ fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, huma
             let note = note.unwrap_or_default().trim().to_owned(); text(&note, 16000, false)?;
             let owned = t.owner_id.as_deref() == Some(actor);
             let allowed = match action.as_str() {
+                "move" => human && ["todo", "doing", "review", "done"].contains(&note.as_str()) && t.status != note,
                 "complete" => human && t.status != "done",
                 "claim" => t.status == "todo" && t.blocked.is_none() && t.owner_id.is_none(),
                 "release" | "submit" | "progress" => t.status == "doing" && (owned || human),
@@ -280,6 +281,7 @@ fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, huma
             if !allowed { return Err(error("conflict", "当前状态或执行者不允许此操作，请刷新后检查任务")); }
             if ["submit", "progress", "block", "reject"].contains(&action.as_str()) { text(&note, 16000, true)?; }
             match action.as_str() {
+                "move" => { t.status = note.clone(); if note == "todo" || note == "done" { t.owner = None; t.owner_id = None; } if note == "done" { t.blocked = None; } }
                 "complete" => { t.status = "done".into(); t.owner = None; t.owner_id = None; t.blocked = None; }
                 "claim" => { t.status = "doing".into(); t.owner = Some(actor.into()); t.owner_id = Some(actor.into()); }
                 "release" => { t.status = "todo".into(); t.owner = None; t.owner_id = None; }
@@ -290,7 +292,7 @@ fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, huma
                 "block" => t.blocked = Some(note.clone()), "unblock" => t.blocked = None,
                 _ => (),
             }
-            let label = match action.as_str() { "complete" => "用户手动标记完成", "claim" => "认领任务", "release" => "释放任务", "submit" => "提交验收", "approve" => "通过验收", "reject" => "退回修改", "reopen" => "重新打开", "block" => "标记阻塞", "unblock" => "解除阻塞", _ => "记录进展" };
+            let label = match action.as_str() { "move" => "人工调整状态", "complete" => "用户手动标记完成", "claim" => "认领任务", "release" => "释放任务", "submit" => "提交验收", "approve" => "通过验收", "reject" => "退回修改", "reopen" => "重新打开", "block" => "标记阻塞", "unblock" => "解除阻塞", _ => "记录进展" };
             t.activity.push(stamp(actor, &format!("{label}{}", if note.is_empty() { String::new() } else { format!("：{note}") })));
             format!("{id}：{label}")
         }
@@ -407,6 +409,19 @@ mod tests {
     impl Drop for Fixture { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.root); } }
     fn feature(id: &str) -> Feature {
         Feature { id: id.into(), name: "看板功能".into(), description: "描述".into(), goal: "目标".into(), x: 100.0, y: 100.0 }
+    }
+
+    #[test]
+    fn human_can_move_task_without_notes() {
+        let f = Fixture::new();
+        let id = f.seed();
+        assert!(f.action(&id, "move", Some("review"), "Codex:worker", false).is_err());
+        let board = f.action(&id, "move", Some("review"), "你", true).unwrap();
+        assert_eq!(board.tasks[0].status, "review");
+        assert!(board.tasks[0].result.is_none());
+        let board = f.action(&id, "move", Some("todo"), "你", true).unwrap();
+        assert_eq!(board.tasks[0].status, "todo");
+        assert!(f.action(&id, "move", Some("invalid"), "你", true).is_err());
     }
 
     #[test]

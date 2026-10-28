@@ -13,17 +13,17 @@ export type BoardOperation =
   | ({ type: 'task_create' } & Pick<BoardTask, 'title' | 'description' | 'acceptance' | 'feature' | 'priority'>)
   | ({ type: 'task_update' } & Pick<BoardTask, 'id' | 'title' | 'description' | 'acceptance' | 'feature' | 'priority'>)
   | { type: 'task_delete'; id: string }
-  | { type: 'action'; id: string; action: 'complete' | 'claim' | 'release' | 'submit' | 'progress' | 'approve' | 'reject' | 'reopen' | 'block' | 'unblock'; text?: string }
+  | { type: 'action'; id: string; action: 'move' | 'complete' | 'claim' | 'release' | 'submit' | 'progress' | 'approve' | 'reject' | 'reopen' | 'block' | 'unblock'; text?: string }
   | { type: 'import'; features: BoardFeature[]; tasks: BoardTask[]; edges: [string, string][] }
 
 export function activityText(entry: string) {
   return entry.replace(/^(\d+) · /, (_, seconds: string) => `${new Date(Number(seconds) * 1000).toLocaleString()} · `)
 }
-export const statuses: { id: TaskStatus; label: string; caption: string }[] = [
-  { id: 'todo', label: '待开始', caption: '准备就绪，等待认领' },
-  { id: 'doing', label: '进行中', caption: '正在推进的任务' },
-  { id: 'review', label: '待验收', caption: '交付结果，等你确认' },
-  { id: 'done', label: '已完成', caption: '已经验收通过' },
+export const statuses: { id: TaskStatus; label: string }[] = [
+  { id: 'todo', label: '待开始' },
+  { id: 'doing', label: '进行中' },
+  { id: 'review', label: '待验收' },
+  { id: 'done', label: '已完成' },
 ]
 // Legacy browser drafts are read only for an explicit one-time import.
 export type BoardDraft = { tasks: BoardTask[]; features: BoardFeature[] }

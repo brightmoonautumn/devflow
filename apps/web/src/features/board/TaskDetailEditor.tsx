@@ -14,10 +14,11 @@ type Props = {
   task: BoardTask; features: BoardFeature[]; revision: number; busy: boolean; formId: string
   onDirty: (dirty: boolean) => void
   onCopyInstructions: () => void
+  onCopyDescription: (description: string) => void
   onSave: (operation: BoardOperation, revision: number) => Promise<boolean>
 }
 
-export function TaskDetailEditor({ task, features, revision, busy, formId, onDirty, onSave, onCopyInstructions }: Props) {
+export function TaskDetailEditor({ task, features, revision, busy, formId, onDirty, onSave, onCopyInstructions, onCopyDescription }: Props) {
   const id = useId()
   const choices = featureChoices(features)
   const [draft, setDraft] = useState(() => fields(task))
@@ -42,7 +43,7 @@ export function TaskDetailEditor({ task, features, revision, busy, formId, onDir
     <fieldset disabled={busy}>
       <BaseField htmlFor={`${id}-field-1`} label="任务标题"><BaseInput id={`${id}-field-1`} required maxLength={120} value={draft.title} onChange={e => change({ title: e.target.value })} /></BaseField>
       <div className="kb-form-row"><BaseField htmlFor={`${id}-field-2`} label="所属功能"><BaseSelect id={`${id}-field-2`} disabled={busy} value={draft.feature || choices.unclassified} onValueChange={value => change({ feature: value === choices.unclassified ? '' : value })} options={choices.withUnclassified} /></BaseField><BaseField htmlFor={`${id}-field-3`} label="优先级"><BaseSelect id={`${id}-field-3`} disabled={busy} value={draft.priority} onValueChange={value => { if (value === '高' || value === '普通') change({ priority: value }) }} options={priorityChoices} /></BaseField></div>
-      <BaseField htmlFor={`${id}-field-4`} label="任务描述" action={<BaseButton disabled={busy || dirty} onClick={onCopyInstructions}>复制 AI 整理指令</BaseButton>}><BaseTextarea className="kb-task-description" id={`${id}-field-4`} rows={12} maxLength={4000} placeholder="先粗略记录，之后逐步补充…" value={draft.description} onChange={e => change({ description: e.target.value })} /></BaseField>
+      <BaseField htmlFor={`${id}-field-4`} label="任务描述" action={<span className="kb-description-actions"><BaseButton type="button" disabled={!draft.description} onClick={() => onCopyDescription(draft.description)}>复制描述</BaseButton><BaseButton type="button" disabled={busy || dirty} onClick={onCopyInstructions}>复制 AI 整理指令</BaseButton></span>}><BaseTextarea className="kb-task-description" id={`${id}-field-4`} rows={12} maxLength={4000} placeholder="先粗略记录，之后逐步补充…" value={draft.description} onChange={e => change({ description: e.target.value })} /></BaseField>
       <BaseField htmlFor={`${id}-field-5`} label="目标与验收"><BaseTextarea id={`${id}-field-5`} rows={3} maxLength={4000} placeholder="完成后如何判断达到目标" value={draft.acceptance} onChange={e => change({ acceptance: e.target.value })} /></BaseField>
       <div className="kb-inline-save"><span role="status">{dirty ? '有未保存修改' : '已保存'}</span>{dirty && <BaseButton type="button" onClick={reset}>撤销修改</BaseButton>}</div>
     </fieldset>

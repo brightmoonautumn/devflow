@@ -7,6 +7,7 @@ import { readOnlyShare } from '../../lib/access'
 import type { SourceEditorProps } from './SourceEditor'
 import { markdownAssetRoot, needsSourcePreview, prepareMarkdownRuntime, releaseMarkdownEditor, resolveMarkdownLink } from './markdownRuntime'
 import { MarkdownSourcePreview } from './MarkdownSourcePreview'
+import type { MarkdownImageContext } from './markdownImages'
 import 'vditor/dist/index.css'
 import './markdown-editor.css'
 
@@ -14,7 +15,7 @@ const SourceEditor = lazy(() => import('./SourceEditor'))
 type Mode = 'document' | 'source' | 'split'
 
 /** Vditor is an implementation detail; persistence and authorization stay in the workbench. */
-export default function MarkdownEditor(props: SourceEditorProps & { theme: 'dark' | 'light'; active?: boolean; onOpenFile?: (path: string) => void; toolbarContainer?: HTMLElement | null; viewStateKey?: string }) {
+export default function MarkdownEditor(props: SourceEditorProps & MarkdownImageContext & { theme: 'dark' | 'light'; active?: boolean; onOpenFile?: (path: string) => void; toolbarContainer?: HTMLElement | null; viewStateKey?: string }) {
   const [mode, setMode] = useState<Mode>(() => {
     if (props.location && props.location.sequence !== 0) return 'source'
     try {
@@ -213,7 +214,7 @@ export default function MarkdownEditor(props: SourceEditorProps & { theme: 'dark
         if ((event.target as Element).closest('a[href]')) linkClick(event)
         else expandDiagram(event)
       }}>
-        {preserveSource ? <div ref={host} className="md-source-preview-host"><MarkdownSourcePreview value={props.value} active={props.active !== false && mode !== 'source'} dark={dark} readonly={props.readonly} onEdit={() => switchMode('split')} /></div> : <>
+        {preserveSource ? <div ref={host} className="md-source-preview-host"><MarkdownSourcePreview path={props.path} imageRevision={props.imageRevision} imageRoots={props.imageRoots} value={props.value} active={props.active !== false && mode !== 'source'} dark={dark} readonly={props.readonly} onEdit={() => switchMode('split')} /></div> : <>
           {!ready && !error && <p className="md-loading" role="status">正在打开 Markdown 文档…</p>}
           <div className={`md-vditor-frame ${ready ? 'is-ready' : ''}`}><div ref={host} className="md-vditor-host" /></div>
         </>}

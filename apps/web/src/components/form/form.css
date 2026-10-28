@@ -58,3 +58,5 @@
   .df-control, .df-select-icon { transition: none; }
   .df-select-content { animation: none; }
 }
+
+.df-select-action { margin-top: 4px; border-top: 1px solid var(--ws-border); border-radius: 0; color: var(--ws-accent); }

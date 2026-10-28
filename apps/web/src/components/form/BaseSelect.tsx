@@ -14,18 +14,21 @@ type Props = {
   disabled?: boolean
   mono?: boolean
   className?: string
+  action?: { label: string; onSelect: () => void }
   'aria-label'?: string
   'aria-describedby'?: string
 }
 
 /** Keep vendor primitives, popup placement and theme inheritance behind our API. */
-export function BaseSelect({ id, name, value, onValueChange, options, placeholder = '请选择', required, disabled, mono, className = '', ...aria }: Props) {
+export function BaseSelect({ id, name, value, onValueChange, options, placeholder = '请选择', required, disabled, mono, className = '', action, ...aria }: Props) {
   const [trigger, setTrigger] = useState<HTMLButtonElement | null>(null)
   const [open, setOpen] = useState(false)
   // Native modal dialogs are in the top layer; a body portal would be inert behind them.
   const host = trigger?.closest<HTMLElement>('dialog, .workspace-shell') ?? trigger?.ownerDocument.body
   const selected = options.find(option => option.value === value)
-  return <Select.Root name={name} value={selected ? value : ''} onValueChange={onValueChange} required={required} disabled={disabled} open={open} onOpenChange={setOpen}>
+  let actionValue = '__select_action__'
+  while (options.some(option => option.value === actionValue)) actionValue += '_'
+  return <Select.Root name={name} value={selected ? value : ''} onValueChange={next => { if (action && next === actionValue) action.onSelect(); else onValueChange(next) }} required={required} disabled={disabled} open={open} onOpenChange={setOpen}>
     <Select.Trigger {...aria} ref={setTrigger} id={id} className={`df-control df-select ${mono ? 'is-mono' : ''} ${className}`} title={selected?.label}>
       <Select.Value placeholder={placeholder}>{selected?.label}</Select.Value>
       <Select.Icon className="df-select-icon"><ChevronDown size={15} /></Select.Icon>
@@ -43,6 +46,7 @@ export function BaseSelect({ id, name, value, onValueChange, options, placeholde
             <Select.ItemText>{option.label}</Select.ItemText>
             <Select.ItemIndicator className="df-select-indicator"><Check size={14} /></Select.ItemIndicator>
           </Select.Item>)}
+          {action && <Select.Item className="df-select-item df-select-action" value={actionValue}><Select.ItemText>{action.label}</Select.ItemText></Select.Item>}
         </Select.Viewport>
         <Select.ScrollDownButton className="df-select-scroll"><ChevronDown size={14} /></Select.ScrollDownButton>
       </Select.Content>

@@ -1,7 +1,7 @@
 import { readOnlyShare } from '../../lib/access'
 import { pathWithin, readViewState, restoredTabs, viewPathKey, workspaceViewKey, writeViewState, type WorkspaceViewState } from './workspaceViewState'
 import { useDialogs } from '../../components/form/BaseDialog'
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Check, FileText, LoaderCircle, RefreshCw, Server, X } from 'lucide-react'
 import { isImagePath, readWorkspaceImage, readWorkspaceFile, writeWorkspaceFile, type WorkspaceImage, type WorkspaceFile, type WorkspaceResponse } from '../../lib/api'
 import { FileTabMenu, type FileTabMenuAction } from './FileTabMenu'
@@ -30,6 +30,7 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
   const tabMenuTarget = useRef<HTMLElement | null>(null)
   const closingBatch = useRef(false)
   const [state, setState] = useState<Workbench>({ tabs: [], active: null })
+  const imageRoots = useMemo(() => workspace?.folders.map(folder => folder.path) ?? [], [workspace?.folders])
   const scope = workspaceViewKey(workspace)
   const [restoredScope, setRestoredScope] = useState<string | null>(null)
   const [editorActions, setEditorActions] = useState<HTMLDivElement | null>(null)
@@ -375,7 +376,7 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
     {state.tabs.map(tab => <section key={tab.key} id={`file-pane-${encodeURIComponent(tab.key)}`} role="tabpanel" aria-labelledby={`file-tab-${encodeURIComponent(tab.key)}`} hidden={state.active !== tab.key} className="file-pane">
       {tab.error && <div className="file-notice is-error" role="alert">{tab.error}<button className="ws-outline-button" disabled={tab.loading || tab.saving || tab.deleting || !workspace} onClick={() => reloadFile(tab)}>重新读取</button></div>}
       {tab.file?.readonlyReason && !(readOnlyShare && tab.file.readonlyReason === '只读分享') && <p className="file-notice">{tab.file.readonlyReason}</p>}
-      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.image ? <Suspense fallback={<div className="file-loading" role="status">正在加载图片查看器…</div>}><ImageViewer key={tab.path} image={tab.image} /></Suspense> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor theme={theme} key={tab.path} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} active={state.active === tab.key} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
+      {tab.loading ? <div className="file-loading" role="status"><LoaderCircle size={18} className="spinning" />正在读取文件…</div> : tab.image ? <Suspense fallback={<div className="file-loading" role="status">正在加载图片查看器…</div>}><ImageViewer key={tab.path} image={tab.image} /></Suspense> : tab.file ? <Suspense fallback={<div className="file-loading" role="status">正在加载编辑器…</div>}><FileEditor imageRevision={workspace?.revision} imageRoots={imageRoots} theme={theme} key={tab.path} viewStateKey={scope ? `${scope}:editor:${keyFor(tab.path)}` : undefined} active={state.active === tab.key} toolbarContainer={state.active === tab.key ? editorActions : null} onOpenFile={onOpenFile} path={tab.path} value={tab.draft} readonly={tab.file.readonly || !!tab.deleting} location={tab.location} onChange={draft => updateTab(tab.key, current => ({ ...current, draft, preview: false }))} onSave={() => void saveFile(tab.key)} onPosition={(line, column) => updateTab(tab.key, current => ({ ...current, line, column }))} /></Suspense> : <div className="file-loading">无法打开此文件，请查看上方提示。</div>}
       {tab.file && <footer className="file-status"><span role="status">{tab.saving ? '保存中…' : dirty(tab) ? '未保存' : tab.savedAt ? <><Check size={12} />已保存</> : '已打开'}</span><span>行 {tab.line}，列 {tab.column}</span><span>UTF-8{tab.file.bom ? ' BOM' : ''} · {tab.file.lineEnding}</span></footer>}
     </section>)}
     {tabMenu && <FileTabMenu container={workbenchRef.current?.closest('.workspace-shell') ?? document.body} key={tabMenu.key ?? 'services'} x={tabMenu.x} y={tabMenu.y} onClose={dismissTabMenu} onAction={action => void closeFromMenu(action)} items={tabMenu.key === null
