@@ -299,3 +299,14 @@ body:has(.kb-detail.is-resizing), body:has(.kb-detail.is-resizing) * { cursor: c
 .kb-feature-label { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .kb-feature-label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb-feature-color-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--feature-color, var(--ws-muted)); }
+
+@keyframes kb-task-settle {
+  0% { transform: rotate(0deg); }
+  25% { transform: rotate(-1.5deg); }
+  50% { transform: rotate(1deg); }
+  75% { transform: rotate(-.4deg); }
+  100% { transform: rotate(0deg); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .kb-page .kb-task.is-settling { animation: kb-task-settle 450ms ease-out both; transform-origin: center; }
+}

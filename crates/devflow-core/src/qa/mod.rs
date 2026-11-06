@@ -66,6 +66,10 @@ pub struct Action {
     pub title: String,
     pub description: String,
     pub calls: Vec<Call>,
+    #[serde(default)]
+    pub cleanup: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -82,6 +86,10 @@ pub struct Call {
     pub assertions: Vec<Assertion>,
     #[serde(default)]
     pub encrypt: Vec<String>,
+    #[serde(skip)]
+    cleanup: bool,
+    #[serde(skip)]
+    required_variables: Vec<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -555,8 +563,13 @@ pub fn execution_plan(suite: &Suite, id: &str) -> Result<Vec<(String, Call)>> {
         }
         active.remove(id);
         seen.insert(id.into());
-        for call in item.actions.iter().flat_map(|a| &a.calls) {
-            result.push((id.into(), call.clone()));
+        for action in &item.actions {
+            for call in &action.calls {
+                let mut call = call.clone();
+                call.cleanup = action.cleanup;
+                call.required_variables = action.requires.clone();
+                result.push((id.into(), call));
+            }
         }
         if result.len() > 100 {
             return Err(error("invalid_request", "单轮最多 100 个请求"));
@@ -571,7 +584,20 @@ pub fn execution_plan(suite: &Suite, id: &str) -> Result<Vec<(String, Call)>> {
         &mut HashSet::new(),
         &mut plan,
     )?;
-    Ok(plan)
+    // Run normal calls in dependency order, then release each scenario's resources
+    // in reverse dependency order. Calls within one cleanup keep their order.
+    let (mut normal, cleanup): (Vec<_>, Vec<_>) = plan
+        .into_iter()
+        .partition(|(_, call)| !call.cleanup);
+    let mut groups: Vec<Vec<(String, Call)>> = Vec::new();
+    for item in cleanup {
+        if groups.last().is_none_or(|group| group[0].0 != item.0) {
+            groups.push(Vec::new());
+        }
+        groups.last_mut().unwrap().push(item);
+    }
+    normal.extend(groups.into_iter().rev().flatten());
+    Ok(normal)
 }
 fn validate(suite: &Suite) -> Result<()> {
     endpoint(&suite.base_url, "info")?;
@@ -608,6 +634,19 @@ fn validate(suite: &Suite) -> Result<()> {
         for action in &scenario.actions {
             if !ids.insert(format!("action:{}", action.id)) || action.calls.is_empty() {
                 return Err(error("invalid_request", "行为标识重复或请求为空"));
+            }
+            if (!action.cleanup && !action.requires.is_empty())
+                || action.requires.len() > 32
+                || action.requires.iter().any(|key| {
+                    key.is_empty()
+                        || key.len() > 128
+                        || !key.bytes().enumerate().all(|(index, ch)| {
+                            ch.is_ascii_alphabetic()
+                                || (index > 0 && (ch.is_ascii_digit() || ch == b'_'))
+                        })
+                })
+            {
+                return Err(error("invalid_request", "清理前置变量配置无效"));
             }
             for call in &action.calls {
                 if !ids.insert(format!("call:{}", call.id))
@@ -809,6 +848,42 @@ fn collect_secrets(value: &Value, list: &mut Vec<String>) {
         _ => (),
     }
 }
+// Validate a browser-supplied cached administrator session before any scenario
+// writes. Only an explicit 401 permits a fresh login; other failures stay visible.
+fn check_cached_admin(
+    client: &reqwest::blocking::Client,
+    suite: &Suite,
+    token: &str,
+    prefix: &str,
+) -> Result<(u16, Value, String, Value)> {
+    let url = endpoint(&suite.base_url, "info")?;
+    let authorization = format!("{prefix}{token}");
+    let request = json!({"method":"GET", "url":url.as_str(),
+        "headers":{"accept":"application/json", "authorization":authorization},
+        "body":null, "live":true});
+    let response = client.get(url)
+        .header("Accept", "application/json")
+        .header("Authorization", authorization)
+        .send()
+        .map_err(|_| error("unavailable", "缓存登录态校验失败或超时"))?;
+    let status = response.status().as_u16();
+    let mut bytes = Vec::new();
+    response.take(LIMIT + 1).read_to_end(&mut bytes)
+        .map_err(|_| error("unavailable", "读取登录态校验响应失败"))?;
+    if bytes.len() as u64 > LIMIT {
+        return Err(error("invalid_request", "登录态校验响应超过 1 MiB 上限"));
+    }
+    let raw = String::from_utf8_lossy(&bytes).into_owned();
+    // HTTP 401 can have an empty/non-JSON body; it still means the token expired.
+    let response = if status == 401 {
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    } else {
+        serde_json::from_slice(&bytes)
+            .map_err(|_| error("invalid_request", "登录态校验未返回有效 JSON"))?
+    };
+    Ok((status, request, raw, response))
+}
+
 fn execute(
     service: &QaService,
     path: &Path,
@@ -826,13 +901,31 @@ fn execute(
         .build()
         .map_err(|_| error("unavailable", "无法创建 HTTP 执行器"))?;
     let started = Instant::now();
+    let mut failed = false;
+    let mut cancelled = false;
+    let mut cleanup_started: Option<Instant> = None;
     for (scenario_id, call) in plan {
-        if cancel.load(Ordering::SeqCst) {
-            store.runs[0].status = "cancelled".into();
-            return Ok(());
-        }
-        if started.elapsed() > Duration::from_secs(300) {
-            return Err(error("unavailable", "场景执行达到 5 分钟上限"));
+        cancelled |= cancel.load(Ordering::SeqCst);
+        if call.cleanup {
+            let cleanup_start = cleanup_started.get_or_insert_with(Instant::now);
+            if cleanup_start.elapsed() >= Duration::from_secs(60) {
+                let message = "清理达到 60 秒上限，现场可能未清理完成";
+                let previous = store.runs[0].error.take();
+                store.runs[0].error = Some(match previous {
+                    Some(previous) => format!("{previous}；{message}"),
+                    None => message.into(),
+                });
+                failed = true;
+                break;
+            }
+        } else {
+            if !failed && !cancelled && started.elapsed() > Duration::from_secs(300) {
+                store.runs[0].error = Some("场景执行达到 5 分钟上限".into());
+                failed = true;
+            }
+            if failed || cancelled {
+                continue;
+            }
         }
         store.runs[0].current_call = Some(call.id.clone());
         publish(service, path, store, vars)?;
@@ -851,6 +944,88 @@ fn execute(
             checks: vec![],
             error: None,
         };
+        if call.cleanup
+            && call.required_variables.iter().any(|key| {
+                vars.get(key).is_none_or(|value| {
+                    value.is_null() || value.as_str().is_some_and(str::is_empty)
+                })
+            })
+        {
+            step.status = "skipped".into();
+            step.error = Some("未取得清理所需变量，已跳过".into());
+            store.runs[0].results.push(step);
+            publish(service, path, store, vars)?;
+            continue;
+        }
+        if call.id == "admin-login-call"
+            && call.method == "POST"
+            && call.path == "login"
+            && call.extracts.get("adminToken").is_some_and(|pointer| pointer == "/data")
+        {
+            if let Some(token) = vars.get("adminToken").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned) {
+                let actor = suite.actors.iter().find(|(_, actor)| actor.token.as_deref() == Some("adminToken"));
+                if let Some((actor_name, actor)) = actor {
+                    match check_cached_admin(&client, suite, &token, &actor.prefix) {
+                        Ok((status, request, raw, response)) => {
+                            if status == 401 || response["code"] == 401 || response["code"] == "401" {
+                                vars.remove("adminToken");
+                                // Fall through to the original RSA login exactly once.
+                            } else {
+                                step.name = "复用管理员登录".into();
+                                step.actor = actor_name.clone();
+                                step.http_status = Some(status);
+                                step.checks = vec![
+                                    Check { name: "HTTP 200".into(), passed: status == 200 },
+                                    Check { name: "业务 code = 200".into(), passed: response["code"] == 200 },
+                                    Check { name: "业务 success = true".into(), passed: response["success"] == true },
+                                ];
+                                let mut secrets: Vec<_> = vars.iter()
+                                    .filter(|(key, _)| sensitive(key))
+                                    .filter_map(|(_, value)| value.as_str().map(str::to_owned))
+                                    .collect();
+                                collect_secrets(&response, &mut secrets);
+                                step.request = redact(&request, &secrets);
+                                step.request["live"] = json!(false);
+                                step.response = redact(&response, &secrets);
+                                for value in [&mut step.request, &mut step.response] {
+                                    let text = value.to_string();
+                                    if text.len() > 48 * 1024 {
+                                        *value = json!({"truncated":true,"preview":text.chars().take(24000).collect::<String>()});
+                                    }
+                                }
+                                if let Ok(mut requests) = service.live_requests.lock() {
+                                    if let Some((run_id, calls)) = requests.get_mut(&store.workspace_key) {
+                                        if run_id == &store.runs[0].id {
+                                            calls.insert(call.id.clone(), (request, Some(raw)));
+                                        }
+                                    }
+                                }
+                                if step.checks.iter().all(|check| check.passed) {
+                                    step.status = "passed".into();
+                                } else {
+                                    step.error = Some("缓存登录态校验未通过，未重新登录".into());
+                                    store.runs[0].error = step.error.clone();
+                                    failed = true;
+                                }
+                                step.elapsed_ms = tick.elapsed().as_millis() as u64;
+                                store.runs[0].results.push(step);
+                                publish(service, path, store, vars)?;
+                                continue;
+                            }
+                        }
+                        Err(err) => {
+                            step.error = Some(err.message);
+                            store.runs[0].error = step.error.clone();
+                            step.elapsed_ms = tick.elapsed().as_millis() as u64;
+                            store.runs[0].results.push(step);
+                            failed = true;
+                            publish(service, path, store, vars)?;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
         let result = (|| -> Result<()> {
             let url = endpoint(
                 &suite.base_url,
@@ -888,6 +1063,13 @@ fn execute(
             }
             if !body.is_null() {
                 request = request.json(&body);
+            }
+            if let Some(started) = cleanup_started.as_ref() {
+                let remaining = Duration::from_secs(60).saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    return Err(error("unavailable", "清理达到 60 秒上限"));
+                }
+                request = request.timeout(remaining.min(Duration::from_secs(20)));
             }
             let built = request.build().map_err(|_| error("invalid_request", "无法构建目标请求"))?;
             let headers: BTreeMap<String, String> = built.headers().iter()
@@ -947,7 +1129,7 @@ fn execute(
             if step.checks.iter().any(|c| !c.passed) {
                 return Err(error(
                     "assertion_failed",
-                    "接口返回或业务断言不满足预期，已停止后续请求",
+                    "接口返回或业务断言不满足预期",
                 ));
             }
             for (name, pointer) in &call.extracts {
@@ -989,16 +1171,21 @@ fn execute(
         }
         step.elapsed_ms = tick.elapsed().as_millis() as u64;
         if let Err(err) = result {
+            store.runs[0]
+                .error
+                .get_or_insert_with(|| format!("{}：{}", call.name, err.message));
             step.error = Some(err.message);
             store.runs[0].results.push(step);
-            store.runs[0].status = "failed".into();
+            failed = true;
             publish(service, path, store, vars)?;
-            return Ok(());
+            continue;
         }
         store.runs[0].results.push(step);
         publish(service, path, store, vars)?;
     }
-    store.runs[0].status = if cancel.load(Ordering::SeqCst) {
+    store.runs[0].status = if failed {
+        "failed"
+    } else if cancelled || cancel.load(Ordering::SeqCst) {
         "cancelled"
     } else {
         "passed"

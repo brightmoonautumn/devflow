@@ -2,7 +2,7 @@ import { request } from '../../lib/api'
 export interface QaActor { label: string; token?: string | null; prefix?: string }
 export interface QaAssertion { path: string; op: string; value?: unknown }
 export interface QaCall { id: string; name: string; method: string; path: string; actor: string; body: unknown; extracts: Record<string, string>; assertions: QaAssertion[]; encrypt: string[] }
-export interface QaAction { id: string; title: string; description: string; calls: QaCall[] }
+export interface QaAction { id: string; title: string; description: string; calls: QaCall[]; cleanup?: boolean; requires?: string[] }
 export interface QaScenario { id: string; module: string; title: string; purpose: string; uses: string[]; actions: QaAction[] }
 export interface QaSuite { name: string; baseUrl: string; siteUrl: string; publicKey: string; actors: Record<string, QaActor>; variables: Record<string, unknown>; scenarios: QaScenario[] }
 export interface QaResult { callId: string; scenarioId: string; name: string; actor: string; status: string; httpStatus: number | null; elapsedMs: number; request: unknown; response: unknown; responseRaw?: string; checks: { name: string; passed: boolean }[]; error: string | null }

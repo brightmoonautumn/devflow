@@ -5,6 +5,8 @@ import { TreeEntryIcon } from '../../components/files/TreeEntryIcon'
 import { executeQa, getQa, qaExecutionPlan, type QaCall, type QaOperation, type QaSnapshot } from './qaApi'
 import { getToken, type WorkspaceResponse } from '../../lib/api'
 import { QaPanelDivider } from './QaPanelDivider'
+import { QaHeaderDivider } from './QaHeaderDivider'
+import { clearQaAuthToken, getQaAuthToken, qaAuthCacheKey, saveQaAuthToken } from './authCache'
 import { QaSidebar } from './QaSidebar'
 import { BaseSelect } from '../../components/form/BaseSelect'
 import { useDialogs } from '../../components/form/BaseDialog'
@@ -102,8 +104,9 @@ function QaWorkspace({ snapshot, error, pending, execute }: { snapshot: QaSnapsh
   const qaActors = suite.actors
   const [scenarioId, setScenarioId] = useState('admin-login')
   const scenario = qaScenarios.find(item => item.id === scenarioId) ?? qaScenarios[0]
+  const actions = [...scenario.actions.filter(action => !action.cleanup), ...scenario.actions.filter(action => action.cleanup)]
   const [actionId, setActionId] = useState<string | null>('admin-signin')
-  const [expanded, setExpanded] = useState<string | null>('admin-login-call')
+  const [expanded, setExpanded] = useState<string[]>(['admin-login-call'])
   const [tab, setTab] = useState('请求与响应')
   const [copyMessage, setCopyMessage] = useState<ToastMessage | null>(null)
   const toastSequence = useRef(0)
@@ -118,6 +121,7 @@ function QaWorkspace({ snapshot, error, pending, execute }: { snapshot: QaSnapsh
   const [view, setView] = useState<'both' | 'calls' | 'flow'>('both')
   const [flowPercent, setFlowPercent] = useState(35)
   const [flowHeight, setFlowHeight] = useState(245)
+  const [headerHeight, setHeaderHeight] = useState<number | null>(null)
   const [adminPassword, setAdminPassword] = useState('admin')
   const [historyId, setHistoryId] = useState('')
   const history = snapshot.runs.filter(item => item.scenarioId === scenario.id || item.results.some(result => result.scenarioId === scenario.id))
@@ -133,24 +137,41 @@ function QaWorkspace({ snapshot, error, pending, execute }: { snapshot: QaSnapsh
   const visibleResults = run?.results ?? []
   const done = actualDone
   const [following, setFollowing] = useState(true)
-  const [celebration, setCelebration] = useState<{ runId: string; sequence: number } | null>(null)
-  const celebrationSequence = useRef(0)
+  const [celebration, setCelebration] = useState<{ runId: string } | null>(null)
+  const preparingRun = useRef(false)
+  const pendingAuth = useRef<{ key: string; existingIds: Set<string> } | null>(null)
   const pendingCelebration = useRef<{ scenarioId: string; existingIds: Set<string> } | null>(null)
   const currentCall = running ? run?.currentCall : null
   const cursorAction = scenario.actions.find(action => action.calls.some(call => call.id === currentCall))
   const selectedActionId = following && running ? cursorAction?.id ?? null : actionId
-  const selected = scenario.actions.find(action => action.id === selectedActionId)
   const failed = run?.results.find(result => result.status === 'failed' && calls.some(call => call.id === result.callId))
   const ownFailure = failed && ownCalls.some(call => call.id === failed.callId)
   const showFailure = !!failed && !running
   const panelsRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const pending = pendingAuth.current
+    if (!pending) return
+    const current = snapshot.runs.find(item => !pending.existingIds.has(item.id))
+    if (!current) return
+    const login = current.results.find(item => item.callId === 'admin-login-call' && item.status === 'passed')
+    if (login?.responseRaw) {
+      try {
+        const response = JSON.parse(login.responseRaw) as { data?: unknown }
+        if (typeof response.data === 'string' && response.data && response.data !== '[REDACTED]') saveQaAuthToken(pending.key, response.data)
+      } catch { /* Raw login response may be unavailable after restarting the backend. */ }
+    }
+    if (current.results.some(item => (item.callId === 'admin-login-call' || qaActors[item.actor]?.token === 'adminToken')
+      && (item.httpStatus === 401 || String((item.response as { code?: unknown } | null)?.code) === '401'))) clearQaAuthToken(pending.key)
+    if (!['running', 'cancelling'].includes(current.status)) pendingAuth.current = null
+  }, [snapshot.runs, qaActors])
+
   useEffect(() => {
     const pendingRun = pendingCelebration.current
     if (!pendingRun) return
     const completed = snapshot.runs.find(item => item.scenarioId === pendingRun.scenarioId && !pendingRun.existingIds.has(item.id) && !['running', 'cancelling'].includes(item.status))
     if (!completed) return
     pendingCelebration.current = null
-    if (completed.status === 'passed' && scenario.id === completed.scenarioId && !historyId && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) setCelebration({ runId: completed.id, sequence: ++celebrationSequence.current })
+    if (completed.status === 'passed' && scenario.id === completed.scenarioId && !historyId && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) setCelebration({ runId: completed.id })
   }, [snapshot.runs, scenario.id, historyId])
   useEffect(() => {
     if (!celebration) return
@@ -172,7 +193,7 @@ function QaWorkspace({ snapshot, error, pending, execute }: { snapshot: QaSnapsh
   }, [currentCall, following, cursorAction?.id, view])
   useEffect(() => {
     if (!showFailure || !ownFailure || !failed || !following || run?.suiteRevision !== snapshot.revision) return
-    setExpanded(failed.callId); setTab('断言')
+    setExpanded(items => items.includes(failed.callId) ? items : [...items, failed.callId]); setTab('断言')
     const action = scenario.actions.find(item => item.calls.some(call => call.id === failed.callId))
     if (action) setActionId(action.id)
     const frame = requestAnimationFrame(() => document.getElementById(`qa-call-${failed.callId}`)?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }))
@@ -180,7 +201,7 @@ function QaWorkspace({ snapshot, error, pending, execute }: { snapshot: QaSnapsh
   }, [showFailure, ownFailure, failed?.callId, run?.id, run?.suiteRevision, snapshot.revision, scenario.id, following])
   function inspectAction(id: string | null) { setFollowing(false); setActionId(id) }
   function setFolderExpanded(id: string, open: boolean) { setCollapsed(items => open ? items.filter(item => item !== id) : items.includes(id) ? items : [...items, id]) }
-  function chooseScenario(id: string) { setScenarioId(id); setActionId(null); setExpanded(null); setHistoryId(''); if (window.matchMedia('(max-width: 600px)').matches) setTreeOpen(false) }
+  function chooseScenario(id: string) { setCelebration(null); setScenarioId(id); setActionId(null); setExpanded([]); setHistoryId(''); if (window.matchMedia('(max-width: 600px)').matches) setTreeOpen(false) }
   function selectAction(id: string) { inspectAction(id); const call = scenario.actions.find(action => action.id === id)?.calls[0]; if (call) document.getElementById(`qa-call-${call.id}`)?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }) }
   async function deleteEntry(kind: 'scenario' | 'module', id: string) {
     if (pending || activeRun) return
@@ -196,7 +217,7 @@ function QaWorkspace({ snapshot, error, pending, execute }: { snapshot: QaSnapsh
     const description = `永久删除${kind === 'module' ? `文件夹「${id}」及其场景` : `场景「${qaScenarios.find(item => item.id === id)?.title ?? id}」`}，共 ${affected.length} 个场景及 ${runs.length} 条相关执行记录。${dependent.length ? `\n级联删除引用它的场景：${dependent.map(item => item.title).join('、')}。` : ''}\n此操作无法撤销，已执行的远端操作不会被撤销。`
     if (!await dialogs.confirm({ title: kind === 'module' ? '删除场景文件夹' : '删除场景', description, tone: 'danger', confirmText: '永久删除' })) return
     const operation: QaOperation = kind === 'module' ? { type: 'delete_module', module: id } : { type: 'delete_scenario', scenarioId: id }
-    if (await execute(operation)) { setActionId(null); setExpanded(null); setHistoryId('') }
+    if (await execute(operation)) { setActionId(null); setExpanded([]); setHistoryId('') }
   }
   async function clearHistory() {
     const runIds = history.map(item => item.id)
@@ -204,7 +225,30 @@ function QaWorkspace({ snapshot, error, pending, execute }: { snapshot: QaSnapsh
     if (!await dialogs.confirm({ title: '清除执行记录', description: `永久清除当前列表中的 ${runIds.length} 条执行记录及其请求和响应？其中的引用执行记录也会从所属场景中移除。`, tone: 'danger', confirmText: '清除记录' })) return
     if (await execute({ type: 'clear_history', runIds })) setHistoryId('')
   }
-  async function start() { pendingCelebration.current = { scenarioId: scenario.id, existingIds: new Set(snapshot.runs.map(item => item.id)) }; setFollowing(true); setHistoryId(''); if (!await execute({ type: 'run', scenarioId: scenario.id, inputs: { adminPassword } })) pendingCelebration.current = null }
+  async function start() {
+    if (pending || activeRun || preparingRun.current) return
+    preparingRun.current = true
+    try {
+      setCelebration(null)
+      const existingIds = new Set(snapshot.runs.map(item => item.id))
+      pendingCelebration.current = { scenarioId: scenario.id, existingIds }
+      setFollowing(true); setHistoryId('')
+      const inputs: Record<string, string> = { adminPassword }
+      const login = calls.find(call => call.id === 'admin-login-call')
+      if (login) {
+        const key = await qaAuthCacheKey([snapshot.workspaceKey, suite.baseUrl, suite.publicKey, login, qaActors, adminPassword]).catch(() => null)
+        if (key) {
+          pendingAuth.current = { key, existingIds }
+          const token = getQaAuthToken(key)
+          if (token) inputs.adminToken = token
+        }
+      }
+      if (!await execute({ type: 'run', scenarioId: scenario.id, inputs })) {
+        pendingCelebration.current = null; pendingAuth.current = null
+      }
+    } finally { preparingRun.current = false }
+  }
+
   function detail(call: QaCall) {
     const actor = qaActors[call.actor]
     const result = run?.results.find(item => item.callId === call.id)
@@ -224,7 +268,7 @@ function QaWorkspace({ snapshot, error, pending, execute }: { snapshot: QaSnapsh
           {!result ? <p className="qa-detail-empty">执行后显示实际请求</p> : curl ? <>{!request?.live && <p className="qa-detail-empty">历史记录中的敏感字段已脱敏，原始请求不可用</p>}<QaCurl value={curl} /></> : <><p className="qa-detail-empty">此记录没有完整请求，原始请求不可用</p><QaJson value={JSON.stringify(result.request, null, 2) ?? 'null'} /></>}
         </QaExchangeSection>
         {requestJson && <QaExchangeSection title="请求体 · JSON" action={<button type="button" aria-label="复制请求体 JSON" onClick={() => copy(requestJson)}>复制</button>}><QaJson value={requestJson} /></QaExchangeSection>}
-        <QaExchangeSection title="响应" action={result && <><span className={result.status === 'passed' ? 'qa-success' : 'qa-error'}>HTTP {result.httpStatus ?? '未收到响应'} · {result.elapsedMs} ms</span><button type="button" aria-label="复制响应" onClick={() => copy(displayedResponse)}>复制</button></>}>
+        <QaExchangeSection title="响应" action={result && <><span className={result.status === 'passed' ? 'qa-success' : result.status === 'skipped' ? 'qa-pending' : 'qa-error'}>{result.status === 'skipped' ? '已跳过' : `HTTP ${result.httpStatus ?? '未收到响应'} · ${result.elapsedMs} ms`}</span><button type="button" aria-label="复制响应" onClick={() => copy(displayedResponse)}>复制</button></>}>
           {result ? <>{result.responseRaw === undefined && <p className="qa-detail-empty">历史响应已脱敏，原始响应不可用</p>}{responseJson === null ? <pre>{responseText}</pre> : <QaJson value={responseJson} />}{result.error && <p className="qa-error">{result.error}</p>}</> : <p className="qa-detail-empty">执行后显示响应</p>}
         </QaExchangeSection>
       </div>
@@ -250,27 +294,42 @@ function QaWorkspace({ snapshot, error, pending, execute }: { snapshot: QaSnapsh
       </ul>{query && !qaScenarios.some(item => item.title.includes(query)) && <p className="qa-tree-empty">没有匹配的场景</p>}</div>
     </QaSidebar>
     <section className="qa-workspace">
-      <div className="qa-title-row"><div className="qa-title-copy"><div className="qa-eyebrow">USER JOURNEY / API SCENARIO</div><div className="qa-title-heading"><h1>{scenario.title}</h1><span className={`qa-demo-status ${running ? 'is-running' : run?.status === 'passed' ? 'has-results' : run?.status === 'failed' ? 'is-failed' : ''}`} role="status">{run?.status === 'failed' ? <XCircle size={14} /> : <FlaskConical size={14} />}{run ? `${({ running: '执行中', cancelling: '取消中', passed: '已通过', failed: '失败', cancelled: '已取消', interrupted: '已中断' } as Record<string, string>)[run.status] ?? run.status} ${actualDone.length}/${calls.length}` : '待执行'}{celebration && celebration.runId === run?.id && run?.status === 'passed' && <span key={celebration.sequence} className="qa-confetti" aria-hidden="true">{Array.from({ length: 10 }, (_, i) => <i key={i} style={{ '--angle': `${i * 36}deg`, '--distance': `${25 + (i % 3) * 7}px`, '--piece-color': ['#e6ad42', '#6aaee3', '#d97583', '#66bd94', '#b38ad2'][i % 5] } as CSSProperties} />)}</span>}</span></div><p>{scenario.purpose}</p></div><div className="qa-title-actions"><div className="qa-view-switch" role="group" aria-label="切换场景视图">{([{ id: 'both', label: '联动视图', icon: PanelsTopLeft }, { id: 'calls', label: 'API 调用', icon: ListTree }, { id: 'flow', label: '行为流程', icon: GitBranch }] as const).map(({ id, label, icon: Icon }) => <button key={id} title={label} aria-label={label} aria-pressed={view === id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={15} /></button>)}</div><div className="qa-history-select"><BaseSelect aria-label="选择执行记录" value={run?.id ?? ''} onValueChange={setHistoryId} disabled={!history.length} placeholder="尚无执行记录" options={history.map(item => ({ value: item.id, label: `${new Date(item.createdAt * 1000).toLocaleString()} · ${item.status}${item.scenarioId !== scenario.id ? ' · 引用执行' : ''} · ${item.accountName}` }))} /><button type="button" className="qa-history-clear" aria-label="清除当前执行记录" title={activeRun ? '执行期间无法清除记录' : '清除当前执行记录'} disabled={!history.length || !!activeRun || pending} onClick={() => void clearHistory()}><Trash2 size={15} /></button></div></div></div>
+      <div className="qa-header" style={headerHeight === null ? undefined : { height: headerHeight }}>
+      <div className="qa-title-row"><div className={`qa-title-copy ${run?.status === 'passed' ? 'has-stamp' : ''}`}><div className="qa-eyebrow">USER JOURNEY / API SCENARIO</div><div className="qa-title-heading"><h1>{scenario.title}</h1><span className={`qa-demo-status ${running ? 'is-running' : run?.status === 'passed' ? 'has-results' : run?.status === 'failed' ? 'is-failed' : ''}`} role="status">{run?.status === 'failed' ? <XCircle size={14} /> : <FlaskConical size={14} />}{run ? `${({ running: '执行中', cancelling: '取消中', passed: '已通过', failed: '失败', cancelled: '已取消', interrupted: '已中断' } as Record<string, string>)[run.status] ?? run.status} ${actualDone.length}/${calls.length}` : '待执行'}</span></div><p>{scenario.purpose}</p>{run?.status === 'passed' && <QaSuccessStamp key={run.id} animate={celebration?.runId === run.id} />}</div><div className="qa-title-actions"><div className="qa-view-switch" role="group" aria-label="切换场景视图">{([{ id: 'both', label: '联动视图', icon: PanelsTopLeft }, { id: 'calls', label: 'API 调用', icon: ListTree }, { id: 'flow', label: '行为流程', icon: GitBranch }] as const).map(({ id, label, icon: Icon }) => <button key={id} title={label} aria-label={label} aria-pressed={view === id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={15} /></button>)}</div><div className="qa-history-select"><BaseSelect aria-label="选择执行记录" value={run?.id ?? ''} onValueChange={id => { setCelebration(null); setHistoryId(id) }} disabled={!history.length} placeholder="尚无执行记录" options={history.map(item => ({ value: item.id, label: `${new Date(item.createdAt * 1000).toLocaleString()} · ${item.status}${item.scenarioId !== scenario.id ? ' · 引用执行' : ''} · ${item.accountName}` }))} /><button type="button" className="qa-history-clear" aria-label="清除当前执行记录" title={activeRun ? '执行期间无法清除记录' : '清除当前执行记录'} disabled={!history.length || !!activeRun || pending} onClick={() => void clearHistory()}><Trash2 size={15} /></button></div></div></div>
       <div className="qa-toolbar"><div className="qa-toolbar-left"><span className="qa-environment" title={suite.baseUrl}><span className="qa-tree-dot" />{suite.name}</span><span className="qa-count">{ownCalls.length} 个接口{prerequisiteCalls.length > 0 && ` + ${prerequisiteCalls.length} 个前置`}</span></div><div className="qa-run-actions"><label className="qa-password">管理员密码<input type="password" autoComplete="off" value={adminPassword} onChange={event => setAdminPassword(event.target.value)} aria-label="管理员密码（仅本轮使用）" /></label>{activeRun ? <button className="qa-run" disabled={pending || activeRun.status === 'cancelling'} onClick={() => void execute({ type: 'cancel', runId: activeRun.id })}><Square size={13} />{activeRun.status === 'cancelling' ? '取消中' : '停止执行'}</button> : <button className="qa-run" disabled={pending || !adminPassword} onClick={() => void start()}><Play size={13} />执行测试</button>}</div></div>
       {error && <div className="qa-error qa-notice" role="alert">{error}</div>}
       {(run?.error || run?.results.find(item => item.status === 'failed')?.error) && <div className="qa-error qa-notice" role="alert">{run?.error ?? run?.results.find(item => item.status === 'failed')?.error}</div>}
       {run && run.suiteRevision !== snapshot.revision && <div className="qa-notice">该记录使用配置版本 {run.suiteRevision}，当前为 {snapshot.revision}；请求和响应以历史记录为准。</div>}
       {prerequisites.length > 0 && <div className="qa-references"><span>引用前置</span>{prerequisites.map(item => { const items = item.actions.flatMap(action => action.calls); const passed = items.filter(call => done.includes(call.id)).length; return <button key={item.id} className={`${item.actions.some(action => action.calls.some(call => call.id === currentCall)) ? 'is-running' : ''} ${showFailure && item.actions.some(action => action.calls.some(call => call.id === failed?.callId)) ? 'is-failed' : ''}`} onClick={() => chooseScenario(item.id)} title={`查看公共场景：${item.title}`} ><GitBranch size={13} />{item.title}<small className={passed === items.length ? 'qa-success' : ''}>{passed}/{items.length}</small><ArrowRight size={12} /></button> })}</div>}
       {showFailure && !ownFailure && failed && <details className="qa-prerequisite-failure" open><summary>公共前置失败：{failed.name}</summary><p>{failed.error ?? '请求未满足预期，后续步骤未执行'}</p>{failed.checks.map((check, index) => <div key={index} className={check.passed ? 'qa-success' : 'qa-error'}>{check.passed ? '✓' : '✕'} {check.name}</div>)}<small>点击上方对应公共场景可查看完整请求和响应。</small></details>}
+      </div>
+      <QaHeaderDivider height={headerHeight} onChange={setHeaderHeight} />
       <div ref={panelsRef} onWheelCapture={() => setFollowing(false)} onTouchMoveCapture={() => setFollowing(false)} onPointerDownCapture={() => setFollowing(false)} onKeyDownCapture={event => { if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) setFollowing(false) }} className={`qa-panels qa-view-${view}`} style={{ '--qa-flow-width': `${flowPercent}%`, '--qa-flow-height': `${flowHeight}px` } as CSSProperties}>
-        {view !== 'flow' && <section className="qa-calls-panel" aria-label="API 调用链"><div className="qa-panel-heading"><span><ListTree size={15} />API 调用链</span><small>按用户操作顺序执行</small></div><div className="qa-calls-scroll">
-          {ownCalls.some(call => Object.keys(call.extracts).length) && <div className="qa-outputs"><span>场景输出</span>{ownCalls.filter(call => Object.keys(call.extracts).length).map(call => <code key={call.id} className={done.includes(call.id) ? 'qa-success' : ''} title={Object.entries(call.extracts).map(([name, pointer]) => `${name} ← ${pointer}`).join(', ')}>{done.includes(call.id) && <Check size={12} />}{Object.keys(call.extracts).join(', ')}</code>)}</div>}
-          {scenario.actions.map((action, index) => <div className={`qa-call-group ${selectedActionId === action.id ? 'is-selected' : ''}`} key={action.id}>
-            <button className="qa-group-heading" onClick={() => inspectAction(selectedActionId === action.id ? null : action.id)}><span className="qa-action-number">{String(index + 1).padStart(2, '0')}</span><strong>{action.title}</strong><span className={`qa-actor qa-actor-${action.calls[0].actor}`}>{qaActors[action.calls[0].actor].label}</span><small>{action.calls.length} API</small></button>
-            {action.calls.map(call => <article id={`qa-call-${call.id}`} key={call.id} className={`qa-call ${expanded === call.id ? 'is-open' : ''} ${currentCall === call.id ? 'is-executing' : ''} ${visibleResults.some(item => item.callId === call.id && item.status === 'failed') ? 'is-failed' : ''}`} aria-current={currentCall === call.id ? 'step' : undefined}><button className="qa-call-summary" aria-expanded={expanded === call.id} onClick={() => { setExpanded(expanded === call.id ? null : call.id); inspectAction(action.id) }}>{expanded === call.id ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<span className={`qa-method qa-method-${call.method.toLowerCase()}`}>{call.method}</span><span className="qa-call-name">{call.name}<code title={call.path}>{call.path}</code></span>{running && currentCall === call.id ? <LoaderCircle size={14} className="qa-execution-spinner" aria-label="正在请求" /> : done.includes(call.id) ? <span className="qa-call-result"><Check size={13} />{run?.results.find(item => item.callId === call.id)?.elapsedMs} ms</span> : visibleResults.some(item => item.callId === call.id && item.status === 'failed') ? <XCircle size={14} className="qa-error" /> : <Circle size={12} className="qa-pending" />}</button>{expanded === call.id && <div className="qa-call-detail"><div className="qa-detail-tabs">{['请求与响应', '断言', '变量'].map(label => <button className={tab === label ? 'active' : ''} onClick={() => setTab(label)} key={label}>{label}{label === '断言' ? ` · ${3 + call.assertions.length}` : ''}</button>)}</div>{detail(call)}</div>}</article>)}
+        {view !== 'flow' && <section className="qa-calls-panel" aria-label="API 调用链"><div className="qa-panel-heading"><span><ListTree size={15} />API 调用链</span><div className="qa-panel-actions"><button type="button" disabled={ownCalls.every(call => expanded.includes(call.id))} onClick={() => { setFollowing(false); setExpanded(ownCalls.map(call => call.id)) }}>展开全部</button><button type="button" disabled={!ownCalls.some(call => expanded.includes(call.id))} onClick={() => { setFollowing(false); setExpanded([]) }}>收起全部</button></div></div><div className="qa-calls-scroll">
+          {actions.map((action, index) => <div className={`qa-call-group ${selectedActionId === action.id ? 'is-selected' : ''}`} key={action.id}>
+            <button className="qa-group-heading" onClick={() => inspectAction(selectedActionId === action.id ? null : action.id)}><span className="qa-action-number">{String(index + 1).padStart(2, '0')}</span><strong title={action.cleanup ? "成功、失败或取消后执行清理" : undefined}>{action.title}{action.cleanup && " · 清理"}</strong><span className={`qa-actor qa-actor-${action.calls[0].actor}`}>{qaActors[action.calls[0].actor].label}</span><small>{action.calls.length} API</small></button>
+            {action.calls.map(call => <article id={`qa-call-${call.id}`} key={call.id} className={`qa-call ${expanded.includes(call.id) ? 'is-open' : ''} ${currentCall === call.id ? 'is-executing' : ''} ${visibleResults.some(item => item.callId === call.id && item.status === 'failed') ? 'is-failed' : ''}`} aria-current={currentCall === call.id ? 'step' : undefined}><button className="qa-call-summary" aria-expanded={expanded.includes(call.id)} onClick={() => { setExpanded(items => items.includes(call.id) ? items.filter(id => id !== call.id) : [...items, call.id]); inspectAction(action.id) }}>{expanded.includes(call.id) ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<span className={`qa-method qa-method-${call.method.toLowerCase()}`}>{call.method}</span><span className="qa-call-name">{call.name}<code title={call.path}>{call.path}</code></span>{running && currentCall === call.id ? <LoaderCircle size={14} className="qa-execution-spinner" aria-label="正在请求" /> : done.includes(call.id) ? <span className="qa-call-result"><Check size={13} />{run?.results.find(item => item.callId === call.id)?.elapsedMs} ms</span> : visibleResults.some(item => item.callId === call.id && item.status === 'failed') ? <XCircle size={14} className="qa-error" /> : visibleResults.some(item => item.callId === call.id && item.status === 'skipped') ? <span className="qa-pending">已跳过</span> : <Circle size={12} className="qa-pending" />}</button>{expanded.includes(call.id) && <div className="qa-call-detail"><div className="qa-detail-tabs">{['请求与响应', '断言', '变量'].map(label => <button className={tab === label ? 'active' : ''} onClick={() => setTab(label)} key={label}>{label}{label === '断言' ? ` · ${3 + call.assertions.length}` : ''}</button>)}</div>{detail(call)}</div>}</article>)}
           </div>)}
           <div className="qa-chain-end"><CheckCircle2 size={14} />{run?.status === 'passed' ? '场景执行完成，全部断言通过' : '调用链结束 · 验证预期结果'}</div>
         </div></section>}
         {view === 'both' && <QaPanelDivider flowPercent={flowPercent} flowHeight={flowHeight} onChange={(value, stacked) => stacked ? setFlowHeight(value) : setFlowPercent(value)} />}
-        {view !== 'calls' && <section className="qa-flow-panel" aria-label="用户行为流程"><div className="qa-panel-heading"><span><GitBranch size={15} />用户行为流程</span><button onClick={() => inspectAction(null)}>取消选择</button></div><div className="qa-flow-scroll"><div className="qa-flow-start"><span />{prerequisites.length > 0 ? '引用通用授权 · 准备身份' : '开始 · 无需登录'}</div>{scenario.actions.map((action, index) => <div id={`qa-flow-${action.id}`} className="qa-flow-step" key={action.id}><div className={`qa-flow-edge ${selectedActionId === action.id ? 'active' : ''}`}><ArrowDown size={13} /></div><button className={`qa-flow-node ${selectedActionId === action.id ? 'selected' : ''} ${cursorAction?.id === action.id ? 'is-executing' : ''} ${showFailure && action.calls.some(call => call.id === failed?.callId) ? 'is-failed' : ''} ${action.calls.every(call => done.includes(call.id)) ? 'complete' : ''}`} aria-pressed={selectedActionId === action.id} onClick={() => selectAction(action.id)}><div className="qa-flow-node-title"><span>{String(index + 1).padStart(2, '0')}</span><strong>{action.title}</strong>{action.calls.every(call => done.includes(call.id)) && <CheckCircle2 size={14} />}</div><p>{action.description}</p><div className="qa-flow-node-footer"><span className={`qa-actor qa-actor-${action.calls[0].actor}`}>{qaActors[action.calls[0].actor].label}</span><span>{action.calls.length} API<ArrowRight size={12} /></span></div></button></div>)}<div className="qa-flow-edge"><ArrowDown size={13} /></div><div className="qa-flow-end"><Check size={12} />场景结束</div></div><div className="qa-flow-selection"><span className="qa-selection-dot" /><span>{selected ? `已选择「${selected.title}」· 关联 ${selected.calls.length} 个接口` : '选择一个行为，查看它触发的接口组'}</span></div></section>}
+        {view !== 'calls' && <section className="qa-flow-panel" aria-label="用户行为流程"><div className="qa-panel-heading"><span><GitBranch size={15} />用户行为流程</span><button onClick={() => inspectAction(null)}>取消选择</button></div><div className="qa-flow-scroll"><div className="qa-flow-start"><span />{prerequisites.length > 0 ? '引用通用授权 · 准备身份' : '开始 · 无需登录'}</div>{actions.map((action, index) => <div id={`qa-flow-${action.id}`} className="qa-flow-step" key={action.id}><div className={`qa-flow-edge ${selectedActionId === action.id ? 'active' : ''}`}><ArrowDown size={13} /></div><button className={`qa-flow-node ${selectedActionId === action.id ? 'selected' : ''} ${cursorAction?.id === action.id ? 'is-executing' : ''} ${showFailure && action.calls.some(call => call.id === failed?.callId) ? 'is-failed' : ''} ${action.calls.every(call => done.includes(call.id)) ? 'complete' : ''}`} aria-pressed={selectedActionId === action.id} onClick={() => selectAction(action.id)}><div className="qa-flow-node-title"><span>{String(index + 1).padStart(2, '0')}</span><strong title={action.cleanup ? "成功、失败或取消后执行清理" : undefined}>{action.title}{action.cleanup && " · 清理"}</strong>{action.calls.every(call => done.includes(call.id)) && <CheckCircle2 size={14} />}</div><p>{action.description}</p><div className="qa-flow-node-footer"><span className={`qa-actor qa-actor-${action.calls[0].actor}`}>{qaActors[action.calls[0].actor].label}</span><span>{action.calls.length} API<ArrowRight size={12} /></span></div></button></div>)}<div className="qa-flow-edge"><ArrowDown size={13} /></div><div className="qa-flow-end"><Check size={12} />场景结束</div></div></section>}
       </div>
     </section>
   </main>
+}
+
+
+function QaSuccessStamp({ animate }: { animate: boolean }) {
+  return <div className={`qa-success-stamp ${animate ? 'is-stamping' : ''}`} aria-hidden="true">
+    <svg viewBox="0 0 160 160" fill="none">
+      <circle cx="80" cy="80" r="70" stroke="currentColor" strokeWidth="5" />
+      <circle cx="80" cy="80" r="60" stroke="currentColor" strokeWidth="1.8" strokeDasharray="108 80" transform="rotate(-39 80 80)" />
+      <path d="m68 43 8 8 16-17" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+      <text x="80" y="94" textAnchor="middle" fill="currentColor" fontSize="34" fontWeight="750">已通过</text>
+      <text x="80" y="119" textAnchor="middle" fill="currentColor" fontSize="10" fontWeight="600" letterSpacing="1.2">DEVFLOW QA</text>
+    </svg>
+  </div>
 }
 
 function QaExchangeSection({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
