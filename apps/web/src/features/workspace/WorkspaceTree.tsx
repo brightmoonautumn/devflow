@@ -15,7 +15,8 @@ type NodeEntry = WorkspaceTreeEntry & { status?: string; message?: string | null
 type TreeRoot = { name: string; path: string }
 type NodeMenu = { entry: NodeEntry; root: TreeRoot; level: number; revision: number; x: number; y: number; target: HTMLElement }
 type RevealRequest = { path: string; root: string; sequence: number }
-type NodeProps = { reveal: RevealRequest | null; compact: boolean; scope: string | null; entry: NodeEntry; root: TreeRoot; level: number; revision: number; selected: string | null; copiedPath: string | null; onCopy: (path: string, value?: string) => Promise<void>; onSelect: (path: string) => void; onOpenFile: (path: string, pinned?: boolean) => void; onNodeMenu: (menu: NodeMenu) => void }
+type ExpansionChange = (paths: string[], expanded: boolean) => void
+type NodeProps = { reveal: RevealRequest | null; compact: boolean; expandedPaths: ReadonlySet<string>; onExpansionChange: ExpansionChange; entry: NodeEntry; root: TreeRoot; level: number; revision: number; selected: string | null; copiedPath: string | null; onCopy: (path: string, value?: string) => Promise<void>; onSelect: (path: string) => void; onOpenFile: (path: string, pinned?: boolean) => void; onNodeMenu: (menu: NodeMenu) => void }
 
 function relativeTreePath(path: string, root: string) {
   const normalized = path.replace(/\\/g, '/'), base = root.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -25,7 +26,7 @@ function relativeTreePath(path: string, root: string) {
   return comparable(normalized).startsWith(`${comparable(base)}/`) ? normalized.slice(base.length + 1) : null
 }
 
-function TreeNode({ reveal, compact, scope, entry, root, level, revision, selected, copiedPath, onCopy, onSelect, onOpenFile, onNodeMenu }: NodeProps): ReactElement {
+function TreeNode({ reveal, compact, expandedPaths, onExpansionChange, entry, root, level, revision, selected, copiedPath, onCopy, onSelect, onOpenFile, onNodeMenu }: NodeProps): ReactElement {
   const directory = entry.kind === 'directory'
   const available = !entry.status || entry.status === 'available'
   const nodeRef = useRef<HTMLLIElement>(null)
@@ -33,18 +34,9 @@ function TreeNode({ reveal, compact, scope, entry, root, level, revision, select
   currentReveal.current = reveal
   const revealing = !!reveal && viewPathKey(reveal.root) === viewPathKey(root.path) && pathWithin(reveal.path, entry.path)
   const revealSequence = revealing ? reveal?.sequence : undefined
-  const [expanded, setExpanded] = useState(() => {
-    const saved = scope ? readViewState(scope).expanded : []
-    return Array.isArray(saved) && saved.some(path => typeof path === 'string' && viewPathKey(path) === viewPathKey(entry.path))
-  })
+  const expanded = expandedPaths.has(viewPathKey(entry.path))
   function expand(next: boolean) {
-    setExpanded(next)
-    if (!scope) return
-    const saved = readViewState(scope).expanded
-    const paths = new Set(Array.isArray(saved) ? saved.filter(path => typeof path === 'string').slice(0, 200) : [])
-    for (const path of paths) if (segments.some(segment => viewPathKey(path) === viewPathKey(segment.path))) paths.delete(path)
-    if (next) for (const segment of segments) paths.add(segment.path)
-    writeViewState(scope, { expanded: [...paths].slice(-200) })
+    onExpansionChange(segments.map(segment => segment.path), next)
   }
   const [segments, setSegments] = useState<NodeEntry[]>([entry])
   const [children, setChildren] = useState<WorkspaceChildren | null>(null)
@@ -52,6 +44,7 @@ function TreeNode({ reveal, compact, scope, entry, root, level, revision, select
   const [error, setError] = useState('')
   const pending = useRef<AbortController | null>(null)
   const cache = useRef(new Map<string, WorkspaceChildren>())
+  const cacheRevision = useRef(revision)
   const activeEntry = segments.find(segment => segment.path === selected) ?? segments[segments.length - 1]
   const empty = !!children && !children.truncated && children.entries.length === 0 && !error && !loading
   const expandable = directory && available && !empty
@@ -60,7 +53,8 @@ function TreeNode({ reveal, compact, scope, entry, root, level, revision, select
     pending.current?.abort()
     const controller = new AbortController()
     pending.current = controller
-    if (refresh) cache.current.clear()
+    if (refresh || cacheRevision.current !== revision) cache.current.clear()
+    cacheRevision.current = revision
     setLoading(true); setError('')
     const chain: NodeEntry[] = [entry]
     let current = entry
@@ -124,12 +118,8 @@ function TreeNode({ reveal, compact, scope, entry, root, level, revision, select
     return () => window.removeEventListener('devflow-tree-file-changed', changed)
   }, [segments, directory, available, readChildren])
   useEffect(() => {
-    if (!scope || !expanded) return
-    const saved = readViewState(scope).expanded
-    const paths = new Set(Array.isArray(saved) ? saved.filter(path => typeof path === 'string') : [])
-    for (const segment of segments) paths.add(segment.path)
-    writeViewState(scope, { expanded: [...paths].slice(-200) })
-  }, [scope, expanded, segments])
+    if (expanded) onExpansionChange(segments.map(segment => segment.path), true)
+  }, [expanded, segments, onExpansionChange])
   function toggle(target = activeEntry) {
     onSelect(target.path)
     if (!directory) { if (available) onOpenFile(entry.path); return }
@@ -176,7 +166,7 @@ function TreeNode({ reveal, compact, scope, entry, root, level, revision, select
       }}><MoreHorizontal size={14} /></button>}
     </FileTreeRow>
     {((expanded && !empty) || !!error) && <ul role="group">
-      {expanded && children?.entries.map(child => <MemoTreeNode reveal={reveal} compact={compact} scope={scope} key={child.path} entry={child} root={root} level={level + 1} revision={revision} selected={selected} copiedPath={copiedPath} onCopy={onCopy} onSelect={onSelect} onOpenFile={onOpenFile} onNodeMenu={onNodeMenu} />)}
+      {expanded && children?.entries.map(child => <MemoTreeNode reveal={reveal} compact={compact} expandedPaths={expandedPaths} onExpansionChange={onExpansionChange} key={child.path} entry={child} root={root} level={level + 1} revision={revision} selected={selected} copiedPath={copiedPath} onCopy={onCopy} onSelect={onSelect} onOpenFile={onOpenFile} onNodeMenu={onNodeMenu} />)}
       {expanded && loading && <li role="none" className="ws-tree-note">正在读取…</li>}
       {error && <li role="none" className="ws-tree-note is-error" onClick={event => event.stopPropagation()}><span role="status">{error}</span><button onClick={() => void readChildren(true)}>重试</button></li>}
       {expanded && children?.truncated && <li role="none" className="ws-tree-note">目录过大，仅显示前 2000 个条目范围内的内容。</li>}
@@ -191,6 +181,25 @@ function clampWidth(width: number) { return Math.round(Math.max(200, Math.min(ma
 export function WorkspaceTree({ activeFilePath, data, open, hidden, view, onChange, onRefresh, onConfigure, onAddFolder, onSave, onClose, onToggle, onOpenFile }: { activeFilePath: string | null; data: WorkspaceResponse | null; open: boolean; hidden?: boolean; view: 'explorer' | 'search'; onChange: (data: WorkspaceResponse) => void; onRefresh: () => void; onConfigure: () => void; onAddFolder: () => void; onSave: () => void; onClose: () => void; onToggle: () => void; onOpenFile: (path: string, pinned?: boolean, line?: number, column?: number) => void }) {
   const dialogs = useDialogs()
   const scope = workspaceViewKey(data)
+  const savedExpanded = useMemo(() => {
+    const saved = scope ? readViewState(scope).expanded : []
+    return new Set(Array.isArray(saved) ? saved.filter(path => typeof path === 'string').map(viewPathKey) : [])
+  }, [scope])
+  const [expansion, setExpansion] = useState<{ scope: string | null; paths: ReadonlySet<string> } | null>(null)
+  const expandedPaths = expansion?.scope === scope ? expansion.paths : savedExpanded
+  const changeExpansion = useCallback<ExpansionChange>((paths, expanded) => {
+    setExpansion(current => {
+      const previous = current?.scope === scope ? current.paths : savedExpanded
+      const keys = paths.map(viewPathKey)
+      if (keys.every(path => previous.has(path) === expanded)) return current
+      const next = new Set(previous)
+      for (const path of keys) { if (expanded) next.add(path); else next.delete(path) }
+      return { scope, paths: next }
+    })
+  }, [scope, savedExpanded])
+  useEffect(() => {
+    if (scope) writeViewState(scope, { expanded: [...expandedPaths].slice(-200) })
+  }, [scope, expandedPaths])
   const [compact, setCompact] = useCompactFolders()
   const [generation, setGeneration] = useState(0)
   const [selected, setSelected] = useState<string | null>(null)
@@ -301,9 +310,10 @@ export function WorkspaceTree({ activeFilePath, data, open, hidden, view, onChan
       setMenu(null)
       if (deleted) {
         setSelected(current => current && pathWithin(current, entry.path) ? null : current)
+        setExpansion(current => ({ scope, paths: new Set([...(current?.scope === scope ? current.paths : savedExpanded)].filter(path => !pathWithin(path, entry.path))) }))
         if (scope) {
           const saved = readViewState(scope)
-          writeViewState(scope, { selected: saved.selected && pathWithin(saved.selected, entry.path) ? null : saved.selected, expanded: saved.expanded?.filter(path => !pathWithin(path, entry.path)) })
+          writeViewState(scope, { selected: saved.selected && pathWithin(saved.selected, entry.path) ? null : saved.selected })
         }
       }
       if (!directory) window.dispatchEvent(new CustomEvent('devflow-tree-file-changed', { detail: entry.path }))
@@ -332,13 +342,13 @@ export function WorkspaceTree({ activeFilePath, data, open, hidden, view, onChan
       <button className="ws-icon-button" aria-label="紧凑文件夹" title="紧凑文件夹：合并连续单子目录" aria-pressed={compact} onClick={() => {
         const next = !compact; setReveal(null); setCompact(next); setMenu(null)
       }}><Settings2 size={14} /></button>
-      <button className="ws-icon-button" aria-label="折叠所有文件夹" title="折叠所有文件夹" onClick={() => { setReveal(null); if (scope) writeViewState(scope, { expanded: [] }); setGeneration(current => current + 1) }}><ChevronsDownUp size={14} /></button>
+      <button className="ws-icon-button" aria-label="折叠所有文件夹" title="折叠所有文件夹" onClick={() => { setReveal(null); setExpansion({ scope, paths: new Set<string>() }) }}><ChevronsDownUp size={14} /></button>
       <button className="ws-icon-button" aria-label="刷新目录树" title="刷新目录树" onClick={() => { setReveal(null); setGeneration(current => current + 1) }}><RefreshCw size={14} /></button>
       <button className="ws-icon-button" aria-label="向左收起文件管理器" title="向左收起文件管理器" onClick={() => { onClose(); sidebarRef.current?.querySelector<HTMLButtonElement>('.ws-sidebar-toggle')?.focus() }}><ChevronLeft size={14} /></button>
     </div></div>
     <div className="ws-tree-scroll">
-      <ul role="tree" aria-label="工作区文件夹" key={`${scope}:${data?.revision ?? 0}:${generation}:${compact}`}>
-        {roots.map(folder => <MemoTreeNode reveal={reveal} compact={compact} scope={scope} key={folder.path} entry={folder} root={folder} level={1} revision={data!.revision} selected={selected} copiedPath={copyNotice?.path ?? null} onCopy={copyPath} onSelect={selectPath} onOpenFile={onOpenFile} onNodeMenu={openNodeMenu} />)}
+      <ul role="tree" aria-label="工作区文件夹" key={`${scope}:${generation}:${compact}`}>
+        {roots.map(folder => <MemoTreeNode reveal={reveal} compact={compact} expandedPaths={expandedPaths} onExpansionChange={changeExpansion} key={folder.path} entry={folder} root={folder} level={1} revision={data!.revision} selected={selected} copiedPath={copyNotice?.path ?? null} onCopy={copyPath} onSelect={selectPath} onOpenFile={onOpenFile} onNodeMenu={openNodeMenu} />)}
       </ul>
       {!data?.folders.length && <div className="ws-tree-empty"><p>{hasWorkspace ? '工作区还没有文件夹' : '打开文件夹或工作区'}</p>{!readOnlyShare && <button className="ws-outline-button" onClick={hasWorkspace ? onAddFolder : onConfigure}><FolderPlus size={14} />{hasWorkspace ? '添加文件夹' : '打开工作区'}</button>}</div>}
       {data?.warnings.map(warning => <p className="ws-tree-note is-error" role="status" key={warning}>{warning}</p>)}

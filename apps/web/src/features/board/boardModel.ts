@@ -2,6 +2,8 @@ export type TaskStatus = 'todo' | 'doing' | 'review' | 'done'
 export type BoardTask = {
   id: string; title: string; description: string; acceptance: string; feature: string
   status: TaskStatus; priority: '高' | '普通'; owner?: string; ownerId?: string; blocked?: string; result?: string
+  codexThreadId?: string
+  createdAt?: number; statusChangedAt?: number
   activity: string[]
 }
 export type BoardFeature = { id: string; name: string; description: string; goal: string; x: number; y: number }
@@ -12,12 +14,21 @@ export type BoardOperation =
   | { type: 'edges'; edges: [string, string][] }
   | ({ type: 'task_create' } & Pick<BoardTask, 'title' | 'description' | 'acceptance' | 'feature' | 'priority'>)
   | ({ type: 'task_update' } & Pick<BoardTask, 'id' | 'title' | 'description' | 'acceptance' | 'feature' | 'priority'>)
+  | { type: 'task_session'; id: string; threadId: string | null }
   | { type: 'task_delete'; id: string }
+  | { type: 'task_reorder'; id: string; status: TaskStatus; beforeId?: string }
   | { type: 'action'; id: string; action: 'move' | 'complete' | 'claim' | 'release' | 'submit' | 'progress' | 'approve' | 'reject' | 'reopen' | 'block' | 'unblock'; text?: string }
   | { type: 'import'; features: BoardFeature[]; tasks: BoardTask[]; edges: [string, string][] }
 
 export function activityText(entry: string) {
   return entry.replace(/^(\d+) · /, (_, seconds: string) => `${new Date(Number(seconds) * 1000).toLocaleString()} · `)
+}
+export type BoardSort = 'manual' | 'time_desc' | 'time_asc'
+export function sortBoardTasks(tasks: BoardTask[], status: TaskStatus, sort: BoardSort) {
+  const column = tasks.filter(task => task.status === status)
+  if (sort === 'manual') return column
+  const time = (task: BoardTask) => (status === 'todo' ? task.createdAt : task.statusChangedAt) ?? 0
+  return column.sort((a, b) => (time(a) - time(b)) * (sort === 'time_desc' ? -1 : 1))
 }
 export const statuses: { id: TaskStatus; label: string }[] = [
   { id: 'todo', label: '待开始' },

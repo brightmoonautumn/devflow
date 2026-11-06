@@ -103,6 +103,8 @@ pub struct StepResult {
     pub elapsed_ms: u64,
     pub request: Value,
     pub response: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_raw: Option<String>,
     pub checks: Vec<Check>,
     pub error: Option<String>,
 }
@@ -172,6 +174,7 @@ pub enum Operation {
 #[derive(Default)]
 pub struct QaService {
     jobs: Mutex<BTreeMap<String, Arc<AtomicBool>>>,
+    live_requests: Mutex<BTreeMap<String, (String, BTreeMap<String, (Value, Option<String>)>)>>,
 }
 impl DevFlowEngine {
     pub fn qa_get(&self, query: Query, authenticated: bool) -> Result<Snapshot> {
@@ -203,6 +206,18 @@ impl DevFlowEngine {
                     }
                 }
                 save(&path, &store)?;
+            }
+        }
+        if let Ok(requests) = self.qa.live_requests.lock() {
+            if let Some((run_id, calls)) = requests.get(&query.workspace_key) {
+                if let Some(run) = store.runs.iter_mut().find(|run| &run.id == run_id) {
+                    for result in &mut run.results {
+                        if let Some((request, response)) = calls.get(&result.call_id) {
+                            result.request = request.clone();
+                            result.response_raw = response.clone();
+                        }
+                    }
+                }
             }
         }
         Ok(store)
@@ -302,6 +317,12 @@ impl DevFlowEngine {
                 store.runs.insert(0, run);
                 store.runs.truncate(20);
                 save(&path, &store)?;
+                if let Ok(mut requests) = self.qa.live_requests.lock() {
+                    if requests.len() >= 4 && !requests.contains_key(&request.workspace_key) {
+                        if let Some(key) = requests.keys().next().cloned() { requests.remove(&key); }
+                    }
+                    requests.insert(request.workspace_key.clone(), (id.clone(), BTreeMap::new()));
+                }
                 let initial = store.clone();
                 let cancel = Arc::new(AtomicBool::new(false));
                 jobs.insert(request.workspace_key.clone(), cancel.clone());
@@ -759,6 +780,7 @@ fn execute(
             elapsed_ms: 0,
             request: Value::Null,
             response: Value::Null,
+            response_raw: None,
             checks: vec![],
             error: None,
         };
@@ -800,9 +822,21 @@ fn execute(
             if !body.is_null() {
                 request = request.json(&body);
             }
-            step.request = json!({"method":call.method,"url":url.as_str(),"actor":call.actor,"authorization":if actor.token.is_some() { "[REDACTED]" } else { "无" },"body":body});
-            let response = request
-                .send()
+            let built = request.build().map_err(|_| error("invalid_request", "无法构建目标请求"))?;
+            let headers: BTreeMap<String, String> = built.headers().iter()
+                .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_owned()))
+                .collect();
+            let body_text = built.body().and_then(|body| body.as_bytes())
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+            let actual = json!({"method":built.method().as_str(), "url":built.url().as_str(), "headers":headers, "body":body_text, "live":true});
+            step.request = actual.clone();
+            step.request["live"] = json!(false);
+            if let Ok(mut requests) = service.live_requests.lock() {
+                if let Some((run_id, calls)) = requests.get_mut(&store.workspace_key) {
+                    if run_id == &store.runs[0].id { calls.insert(call.id.clone(), (actual, None)); }
+                }
+            }
+            let response = client.execute(built)
                 .map_err(|_| error("unavailable", "目标请求失败或超时（未自动重试）"))?;
             step.http_status = Some(response.status().as_u16());
             let mut bytes = vec![];
@@ -816,6 +850,15 @@ fn execute(
             let response: Value = serde_json::from_slice(&bytes)
                 .map_err(|_| error("invalid_request", "目标没有返回有效 JSON"))?;
             step.response = response.clone();
+            if let Ok(mut requests) = service.live_requests.lock() {
+                if let Some((run_id, calls)) = requests.get_mut(&store.workspace_key) {
+                    if run_id == &store.runs[0].id {
+                        if let Some((_, raw)) = calls.get_mut(&call.id) {
+                            *raw = Some(String::from_utf8_lossy(&bytes).into_owned());
+                        }
+                    }
+                }
+            }
             step.checks.push(Check {
                 name: "HTTP 200".into(),
                 passed: step.http_status == Some(200),
@@ -861,6 +904,12 @@ fn execute(
                 if let Some(s) = step.response.pointer(pointer).and_then(Value::as_str) {
                     secrets.push(s.into());
                 }
+            }
+        }
+        // Parse the serialized body before redaction so sensitive JSON keys remain protected on disk.
+        if let Some(body) = step.request.get("body").and_then(Value::as_str) {
+            if let Ok(value) = serde_json::from_str::<Value>(body) {
+                step.request["body"] = json!(redact(&value, &secrets).to_string());
             }
         }
         step.request = redact(&step.request, &secrets);

@@ -21,6 +21,9 @@ type Props = {
 export function TaskDetailEditor({ task, features, revision, busy, formId, onDirty, onSave, onCopyInstructions, onCopyDescription }: Props) {
   const id = useId()
   const choices = featureChoices(features)
+  const [threadId, setThreadId] = useState(task.codexThreadId ?? '')
+  const [sessionError, setSessionError] = useState('')
+  useEffect(() => { setThreadId(task.codexThreadId ?? '') }, [task.id, task.codexThreadId])
   const [draft, setDraft] = useState(() => fields(task))
   const [baseRevision, setBaseRevision] = useState(revision)
   const [dirty, setDirty] = useState(false)
@@ -43,6 +46,8 @@ export function TaskDetailEditor({ task, features, revision, busy, formId, onDir
     <fieldset disabled={busy}>
       <BaseField htmlFor={`${id}-field-1`} label="任务标题"><BaseInput id={`${id}-field-1`} required maxLength={120} value={draft.title} onChange={e => change({ title: e.target.value })} /></BaseField>
       <div className="kb-form-row"><BaseField htmlFor={`${id}-field-2`} label="所属功能"><BaseSelect id={`${id}-field-2`} disabled={busy} value={draft.feature || choices.unclassified} onValueChange={value => change({ feature: value === choices.unclassified ? '' : value })} options={choices.withUnclassified} /></BaseField><BaseField htmlFor={`${id}-field-3`} label="优先级"><BaseSelect id={`${id}-field-3`} disabled={busy} value={draft.priority} onValueChange={value => { if (value === '高' || value === '普通') change({ priority: value }) }} options={priorityChoices} /></BaseField></div>
+      <BaseField htmlFor={`${id}-session`} label="Codex 会话链接或 ID" hint="粘贴 Codex 右键复制的会话链接或会话 ID；清空后保存可解除绑定。"><BaseInput id={`${id}-session`} value={threadId} onChange={e => { setThreadId(e.target.value); setSessionError('') }} placeholder="codex://threads/会话 ID" /></BaseField>
+      <div className="kb-session-actions"><BaseButton type="button" disabled={busy || dirty} onClick={() => { const value = threadId.trim(); const match = /^(?:codex:\/\/threads\/)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(value); if (value && !match) { setSessionError('请输入有效的 Codex 会话链接或 ID'); return } const normalized = match?.[1].toLowerCase() ?? null; if (normalized === (task.codexThreadId ?? null)) { setThreadId(normalized ?? ''); return } void onSave({ type: 'task_session', id: task.id, threadId: normalized }, revision) }}>保存会话绑定</BaseButton>{task.codexThreadId && <a href={`codex://threads/${task.codexThreadId}`}>打开 Codex 会话</a>}{sessionError && <span role="alert">{sessionError}</span>}</div>
       <BaseField htmlFor={`${id}-field-4`} label="任务描述" action={<span className="kb-description-actions"><BaseButton type="button" disabled={!draft.description} onClick={() => onCopyDescription(draft.description)}>复制描述</BaseButton><BaseButton type="button" disabled={busy || dirty} onClick={onCopyInstructions}>复制 AI 整理指令</BaseButton></span>}><BaseTextarea className="kb-task-description" id={`${id}-field-4`} rows={12} maxLength={4000} placeholder="先粗略记录，之后逐步补充…" value={draft.description} onChange={e => change({ description: e.target.value })} /></BaseField>
       <BaseField htmlFor={`${id}-field-5`} label="目标与验收"><BaseTextarea id={`${id}-field-5`} rows={3} maxLength={4000} placeholder="完成后如何判断达到目标" value={draft.acceptance} onChange={e => change({ acceptance: e.target.value })} /></BaseField>
       <div className="kb-inline-save"><span role="status">{dirty ? '有未保存修改' : '已保存'}</span>{dirty && <BaseButton type="button" onClick={reset}>撤销修改</BaseButton>}</div>

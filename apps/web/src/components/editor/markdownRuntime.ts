@@ -5,7 +5,45 @@ export const markdownAssetRoot = `${import.meta.env.BASE_URL}vendor/vditor`
 let ready: Promise<void> | undefined
 let diagrams: Promise<typeof import('mermaid')> | undefined
 let renderQueue: Promise<unknown> = Promise.resolve()
-const diagramError = () => ({ svg: '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="72" viewBox="0 0 480 72"><text x="16" y="40" fill="#d97706" font-family="sans-serif" font-size="14">图表暂时无法渲染，请检查源码或重新打开文档。</text></svg>' })
+const diagramError = () => ({ failed: true, svg: '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="72" viewBox="0 0 480 72"><text x="16" y="40" fill="#d97706" font-family="sans-serif" font-size="14">图表暂时无法渲染，请检查源码或重新打开文档。</text></svg>' })
+
+/** All Mermaid callers share one queue because initialize mutates global state. */
+export function renderMarkdownDiagram(id: string, source: string, options: MermaidConfig, signal?: AbortSignal): Promise<{ svg: string; failed: boolean }> {
+  const job = renderQueue.catch(() => {}).then(async () => {
+    signal?.throwIfAborted()
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    signal?.throwIfAborted()
+    const { default: mermaid } = await (diagrams ??= import('mermaid').catch(error => {
+      diagrams = undefined
+      throw error
+    }))
+    signal?.throwIfAborted()
+    mermaid.initialize({ ...options, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true,
+      maxTextSize: 80000, maxEdges: 1000, htmlLabels: false, flowchart: { ...options.flowchart, htmlLabels: false },
+      secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'htmlLabels', 'flowchart', 'suppressErrorRendering'],
+    })
+    // Keep SVG measurement out of the page's scrollable layout.
+    const container = document.createElement('div')
+    container.setAttribute('aria-hidden', 'true')
+    Object.assign(container.style, {
+      position: 'fixed', top: '0', left: '0', width: '880px', height: '0',
+      overflow: 'hidden', visibility: 'hidden', pointerEvents: 'none', contain: 'layout paint',
+    })
+    document.body.append(container)
+    try {
+      const result = await mermaid.render(id, source, container)
+      signal?.throwIfAborted()
+      return { svg: DOMPurify.sanitize(result.svg, { USE_PROFILES: { svg: true, svgFilters: true } }), failed: false }
+    } finally {
+      container.remove()
+    }
+  }).catch(error => {
+    if (signal?.aborted) throw error
+    return diagramError()
+  })
+  renderQueue = job
+  return job
+}
 
 /** Complex HTML and diagrams must never round-trip through a contenteditable DOM. */
 export function needsSourcePreview(markdown: string): boolean {
@@ -46,40 +84,7 @@ export function prepareMarkdownRuntime(): Promise<void> {
     Object.assign(window, { mermaid: {
       initialize(options: typeof config) { config = options },
       render(id: string, source: string) {
-        const options = config
-        const job = renderQueue.catch(() => {}).then(async () => {
-          // Let pending clicks and paints run between expensive diagram layouts.
-          await new Promise<void>(resolve => setTimeout(resolve, 0))
-          const { default: mermaid } = await (diagrams ??= import('mermaid').catch(error => {
-            diagrams = undefined
-            throw error
-          }))
-          mermaid.initialize({ ...options, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true,
-            maxTextSize: 80000, maxEdges: 1000, htmlLabels: false, flowchart: { ...options?.flowchart, htmlLabels: false },
-            secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'htmlLabels', 'flowchart', 'suppressErrorRendering'],
-          })
-          // Mermaid otherwise measures temporary SVGs directly in body, briefly
-          // expanding the page while large diagrams are being laid out.
-          // Keep layout measurable (not display:none) without a scrollable box.
-          const container = document.createElement('div')
-          container.setAttribute('aria-hidden', 'true')
-          Object.assign(container.style, {
-            position: 'fixed', top: '0', left: '0', width: '880px', height: '0',
-            overflow: 'hidden', visibility: 'hidden', pointerEvents: 'none', contain: 'layout paint',
-          })
-          document.body.append(container)
-          try {
-            const result = await mermaid.render(id, source, container)
-            return { svg: DOMPurify.sanitize(result.svg, { USE_PROFILES: { svg: true, svgFilters: true } }) }
-          } catch {
-            // Vditor's error path assumes a DOM error node; return a safe diagnostic instead.
-            return diagramError()
-          } finally {
-            container.remove()
-          }
-        }).catch(diagramError)
-        renderQueue = job
-        return job
+        return renderMarkdownDiagram(id, source, config)
       },
     } })
     if (!document.getElementById('vditorMermaidScript')) {

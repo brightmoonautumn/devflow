@@ -58,6 +58,8 @@
 .df-markdown-editor .vditor-reset li { margin: 5px 0; }
 .df-markdown-editor .language-mermaid { display: block; overflow-x: auto; padding: 16px 8px; background: var(--ws-surface); border-radius: 8px; }
 .df-markdown-editor .language-mermaid svg { height: auto; min-width: 720px; cursor: zoom-in; }
+.df-markdown-editor .language-mermaid .md-mermaid-image { display: block; width: 100%; min-width: 720px; max-width: none; height: auto; cursor: zoom-in; }
+.df-markdown-editor .language-mermaid.md-mermaid-pending { box-sizing: border-box; white-space: normal; color: var(--ws-muted); font: 13px/1.7 var(--font-ui); }
 .df-markdown-editor .vditor-outline { width: 190px; min-width: 150px; max-width: 25%; background: var(--ws-surface); color: var(--ws-muted); border-right: 1px solid var(--ws-border); font-family: var(--font-ui); font-size: var(--ws-font-small); }
 .df-markdown-editor .vditor-outline__title { color: var(--ws-muted); }
 .df-markdown-editor .vditor-outline li > span:hover { background: var(--ws-hover); color: var(--ws-ink); }

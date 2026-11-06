@@ -5,7 +5,7 @@ export interface QaCall { id: string; name: string; method: string; path: string
 export interface QaAction { id: string; title: string; description: string; calls: QaCall[] }
 export interface QaScenario { id: string; module: string; title: string; purpose: string; uses: string[]; actions: QaAction[] }
 export interface QaSuite { name: string; baseUrl: string; siteUrl: string; publicKey: string; actors: Record<string, QaActor>; variables: Record<string, unknown>; scenarios: QaScenario[] }
-export interface QaResult { callId: string; scenarioId: string; name: string; actor: string; status: string; httpStatus: number | null; elapsedMs: number; request: unknown; response: unknown; checks: { name: string; passed: boolean }[]; error: string | null }
+export interface QaResult { callId: string; scenarioId: string; name: string; actor: string; status: string; httpStatus: number | null; elapsedMs: number; request: unknown; response: unknown; responseRaw?: string; checks: { name: string; passed: boolean }[]; error: string | null }
 export interface QaRun { id: string; scenarioId: string; suiteRevision: number; status: string; createdAt: number; updatedAt: number; accountName: string; currentCall: string | null; results: QaResult[]; variables: Record<string, unknown>; error: string | null }
 export interface QaSnapshot { workspaceKey: string; revision: number; suite: QaSuite | null; runs: QaRun[] }
 export type QaOperation = { type: 'seed' } | { type: 'save'; suite: QaSuite } | { type: 'run'; scenarioId: string; inputs: Record<string, string> } | { type: 'cancel'; runId: string }

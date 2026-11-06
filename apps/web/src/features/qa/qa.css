@@ -136,7 +136,7 @@ body:has(.qa-panel-divider.is-dragging), body:has(.qa-panel-divider.is-dragging)
 .qa-notice { padding: 8px 24px; font-size: var(--ws-font-small); }
 .qa-run-history { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 0 24px 12px; color: var(--ws-muted); font-size: var(--ws-font-caption); }
 .qa-run-history label { display: flex; align-items: center; gap: 6px; }
-.qa-run-history select, .qa-password input { color: var(--ws-ink); background: var(--ws-surface); border: 1px solid var(--ws-border); border-radius: 4px; padding: 4px 6px; font-size: var(--ws-font-caption); min-width: 0; }
+.qa-password input { color: var(--ws-ink); background: var(--ws-surface); border: 1px solid var(--ws-border); border-radius: 4px; padding: 4px 6px; font-size: var(--ws-font-caption); min-width: 0; }
 .qa-password { display: flex; align-items: center; gap: 6px; color: var(--ws-muted); font-size: var(--ws-font-caption); }
 .qa-password input { width: 85px; }
 .qa-checks { display: grid; gap: 6px; }
@@ -146,11 +146,6 @@ body:has(.qa-panel-divider.is-dragging), body:has(.qa-panel-divider.is-dragging)
 .qa-environment { font-size: var(--ws-font-caption); }
 @media (max-width: 600px) { .qa-run-history, .qa-notice { padding-inline: 12px; } }
 
-.qa-replay-status { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 4px 7px; border: 1px solid var(--ws-accent); border-radius: 4px; background: var(--ws-accent-bg); color: var(--ws-accent); font-size: var(--ws-font-caption); }
-.qa-replay-status > svg { flex-shrink: 0; }
-.qa-replay-step-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 180px; }
-.qa-page .qa-playback-control { display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; border: 1px solid var(--ws-border); border-radius: 4px; color: var(--ws-muted); font-size: var(--ws-font-small); }
-.qa-playback-control:not(:disabled):hover { background: var(--ws-hover); color: var(--ws-ink); }
 .qa-call.is-executing, .qa-page .qa-flow-node.is-executing { border-color: var(--ws-accent); box-shadow: inset 3px 0 var(--ws-accent), 0 0 0 2px var(--ws-accent-bg); background: var(--ws-accent-bg); }
 .qa-call.is-failed, .qa-page .qa-flow-node.is-failed, .qa-references button.is-failed { border-color: var(--ws-error); }
 .qa-execution-spinner { color: var(--ws-accent); flex-shrink: 0; animation: qa-request-spin 1s linear infinite; }
@@ -162,8 +157,38 @@ body:has(.qa-panel-divider.is-dragging), body:has(.qa-panel-divider.is-dragging)
 .qa-prerequisite-failure small { display: block; margin-top: 6px; color: var(--ws-muted); }
 @keyframes qa-request-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .qa-execution-spinner { animation: none; } .qa-call-group { transition: none; } }
-@media (max-width: 600px) { .qa-prerequisite-failure { margin-inline: 12px; } .qa-replay-step-name { max-width: 120px; } }
 
-.qa-call-replaying, .qa-reference-replaying { color: var(--ws-accent); font-size: var(--ws-font-caption); font-weight: 600; white-space: nowrap; }
 .qa-call.is-executing > .qa-call-summary { box-shadow: inset 4px 0 var(--ws-accent); }
 .qa-references button.is-running { border-color: var(--ws-accent); box-shadow: inset 3px 0 var(--ws-accent), 0 0 0 2px var(--ws-accent-bg); }
+
+.qa-history-select { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.qa-history-select .df-select { width: min(300px, 60vw); min-height: 32px; padding: 4px 8px; font-size: var(--ws-font-caption); }
+.qa-demo-status { position: relative; }
+.qa-confetti { position: absolute; left: 50%; top: 50%; pointer-events: none; }
+.qa-confetti i { position: absolute; width: 5px; height: 8px; background: var(--piece-color); border-radius: 1px; opacity: 0; animation: qa-confetti-burst 900ms ease-out both; transform: rotate(var(--angle)) translateY(0); }
+@keyframes qa-confetti-burst { 0% { opacity: 1; transform: rotate(var(--angle)) translateY(0) scale(.5); } 65% { opacity: 1; } 100% { opacity: 0; transform: rotate(var(--angle)) translateY(calc(-1 * var(--distance))) rotate(100deg) scale(1); } }
+@media (prefers-reduced-motion: reduce) { .qa-confetti { display: none; } }
+
+@media (max-width: 600px) { .qa-prerequisite-failure { margin-inline: 12px; } }
+
+.qa-exchange { display: flex; flex-direction: column; gap: 20px; }
+.qa-exchange section { min-width: 0; }
+.qa-exchange-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: var(--ws-font-small); }
+.qa-exchange-heading strong { font-weight: 600; }
+.qa-exchange-heading button { color: var(--ws-accent); }
+.qa-exchange pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.qa-exchange-actions { display: flex; align-items: center; gap: 12px; }
+.qa-exchange-subheading { margin: 12px 0 8px; color: var(--ws-muted); font-size: var(--ws-font-small); }
+.qa-json .tok-propertyName { color: var(--tree-teal); }
+.qa-json .tok-string { color: var(--tree-green); }
+.qa-json .tok-number, .qa-json .tok-bool, .qa-json .tok-null { color: var(--tree-orange); }
+.qa-json .tok-punctuation { color: var(--ws-muted); }
+
+.qa-curl-command { color: var(--tree-blue); }
+.qa-curl-flag { color: var(--tree-orange); }
+.qa-curl-string { color: var(--tree-green); }
+
+.qa-page .qa-exchange-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 0; color: var(--ws-ink); text-align: left; }
+.qa-exchange-toggle svg { flex-shrink: 0; color: var(--ws-muted); }
+.qa-exchange-toggle:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 3px; }

@@ -21,6 +21,8 @@ pub struct Feature {
 pub struct Task {
     pub id: String, pub title: String, pub description: String, pub acceptance: String,
     pub feature: String, pub priority: String, pub status: String,
+    #[serde(default)] pub created_at: u64,
+    #[serde(default)] pub status_changed_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -29,6 +31,8 @@ pub struct Task {
     pub blocked: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_thread_id: Option<String>,
     #[serde(default)] pub activity: Vec<String>,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -56,12 +60,15 @@ pub enum BoardOperation {
     Edges { edges: Vec<[String; 2]> },
     TaskCreate { title: String, #[serde(default)] description: String, #[serde(default)] acceptance: String, #[serde(default)] feature: String, #[serde(default = "normal_priority")] priority: String },
     TaskUpdate { id: String, title: String, description: String, acceptance: String, feature: String, priority: String },
+    TaskSession { id: String, thread_id: Option<String> },
     TaskDelete { id: String },
+    TaskReorder { id: String, status: String, before_id: Option<String> },
     Action { id: String, action: String, text: Option<String> },
     Import { features: Vec<Feature>, tasks: Vec<Task>, edges: Vec<[String; 2]> },
     Restore { board: BoardSnapshot },
 }
 fn normal_priority() -> String { "普通".into() }
+fn now_seconds() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() }
 
 fn text(value: &str, max: usize, required: bool) -> Result<()> {
     if value.len() > max || (required && value.trim().is_empty()) {
@@ -96,6 +103,7 @@ fn validate(board: &BoardSnapshot) -> Result<()> {
             || !["高", "普通"].contains(&t.priority.as_str()) {
             return Err(error("invalid_request", "任务标识、所属功能、状态或优先级无效"));
         }
+        if let Some(id) = &t.codex_thread_id { if uuid::Uuid::parse_str(id).is_err() { return Err(error("invalid_request", "Codex 会话 ID 无效")); } }
         for value in [&t.owner, &t.owner_id, &t.blocked, &t.result].into_iter().flatten() { text(value, 16000, false)?; }
         if t.activity.len() > 1000 { return Err(error("invalid_request", "单个任务的活动记录已达 1000 条")); }
         for entry in &t.activity { text(entry, 20000, false)?; }
@@ -204,10 +212,20 @@ fn load(path: &Path, key: &str) -> Result<BoardSnapshot> {
     let mut bytes = Vec::new();
     fs::File::open(path).map_err(io_error)?.take(BOARD_LIMIT + 1).read_to_end(&mut bytes).map_err(io_error)?;
     if bytes.len() as u64 > BOARD_LIMIT { return Err(error("invalid_request", "看板文件超过 8 MiB")); }
-    let board: BoardSnapshot = serde_json::from_slice(&bytes)
+    let mut board: BoardSnapshot = serde_json::from_slice(&bytes)
         .map_err(|e| error("io_error", format!("看板文件损坏，原文件已保留：{e}")))?;
     if board.workspace_key != key { return Err(error("conflict", "看板存储标识冲突")); }
     validate(&board)?;
+    // Recover known dates for legacy boards; unknown dates retain stable order.
+    for task in &mut board.tasks {
+        if task.created_at == 0 {
+            task.created_at = task.activity.first().and_then(|entry| entry.split(" · ").next()?.parse().ok()).unwrap_or(0);
+        }
+        if task.status_changed_at == 0 {
+            task.status_changed_at = task.activity.iter().rev().find(|entry| ["创建任务", "人工调整状态", "用户手动标记完成", "认领任务", "释放任务", "提交验收", "通过验收", "退回修改", "重新打开"].iter().any(|label| entry.split(" · ").nth(2).is_some_and(|message| message.starts_with(*label))))
+                .and_then(|entry| entry.split(" · ").next()?.parse().ok()).unwrap_or(task.created_at);
+        }
+    }
     Ok(board)
 }
 fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, human: bool) -> Result<String> {
@@ -225,8 +243,9 @@ fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, huma
             board.activity = local_activity;
             for task in &mut board.tasks {
                 task.activity = local_tasks.iter().find(|local| local.id == task.id).map(|local| local.activity.clone()).unwrap_or_default();
+                task.codex_thread_id = local_tasks.iter().find(|local| local.id == task.id).and_then(|local| local.codex_thread_id.clone());
                 task.owner = None; task.owner_id = None;
-                if task.status == "doing" { task.status = "todo".into(); }
+                if task.status == "doing" { task.status = "todo".into(); task.status_changed_at = now_seconds(); }
             }
             "从 Gitee 恢复看板；执行身份已清除".into()
         }
@@ -249,7 +268,7 @@ fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, huma
         Edges { edges } => { board.edges = edges; "更新功能关联".into() }
         TaskCreate { title, description, acceptance, feature, priority } => {
             let id = loop { board.next_task = board.next_task.checked_add(1).ok_or_else(|| error("conflict", "任务编号已达上限"))?; let id = format!("DF-{:03}", board.next_task); if !board.tasks.iter().any(|t| t.id == id) { break id; } };
-            board.tasks.push(Task { id: id.clone(), title, description, acceptance, feature, priority, status: "todo".into(), owner: None, owner_id: None, blocked: None, result: None, activity: vec![stamp(actor, "创建任务")] });
+            board.tasks.push(Task { id: id.clone(), title, description, acceptance, feature, priority, status: "todo".into(), owner: None, owner_id: None, blocked: None, result: None, codex_thread_id: None, created_at: now_seconds(), status_changed_at: now_seconds(), activity: vec![stamp(actor, "创建任务")] });
             format!("创建任务：{id}")
         }
         TaskUpdate { id, title, description, acceptance, feature, priority } => {
@@ -258,10 +277,33 @@ fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, huma
             task.title = title; task.description = description; task.acceptance = acceptance; task.feature = feature; task.priority = priority;
             task.activity.push(stamp(actor, "编辑任务")); format!("编辑任务：{id}")
         }
+        TaskSession { id, thread_id } => {
+            let task = board.tasks.iter_mut().find(|t| t.id == id).ok_or_else(|| error("not_found", "任务不存在"))?;
+            if !human && task.owner_id.as_deref().is_some_and(|v| v != actor) { return Err(error("permission_denied", "其他执行者正在处理该任务")); }
+            task.codex_thread_id = match thread_id { Some(value) if !value.trim().is_empty() => Some(uuid::Uuid::parse_str(value.trim()).map_err(|_| error("invalid_request", "请输入有效的 Codex 会话 ID"))?.to_string()), _ => None };
+            task.activity.push(stamp(actor, "更新 Codex 会话绑定")); format!("更新会话绑定：{id}")
+        }
         TaskDelete { id } => {
             let task = board.tasks.iter().find(|t| t.id == id).ok_or_else(|| error("not_found", "任务不存在"))?;
             if !human && task.owner_id.as_deref().is_some_and(|v| v != actor) { return Err(error("permission_denied", "其他执行者正在处理该任务")); }
             board.tasks.retain(|t| t.id != id); format!("删除任务：{id}")
+        }
+        TaskReorder { id, status, before_id } => {
+            let source = board.tasks.iter().find(|t| t.id == id).ok_or_else(|| error("not_found", "任务不存在"))?;
+            if !["todo", "doing", "review", "done"].contains(&status.as_str()) { return Err(error("invalid_request", "任务阶段无效")); }
+            if !human && source.status != status { return Err(error("permission_denied", "AI 排序不能改变任务阶段")); }
+            if let Some(before) = &before_id {
+                if before == &id || !board.tasks.iter().any(|t| &t.id == before && t.status == status) { return Err(error("invalid_request", "排序目标无效，请刷新后重试")); }
+            }
+            if source.status != status {
+                apply(board, Action { id: id.clone(), action: "move".into(), text: Some(status.clone()) }, actor, human)?;
+            }
+            let index = board.tasks.iter().position(|t| t.id == id).unwrap();
+            let task = board.tasks.remove(index);
+            let target = before_id.as_ref().and_then(|before| board.tasks.iter().position(|t| &t.id == before))
+                .unwrap_or_else(|| board.tasks.iter().rposition(|t| t.status == status).map(|i| i + 1).unwrap_or(board.tasks.len()));
+            board.tasks.insert(target, task);
+            format!("调整任务顺序：{id}")
         }
         Action { id, action, text: note } => {
             let t = board.tasks.iter_mut().find(|t| t.id == id).ok_or_else(|| error("not_found", "任务不存在"))?;
@@ -279,6 +321,7 @@ fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, huma
                 _ => false,
             };
             if !allowed { return Err(error("conflict", "当前状态或执行者不允许此操作，请刷新后检查任务")); }
+            let previous_status = t.status.clone();
             if ["submit", "progress", "block", "reject"].contains(&action.as_str()) { text(&note, 16000, true)?; }
             match action.as_str() {
                 "move" => { t.status = note.clone(); if note == "todo" || note == "done" { t.owner = None; t.owner_id = None; } if note == "done" { t.blocked = None; } }
@@ -292,6 +335,7 @@ fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, huma
                 "block" => t.blocked = Some(note.clone()), "unblock" => t.blocked = None,
                 _ => (),
             }
+            if t.status != previous_status { t.status_changed_at = now_seconds(); }
             let label = match action.as_str() { "move" => "人工调整状态", "complete" => "用户手动标记完成", "claim" => "认领任务", "release" => "释放任务", "submit" => "提交验收", "approve" => "通过验收", "reject" => "退回修改", "reopen" => "重新打开", "block" => "标记阻塞", "unblock" => "解除阻塞", _ => "记录进展" };
             t.activity.push(stamp(actor, &format!("{label}{}", if note.is_empty() { String::new() } else { format!("：{note}") })));
             format!("{id}：{label}")
@@ -300,7 +344,7 @@ fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, huma
             if !human || board.revision != 0 { return Err(error("conflict", "仅允许向未使用的空看板导入一次草稿")); }
             for t in &mut tasks {
                 // Prototype claims and deliveries never become real execution evidence.
-                t.status = "todo".into(); t.owner = None; t.owner_id = None; t.result = None;
+                t.status = "todo".into(); t.owner = None; t.owner_id = None; t.result = None; t.created_at = now_seconds(); t.status_changed_at = t.created_at;
                 t.activity = vec![stamp(actor, "从原型草稿导入；演示状态和交付已清除")];
             }
             board.features = features; board.tasks = tasks; board.edges = edges;
@@ -319,6 +363,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_binding_is_validated_and_can_be_cleared() {
+        let mut board = BoardSnapshot::default();
+        board.tasks.push(Task { id: "DF-001".into(), title: "任务".into(), description: String::new(), acceptance: String::new(), feature: String::new(), priority: "普通".into(), status: "todo".into(), owner: None, owner_id: None, blocked: None, result: None, codex_thread_id: None, created_at: now_seconds(), status_changed_at: now_seconds(), activity: vec![] });
+        let id = "01a18024-bf15-7773-8a0b-63e1bc40d2cb";
+        apply(&mut board, BoardOperation::TaskSession { id: "DF-001".into(), thread_id: Some(id.into()) }, "你", true).unwrap();
+        assert_eq!(board.tasks[0].codex_thread_id.as_deref(), Some(id));
+        assert!(apply(&mut board, BoardOperation::TaskSession { id: "DF-001".into(), thread_id: Some("bad".into()) }, "你", true).is_err());
+        assert_eq!(board.tasks[0].codex_thread_id.as_deref(), Some(id));
+        apply(&mut board, BoardOperation::TaskSession { id: "DF-001".into(), thread_id: None }, "你", true).unwrap();
+        assert!(board.tasks[0].codex_thread_id.is_none());
+    }
+    #[test]
     fn only_humans_can_complete_directly_without_delivery() {
         for phase in ["todo", "doing", "review"] {
             let f = Fixture::new(); let id = f.seed();
@@ -335,6 +391,44 @@ mod tests {
             let reopened = f.execute(BoardOperation::Action { id, action: "reopen".into(), text: None }, "你", true).unwrap();
             assert_eq!(reopened.tasks[0].status, "todo");
         }
+    }
+
+    #[test]
+    fn manual_order_persists_and_cross_column_moves_are_atomic() {
+        let f = Fixture::new(); let first = f.seed();
+        let second = f.execute(BoardOperation::TaskCreate { title: "第二个任务".into(), description: String::new(), acceptance: String::new(), feature: String::new(), priority: "普通".into() }, "你", true).unwrap().tasks[1].id.clone();
+        let before = f.read();
+        f.execute(BoardOperation::TaskReorder { id: second.clone(), status: "todo".into(), before_id: Some(first.clone()) }, "Codex:sort", false).unwrap();
+        let sorted = f.read();
+        assert_eq!(sorted.tasks[0].id, second);
+        assert_eq!(sorted.tasks[0].created_at, before.tasks[1].created_at);
+        assert_eq!(sorted.tasks[0].status_changed_at, before.tasks[1].status_changed_at);
+        assert_eq!(sorted.tasks[0].activity, before.tasks[1].activity);
+        assert!(f.execute(BoardOperation::TaskReorder { id: second.clone(), status: "done".into(), before_id: None }, "Codex:sort", false).is_err());
+        assert!(f.execute(BoardOperation::TaskReorder { id: second.clone(), status: "done".into(), before_id: Some(first.clone()) }, "你", true).is_err());
+        assert_eq!(f.read().revision, sorted.revision);
+        let done = f.execute(BoardOperation::TaskReorder { id: second.clone(), status: "done".into(), before_id: None }, "你", true).unwrap();
+        assert_eq!(done.tasks.iter().find(|t| t.id == second).unwrap().status, "done");
+        let appended = f.execute(BoardOperation::TaskReorder { id: first.clone(), status: "done".into(), before_id: None }, "你", true).unwrap();
+        assert_eq!(appended.tasks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec![second.as_str(), first.as_str()]);
+    }
+
+    #[test]
+    fn timestamps_survive_edits_and_legacy_dates_are_recovered() {
+        let f = Fixture::new(); let id = f.seed();
+        let path = f.service.board_location(&f.key).unwrap();
+        let mut legacy = serde_json::to_value(f.read()).unwrap();
+        legacy["tasks"][0].as_object_mut().unwrap().remove("createdAt");
+        legacy["tasks"][0].as_object_mut().unwrap().remove("statusChangedAt");
+        legacy["tasks"][0]["status"] = serde_json::json!("done");
+        legacy["tasks"][0]["activity"] = serde_json::json!(["100 · 你 · 创建任务", "200 · 你 · 通过验收", "300 · 你 · 编辑任务"]);
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let old = f.read();
+        assert_eq!(old.tasks[0].created_at, 100); assert_eq!(old.tasks[0].status_changed_at, 200);
+        let edited = f.execute(BoardOperation::TaskUpdate { id: id.clone(), title: "改正文".into(), description: String::new(), acceptance: String::new(), feature: String::new(), priority: "普通".into() }, "你", true).unwrap();
+        assert_eq!(edited.tasks[0].created_at, 100); assert_eq!(edited.tasks[0].status_changed_at, 200);
+        let reopened = f.action(&id, "reopen", None, "你", true).unwrap();
+        assert_eq!(reopened.tasks[0].created_at, 100); assert!(reopened.tasks[0].status_changed_at > 200);
     }
 
     #[test]
@@ -492,7 +586,7 @@ mod tests {
     #[test]
     fn import_never_promotes_demo_delivery_or_reuses_deleted_numbers() {
         let f = Fixture::new();
-        let task = Task { id: "DF-001".into(), title: "原型任务".into(), description: String::new(), acceptance: String::new(), feature: "feature".into(), priority: "普通".into(), status: "done".into(), owner: Some("演示".into()), owner_id: None, blocked: None, result: Some("模拟交付".into()), activity: vec!["模拟验收".into()] };
+        let task = Task { id: "DF-001".into(), title: "原型任务".into(), description: String::new(), acceptance: String::new(), feature: "feature".into(), priority: "普通".into(), status: "done".into(), owner: Some("演示".into()), owner_id: None, blocked: None, result: Some("模拟交付".into()), codex_thread_id: None, created_at: now_seconds(), status_changed_at: now_seconds(), activity: vec!["模拟验收".into()] };
         let imported = f.execute(BoardOperation::Import { features: vec![feature("feature")], tasks: vec![task], edges: vec![] }, "你", true).unwrap();
         assert_eq!(imported.tasks[0].status, "todo"); assert!(imported.tasks[0].result.is_none());
         assert!(f.execute(BoardOperation::Import { features: vec![], tasks: vec![], edges: vec![] }, "你", true).is_err());

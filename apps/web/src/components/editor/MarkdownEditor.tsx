@@ -181,12 +181,17 @@ export default function MarkdownEditor(props: SourceEditorProps & MarkdownImageC
     }
   }
   function expandDiagram(event: MouseEvent<HTMLDivElement>) {
-    const svg = (event.target as Element).closest('.language-mermaid')?.querySelector('svg')
-    if (!svg) return
+    const node = (event.target as Element).closest('.language-mermaid')
+    const image = node?.querySelector<HTMLImageElement>('.md-mermaid-image')
+    const svg = node?.querySelector('svg')
+    if (!image && !svg) return
     event.preventDefault(); event.stopPropagation()
-    const clean = DOMPurify.sanitize(svg.outerHTML, { USE_PROFILES: { svg: true, svgFilters: true } })
     setZoom(1)
-    setDiagram(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(clean)}`)
+    if (image) setDiagram(image.src)
+    else {
+      const clean = DOMPurify.sanitize(svg!.outerHTML, { USE_PROFILES: { svg: true, svgFilters: true } })
+      setDiagram(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(clean)}`)
+    }
   }
 
   const modeSwitch = <div className="md-mode-switch" role="group" aria-label="Markdown 查看与编辑模式">

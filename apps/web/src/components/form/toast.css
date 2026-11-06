@@ -1,0 +1,5 @@
+.df-toast-region { position: fixed; z-index: 200; top: 24px; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 32px); pointer-events: none; }
+.df-toast { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border: 1px solid var(--ws-border); border-radius: 8px; background: var(--ws-surface); color: var(--ws-ink); box-shadow: var(--ws-shadow); font: var(--ws-font-body)/1.5 var(--font-ui); overflow-wrap: anywhere; }
+.df-toast svg { flex-shrink: 0; }
+.df-toast.is-success svg { color: var(--ws-green); }
+.df-toast.is-error svg { color: var(--ws-error); }

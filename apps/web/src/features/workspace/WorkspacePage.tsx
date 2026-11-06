@@ -1,11 +1,13 @@
 import { readOnlyShare } from '../../lib/access'
 import { useEffect, useRef, useState } from 'react'
-import { Activity, Box, Circle, Coffee, FolderOpen, LoaderCircle, MoreHorizontal, Network, Play, PlugZap, RefreshCw, Search, Settings2, Terminal, X } from 'lucide-react'
+import { Activity, Circle, FolderOpen, LoaderCircle, MoreHorizontal, Network, Play, PlugZap, RefreshCw, Search, Settings2, Terminal, X } from 'lucide-react'
 import { projectKey, metricsKey, type Project, type WorkspaceResponse } from '../../lib/api'
 import TaskRows, { type TaskRow } from '../../components/beautiful-ui/task-rows'
 import { useRuntimeMetrics } from '../runtime/useRuntimeMetrics'
 import { ProjectMetrics } from '../runtime/ProjectMetrics'
 import { useServiceRecency } from './useServiceRecency'
+import javaIcon from '../../assets/service-icons/java.png'
+import nodeIcon from '../../assets/service-icons/node.png'
 import '../../components/beautiful-ui/theme.css'
 import './workspace.css'
 
@@ -100,7 +102,7 @@ export function WorkspacePage({ query, onQueryChange: setQuery, data, loading, m
         {displayPorts.length ? <><Network size={11} aria-hidden="true" />{displayPorts.slice(0, 3).map(port => <span key={port} className="ws-port-badge" aria-label={`TCP 端口 ${port}`}>{port}</span>)}{displayPorts.length > 3 && <span className="ws-port-more" aria-label={`另外 ${displayPorts.length - 3} 个端口，展开详情查看`}>+{displayPorts.length - 3}</span>}</> : <span className="ws-port-empty">{portStatus}</span>}
       </span> : undefined,
       content: metrics && observed ? <ProjectMetrics metrics={metrics} history={runtime.history} /> : undefined,
-      icon: <span className={`ws-project-symbol ${project.kind === 'node' ? 'is-node' : ''} ${observed && monitoringEnabled && !runtime.error ? metrics?.managedState === 'starting' ? 'is-starting' : 'is-running' : ''}`} title={observed && monitoringEnabled && !runtime.error ? metrics?.managedState === 'starting' ? '构建 / 启动中' : '运行中' : undefined}>{project.kind === 'node' ? <Box size={19} strokeWidth={1.6} /> : <Coffee size={19} strokeWidth={1.6} />}</span>,
+      icon: <span className={`ws-project-symbol ${observed && monitoringEnabled && !runtime.error ? metrics?.managedState === 'starting' ? 'is-starting' : 'is-running' : ''}`} title={observed && monitoringEnabled && !runtime.error ? metrics?.managedState === 'starting' ? '构建 / 启动中' : '运行中' : undefined}><img src={project.kind === 'node' ? nodeIcon : javaIcon} alt={project.kind === 'node' ? 'Node.js' : 'Java'} width={40} height={40} draggable={false} /></span>,
       details: [
         { label: '项目目录', meta: project.path },
         ...(showPorts && listeners?.length ? listeners.map(listener => ({ label: `TCP ${listener.port} · PID ${listener.pid}`, meta: `${listener.purpose}${listener.purposeSource === 'command_line' ? '（依据启动参数）' : '（未获得用途依据）'}` })) : showPorts && listeningPorts?.length ? [{ label: 'TCP 监听端口', meta: `${listeningPorts.join(' · ')}（后端需更新以获取归属及用途）` }] : []),

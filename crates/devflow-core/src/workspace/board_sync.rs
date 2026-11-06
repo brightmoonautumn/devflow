@@ -85,7 +85,7 @@ fn decode(response: reqwest::blocking::Response) -> Result<Value> {
 }
 fn portable(mut board: BoardSnapshot) -> BoardSnapshot {
     board.workspace_key.clear();
-    for task in &mut board.tasks { task.owner = None; task.owner_id = None; }
+    for task in &mut board.tasks { task.owner = None; task.owner_id = None; task.codex_thread_id = None; }
     // Activity is local audit history, never part of the remote snapshot.
     board.activity.clear();
     for task in &mut board.tasks { task.activity.clear(); }
@@ -184,11 +184,11 @@ mod tests {
     }
     #[test]
     fn portable_snapshot_removes_local_identity() {
-        let task: Task = serde_json::from_value(json!({"id":"DF-001","title":"任务正文","description":"仍要同步的描述","acceptance":"验收条件","feature":"","priority":"普通","status":"todo","activity":["任务活动不上传"]})).unwrap();
+        let task: Task = serde_json::from_value(json!({"id":"DF-001","title":"任务正文","description":"仍要同步的描述","acceptance":"验收条件","feature":"","priority":"普通","status":"todo","codexThreadId":"01a18024-bf15-7773-8a0b-63e1bc40d2cb","activity":["任务活动不上传"]})).unwrap();
         let b = BoardSnapshot { workspace_key: "D:/中文/project".into(), tasks: vec![task], activity: vec!["123 · Codex:secret-session · 已完成登录交接".into()], ..Default::default() };
         let exported: Value = serde_json::from_slice(&export_snapshot(b).unwrap()).unwrap();
         assert_eq!(exported["workspaceKey"], ""); assert!(exported.get("activity").is_none());
-        assert!(exported["tasks"][0].get("activity").is_none());
+        assert!(exported["tasks"][0].get("activity").is_none()); assert!(exported["tasks"][0].get("codexThreadId").is_none());
         assert_eq!(exported["tasks"][0]["description"], "仍要同步的描述");
         let restored: BoardSnapshot = serde_json::from_value(exported).unwrap();
         assert!(restored.activity.is_empty()); assert!(restored.tasks[0].activity.is_empty());

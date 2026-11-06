@@ -48,6 +48,9 @@
 .df-checkbox-indicator { display: flex; }
 .df-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 7px 13px; border: 1px solid var(--ws-border); border-radius: 7px; background: var(--ws-surface); color: var(--ws-ink); }
 .df-button:hover:not(:disabled) { background: var(--ws-hover); }
+.df-button.is-ghost { background: transparent; border-color: transparent; color: var(--ws-muted); }
+.df-button.is-ghost:hover:not(:disabled) { background: var(--ws-hover); color: var(--ws-ink); }
+.df-button:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 2px; }
 .df-button.is-primary { background: var(--ws-primary); border-color: transparent; color: var(--ws-primary-ink); }
 .df-button.is-primary:hover:not(:disabled) { background: var(--ws-primary-hover); }
 .df-button.is-danger { background: var(--ws-error-bg); border-color: var(--ws-error); color: var(--ws-error); }

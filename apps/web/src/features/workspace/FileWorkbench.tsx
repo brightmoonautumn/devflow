@@ -50,13 +50,18 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
   useEffect(() => { onSaveStatusChange?.(saveText ? { text: saveText, failed: saveFailed } : null) }, [saveText, saveFailed, onSaveStatusChange])
   useEffect(() => () => onSaveStatusChange?.(null), [onSaveStatusChange])
   const live = useRef(state)
+  const recency = useRef(new Map<string, number>())
+  const recencySequence = useRef(0)
   const currentWorkspace = useRef(workspace)
   currentWorkspace.current = workspace
   const pending = useRef(new Map<string, AbortController>())
   const mounted = useRef(true)
   const change = useCallback((update: (value: Workbench) => Workbench) => {
     if (!mounted.current) return
-    live.current = update(live.current)
+    const previous = live.current
+    live.current = update(previous)
+    if (live.current.active && live.current.active !== previous.active) recency.current.set(live.current.active, ++recencySequence.current)
+    for (const tab of previous.tabs) if (!live.current.tabs.some(current => current.key === tab.key)) recency.current.delete(tab.key)
     setState(live.current)
   }, [])
   const updateTab = useCallback((key: string, update: (tab: FileTab) => FileTab) => {
@@ -101,9 +106,12 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
     pending.current.forEach(controller => controller.abort()); pending.current.clear()
     const saved: WorkspaceViewState = scope ? readViewState(scope) : {}
     const tabs: FileTab[] = restoredTabs(saved).map(tab => ({ ...tab, preview: false, key: keyFor(tab.path), draft: '', loading: false, saving: false, error: '', location: { line: tab.line, column: tab.column, sequence: 0 } }))
+    recency.current.clear()
+    for (const tab of tabs) recency.current.set(tab.key, ++recencySequence.current)
     const savedActive = typeof saved.active === 'string' ? keyFor(saved.active) : null
     const active = tabs.some(tab => tab.key === savedActive) ? savedActive : null
     change(() => ({ tabs, active }))
+    if (active) recency.current.set(active, ++recencySequence.current)
     setRestoredScope(scope)
   }, [scope, restoredScope, change])
   useEffect(() => {
@@ -131,14 +139,26 @@ export function FileWorkbench({ theme, workspace, openRequest, onOpenFile, onSav
       if (existing.loading && !pending.current.has(key)) void loadFile(existing.path, key)
       return
     }
-    if (live.current.tabs.length >= 12) {
-      void dialogs.alert({ title: '打开标签已达上限', description: '最多同时打开 12 个文件，请先关闭部分标签。' })
-      return
-    }
     const tab: FileTab = { key, path: openRequest.path, draft: '', preview: false, loading: true, saving: false, error: '', savedAt: undefined, line: 1, column: 1, location: openRequest.line ? { line: openRequest.line, column: openRequest.column ?? 1, sequence: openRequest.sequence } : undefined }
     change(value => ({ active: key, tabs: [...value.tabs, tab] }))
     void loadFile(tab.path, key)
-  }, [openRequest, change, loadFile, dialogs])
+  }, [openRequest, change, loadFile])
+
+  useEffect(() => {
+    const current = live.current
+    if (current.tabs.length <= 12) return
+    const candidates = current.tabs
+      .filter(tab => tab.key !== current.active && !dirty(tab) && !tab.saving && !tab.deleting && !confirmations.current.has(tab.key))
+      .sort((a, b) => (recency.current.get(a.key) ?? 0) - (recency.current.get(b.key) ?? 0))
+    const removed = new Set(candidates.slice(0, current.tabs.length - 12).map(tab => tab.key))
+    if (!removed.size) return
+    for (const key of removed) {
+      pending.current.get(key)?.abort()
+      pending.current.delete(key)
+      recency.current.delete(key)
+    }
+    change(value => ({ ...value, tabs: value.tabs.filter(tab => !removed.has(tab.key)) }))
+  }, [state, change])
 
   const hasUnsaved = state.tabs.some(dirty)
   useEffect(() => {
