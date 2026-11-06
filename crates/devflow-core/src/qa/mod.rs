@@ -170,13 +170,29 @@ pub enum Operation {
     Cancel {
         run_id: String,
     },
+    ClearHistory {
+        run_ids: Vec<String>,
+    },
+    DeleteScenario { scenario_id: String },
+    DeleteModule { module: String },
 }
-#[derive(Default)]
 pub struct QaService {
     jobs: Mutex<BTreeMap<String, Arc<AtomicBool>>>,
+    changes: tokio::sync::broadcast::Sender<String>,
     live_requests: Mutex<BTreeMap<String, (String, BTreeMap<String, (Value, Option<String>)>)>>,
 }
+impl Default for QaService {
+    fn default() -> Self {
+        let (changes, _) = tokio::sync::broadcast::channel(128);
+        Self { jobs: Mutex::new(BTreeMap::new()), changes, live_requests: Mutex::new(BTreeMap::new()) }
+    }
+}
 impl DevFlowEngine {
+    pub fn qa_subscribe(&self, query: Query, authenticated: bool) -> Result<tokio::sync::broadcast::Receiver<String>> {
+        if !authenticated { return Err(error("unauthorized", "需要本机管理令牌")); }
+        self.workspace.qa_location(&query.workspace_key, query.expected_revision)?;
+        Ok(self.qa.changes.subscribe())
+    }
     pub fn qa_get(&self, query: Query, authenticated: bool) -> Result<Snapshot> {
         if !authenticated {
             return Err(error("unauthorized", "需要本机管理令牌"));
@@ -250,6 +266,7 @@ impl DevFlowEngine {
             cancel.store(true, Ordering::SeqCst);
             run.status = "cancelling".into();
             save(&path, &store)?;
+            let _ = self.qa.changes.send(request.workspace_key.clone());
             return Ok(store);
         }
         if jobs.contains_key(&request.workspace_key) {
@@ -317,6 +334,7 @@ impl DevFlowEngine {
                 store.runs.insert(0, run);
                 store.runs.truncate(20);
                 save(&path, &store)?;
+                let _ = self.qa.changes.send(request.workspace_key.clone());
                 if let Ok(mut requests) = self.qa.live_requests.lock() {
                     if requests.len() >= 4 && !requests.contains_key(&request.workspace_key) {
                         if let Some(key) = requests.keys().next().cloned() { requests.remove(&key); }
@@ -347,17 +365,65 @@ impl DevFlowEngine {
                     if let Ok(mut jobs) = service.jobs.lock() {
                         store.runs[0].current_call = None;
                         store.runs[0].updated_at = now();
-                        let _ = save(&path, &store);
+                        if save(&path, &store).is_ok() { let _ = service.changes.send(store.workspace_key.clone()); }
                         jobs.remove(&store.workspace_key);
                     }
                     drop(lock);
                 });
                 return Ok(initial);
             }
+            Operation::DeleteScenario { scenario_id } => {
+                delete_scenarios(&mut store, Some(&scenario_id), None)?;
+                save(&path, &store)?;
+                if let Ok(mut requests) = self.qa.live_requests.lock() { requests.remove(&request.workspace_key); }
+            }
+            Operation::DeleteModule { module } => {
+                delete_scenarios(&mut store, None, Some(&module))?;
+                save(&path, &store)?;
+                if let Ok(mut requests) = self.qa.live_requests.lock() { requests.remove(&request.workspace_key); }
+            }
+            Operation::ClearHistory { run_ids } => {
+                let count = run_ids.len();
+                let ids: HashSet<String> = run_ids.into_iter().collect();
+                if ids.is_empty() || ids.len() != count || ids.len() > 20
+                    || ids.iter().any(|id| !store.runs.iter().any(|run| &run.id == id)) {
+                    return Err(error("conflict", "执行记录已变化，请刷新后重新选择"));
+                }
+                if store.runs.iter().any(|run| ids.contains(&run.id) && matches!(run.status.as_str(), "running" | "cancelling")) {
+                    return Err(error("conflict", "无法清除正在执行的记录"));
+                }
+                store.runs.retain(|run| !ids.contains(&run.id));
+                save(&path, &store)?;
+                if let Ok(mut requests) = self.qa.live_requests.lock() {
+                    if requests.get(&request.workspace_key).is_some_and(|(run_id, _)| ids.contains(run_id)) {
+                        requests.remove(&request.workspace_key);
+                    }
+                }
+            }
             Operation::Cancel { .. } => unreachable!(),
         }
+        let _ = self.qa.changes.send(request.workspace_key.clone());
         Ok(store)
     }
+}
+fn delete_scenarios(store: &mut Snapshot, scenario_id: Option<&str>, module: Option<&str>) -> Result<()> {
+    let suite = store.suite.as_mut().ok_or_else(|| error("not_found", "场景配置不存在"))?;
+    let mut removed: HashSet<String> = suite.scenarios.iter()
+        .filter(|scenario| scenario_id.is_some_and(|id| scenario.id == id) || module.is_some_and(|name| scenario.module == name))
+        .map(|scenario| scenario.id.clone()).collect();
+    if removed.is_empty() { return Err(error("not_found", "场景或文件夹不存在")); }
+    loop {
+        let previous = removed.len();
+        for scenario in &suite.scenarios {
+            if scenario.uses.iter().any(|id| removed.contains(id)) { removed.insert(scenario.id.clone()); }
+        }
+        if removed.len() == previous { break; }
+    }
+    suite.scenarios.retain(|scenario| !removed.contains(&scenario.id));
+    store.runs.retain(|run| !removed.contains(&run.scenario_id)
+        && !run.results.iter().any(|result| removed.contains(&result.scenario_id)));
+    store.revision = store.revision.checked_add(1).ok_or_else(|| error("conflict", "QA 版本已达上限"))?;
+    Ok(())
 }
 fn storage_lock(path: &Path) -> Result<fs::File> {
     let path = path.with_extension("qa.lock");
@@ -510,10 +576,9 @@ pub fn execution_plan(suite: &Suite, id: &str) -> Result<Vec<(String, Call)>> {
 fn validate(suite: &Suite) -> Result<()> {
     endpoint(&suite.base_url, "info")?;
     if serde_json::to_vec(suite).unwrap_or_default().len() > 256 * 1024
-        || suite.scenarios.is_empty()
         || suite.scenarios.len() > 50
     {
-        return Err(error("invalid_request", "场景需为 1–50 项且不超过 256 KiB"));
+        return Err(error("invalid_request", "场景最多 50 项且不超过 256 KiB"));
     }
     if suite.variables.keys().any(|key| sensitive(key)) {
         return Err(error(
@@ -720,7 +785,9 @@ fn publish(
         })
         .collect();
     store.runs[0].updated_at = now();
-    save(path, store)
+    save(path, store)?;
+    let _ = service.changes.send(store.workspace_key.clone());
+    Ok(())
 }
 fn collect_secrets(value: &Value, list: &mut Vec<String>) {
     match value {

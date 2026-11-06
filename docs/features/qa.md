@@ -2,6 +2,12 @@
 
 请求 cURL、请求体和响应区域默认展开且可分别折叠，并支持分别复制；JSON 格式化高亮展示且不改变原始数字精度。执行结果直接展示，执行成功时状态旁短暂显示礼花；执行记录使用公共下拉组件，不再提供结果回放。
 
+QA 执行状态通过已认证的 SSE 变化通知驱动快照刷新；连接建立和重连时重新读取，执行与取消仍走共享核心。
+
+执行记录切换位于标题右侧，可确认后清除当前列表中的记录；引用执行可能同时出现在其他场景，执行期间不能清除。
+
+场景和文件夹支持删除；会级联删除所有直接或间接引用它们的场景及相关执行记录，确认时展示范围。文件夹是场景分组，远端已执行操作不会撤销。执行期间禁止删除，全部删除后显示空状态。
+
 ## 当前能力
 
 质量保证已从前端示例改为工作区作用域的真实 HTTP 场景执行。Web 与 MCP 共用 `devflow-core::qa`，支持场景配置保存、公共场景引用、独立执行身份、变量提取、RSA 公钥加密、业务断言、异步执行/取消及最近 20 次脱敏记录。没有嵌入 AI 对话或源码编辑器。
@@ -32,8 +38,9 @@
 ## Web 与 MCP
 
 - HTTP `GET /api/qa?workspaceKey=...&expectedRevision=...` / MCP `qa_get`：获取配置、QA revision、运行进度和脱敏历史。
+- HTTP `GET /api/qa/events`：鉴权后订阅当前工作区的变化通知；收到通知后读取快照，重连时重新读取。
 - HTTP `POST /api/qa` / MCP `qa_execute`：`{workspaceKey, expectedRevision, qaRevision, operation}`。
-- `operation`：`seed`（仅首次初始化，不覆盖）、`save`（携带 `suite`）、`run`（携带 `scenarioId` 与临时 `inputs`）、`cancel`（携带 `runId`）。
+- `operation`：`seed`（仅首次初始化，不覆盖）、`save`（携带 `suite`）、`run`（携带 `scenarioId` 与临时 `inputs`）、`cancel`（携带 `runId`）、`clear_history`（携带 `runIds`，永久删除指定已结束记录）。
 - 示例 run：`{type:"run", scenarioId:"account-profile", inputs:{adminPassword:"由用户提供"}}`。
 - 保存与启动要求 workspace revision、QA revision 同时匹配；版本冲突重新读取，不盲目覆盖。每工作区只允许一轮活动执行，Web 与 MCP 共享同一执行锁。配置更新通过 save API/MCP，当前页面暂不提供可视编排编辑。
 - 所有操作要求本机所有者认证及活动工作区授权；分享监听器不暴露 QA 入口。

@@ -161,8 +161,10 @@ body:has(.qa-panel-divider.is-dragging), body:has(.qa-panel-divider.is-dragging)
 .qa-call.is-executing > .qa-call-summary { box-shadow: inset 4px 0 var(--ws-accent); }
 .qa-references button.is-running { border-color: var(--ws-accent); box-shadow: inset 3px 0 var(--ws-accent), 0 0 0 2px var(--ws-accent-bg); }
 
-.qa-history-select { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.qa-history-select .df-select { width: min(300px, 60vw); min-height: 32px; padding: 4px 8px; font-size: var(--ws-font-caption); }
+.qa-history-select { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: min(280px, 45vw); }
+.qa-history-select .df-select { flex: 1; width: 100%; min-width: 0; min-height: 32px; padding: 4px 8px; font-size: var(--ws-font-caption); }
+.qa-page .qa-history-clear { display: inline-flex; flex: 0 0 32px; width: 32px; height: 32px; align-items: center; justify-content: center; color: var(--ws-muted); border-radius: 4px; }
+.qa-page .qa-history-clear:hover:not(:disabled) { color: var(--ws-error); background: var(--ws-hover); }
 .qa-demo-status { position: relative; }
 .qa-confetti { position: absolute; left: 50%; top: 50%; pointer-events: none; }
 .qa-confetti i { position: absolute; width: 5px; height: 8px; background: var(--piece-color); border-radius: 1px; opacity: 0; animation: qa-confetti-burst 900ms ease-out both; transform: rotate(var(--angle)) translateY(0); }
@@ -192,3 +194,10 @@ body:has(.qa-panel-divider.is-dragging), body:has(.qa-panel-divider.is-dragging)
 .qa-page .qa-exchange-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 0; color: var(--ws-ink); text-align: left; }
 .qa-exchange-toggle svg { flex-shrink: 0; color: var(--ws-muted); }
 .qa-exchange-toggle:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 3px; }
+
+.qa-page .qa-tree-delete { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 26px; width: 26px; height: 26px; margin-left: auto; border-radius: 4px; color: var(--ws-muted); }
+.qa-page .qa-tree-delete:hover:not(:disabled) { color: var(--ws-error); background: var(--ws-hover); }
+
+.qa-page .qa-tree-delete { visibility: hidden; }
+.qa-tree .ws-tree-row:hover > .qa-tree-delete, .qa-tree .ws-tree-row:focus-within > .qa-tree-delete, .qa-tree [role="treeitem"]:focus > .ws-tree-row > .qa-tree-delete { visibility: visible; }
+@media (hover: none) { .qa-page .qa-tree-delete { visibility: visible; } }

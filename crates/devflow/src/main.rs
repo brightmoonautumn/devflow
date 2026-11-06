@@ -112,6 +112,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/workspace/board", get(http::board_read).post(http::board_execute))
         .route("/api/workspace/board/sync", post(http::board_sync))
         .route("/api/qa", get(http::qa_get).post(http::qa_execute))
+        .route("/api/qa/events", get(http::qa_events))
         .route("/api/projects", get(http::projects))
         .route(
             "/api/workspace",

@@ -360,3 +360,27 @@ pub async fn qa_execute(State(state): State<Arc<AppState>>, headers: HeaderMap, 
     let authenticated = security::authenticated(&headers, &state);
     response(call_core(state, move |e| e.qa_execute(request, authenticated)).await)
 }
+
+/// Authenticated invalidations only; snapshots remain subject to the normal core checks.
+pub async fn qa_events(
+    State(state): State<Arc<AppState>>, headers: HeaderMap, Query(query): Query<devflow_core::qa::Query>,
+) -> Result<axum::response::sse::Sse<impl futures_util::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>, (StatusCode, Json<Value>)> {
+    let authenticated = security::authenticated(&headers, &state);
+    let workspace = query.workspace_key.clone();
+    let receiver = call_core(state, move |engine| engine.qa_subscribe(query, authenticated)).await
+        .map_err(|err| response::<()>(Err(err)).unwrap_err())?;
+    let stream = futures_util::stream::unfold((receiver, workspace, true), |(mut receiver, workspace, initial)| async move {
+        if initial {
+            return Some((Ok(axum::response::sse::Event::default().data("changed")), (receiver, workspace, false)));
+        }
+        loop {
+            match receiver.recv().await {
+                Ok(key) if key == workspace => return Some((Ok(axum::response::sse::Event::default().data("changed")), (receiver, workspace, false))),
+                Ok(_) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => return Some((Ok(axum::response::sse::Event::default().data("changed")), (receiver, workspace, false))),
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+    Ok(axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
+}
