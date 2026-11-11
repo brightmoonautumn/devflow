@@ -146,7 +146,7 @@ export function BoardPage({ workspaceName, workspaceKey, workspaceRevision, quer
     } else if (task.status !== target) void mutate({ type: 'action', id, action: 'move', text: target }).then(ok => { if (ok) setSettledTask(id) })
   }
   function copyTaskInstructions(task: BoardTask) {
-    void copyText(`请读取 DevFlow 当前工作区看板，核对工作区 ${workspaceKey}，优化任务 ${task.id}：${task.title}。结合所属功能与已有任务，提出描述、归类、验收条件和必要的拆分建议，信息不足时列出问题。先给我方案，确认后再通过 board_execute 更新任务；不要认领或执行，不要编译或测试。`).then(() => setNotice('已复制，请粘贴到 Codex 对话')).catch(() => setError('复制失败，请手动让 Codex 整理该任务'))
+    void copyText(`请通过 workspace_get 核对工作区 ${workspaceKey}，用 board_get 的 read: { view: "detail", id: "${task.id}" } 读取任务及所属功能，优化 ${task.id}：${task.title}。按需查询相关任务摘要或历史，提出描述、归类、验收条件和必要的拆分建议，信息不足时列出问题。先给我方案，确认后再通过 board_execute 更新任务；不要认领或执行，不要编译或测试。`).then(() => setNotice('已复制，请粘贴到 Codex 对话')).catch(() => setError('复制失败，请手动让 Codex 整理该任务'))
   }
   async function approve(task: BoardTask) {
     const revision = latest.current?.revision

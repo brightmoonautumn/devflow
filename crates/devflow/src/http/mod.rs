@@ -33,6 +33,21 @@ pub(crate) fn response<T: serde::Serialize>(result: Result<T, WorkspaceError>) -
 pub async fn health() -> Json<Value> {
     Json(json!({"status":"ok","name":"devflow","version":env!("CARGO_PKG_VERSION")}))
 }
+pub async fn ideas_read(State(state): State<Arc<AppState>>, headers: HeaderMap, Query(request): Query<devflow_core::workspace::IdeasRead>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |e| e.workspace.ideas_read(request, authenticated)).await)
+}
+pub async fn ideas_execute(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(request): Json<devflow_core::workspace::IdeasRequest>) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |e| e.workspace.ideas_execute(request, authenticated)).await)
+}
+pub async fn context_read(
+    State(state): State<Arc<AppState>>, headers: HeaderMap,
+    Json(request): Json<devflow_core::context::ContextRead>,
+) -> ApiResult {
+    let authenticated = security::authenticated(&headers, &state);
+    response(call_core(state, move |engine| engine.context_read(request, authenticated)).await)
+}
 pub async fn session(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({"token": state.api_token}))
 }

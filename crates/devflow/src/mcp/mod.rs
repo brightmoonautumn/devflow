@@ -7,14 +7,16 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use devflow_core::workspace::{
-    WorkspaceChildrenRequest, WorkspaceError, WorkspaceOperation, WorkspaceRequest,
+    WorkspaceError, WorkspaceOperation, WorkspaceRequest,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
 
 mod board;
+mod ideas;
 mod diagnosis;
 mod qa;
+mod disclosure;
 
 fn tool_result<T: serde::Serialize>(result: Result<T, WorkspaceError>) -> Value {
     match result {
@@ -145,6 +147,8 @@ fn tools() -> Value {
     ];
     tools.extend(diagnosis::tools());
     tools.extend(qa::tools());
+    tools.extend(ideas::tools());
+    disclosure::apply(&mut tools);
     json!({"tools": tools})
 }
 
@@ -172,19 +176,28 @@ pub async fn handle(
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-            if name == "board_sync" {
+            if devflow_core::context::supports(name) {
+                let authenticated = security::authenticated(&headers, &state);
+                let request = devflow_core::context::ContextRead { tool: name.to_owned(), arguments };
+                Ok(tool_result(call_core(state, move |engine| engine.context_read(request, authenticated)).await))
+            } else if name == "ideas_get" || name == "ideas_execute" {
+                let authenticated = security::authenticated(&headers, &state);
+                Ok(ideas::result(ideas::call(state, name, arguments, authenticated).await))
+            } else if name == "board_sync" {
                 let authenticated = security::authenticated(&headers, &state);
                 let result = call_core(state, move |e| {
                     let request = serde_json::from_value(arguments).map_err(|err: serde_json::Error| WorkspaceError { code: "invalid_request", message: err.to_string() })?;
                     e.workspace.board_sync(request, authenticated, false)
                 }).await;
                 Ok(tool_result(result))
-            } else if name == "board_get" || name == "board_execute" {
+            } else if name == "board_execute" {
                 let authenticated = security::authenticated(&headers, &state);
-                Ok(tool_result(board::execute(state, name, arguments, authenticated).await))
+                Ok(tool_result(board::execute(state, arguments, authenticated).await))
             } else if name == "workspace_terminal" {
                 let authenticated = security::authenticated(&headers, &state);
                 let result = call_core(state, move |engine| {
+                    let mut arguments = arguments;
+                    let options = devflow_core::context::ReadOptions::extract(&mut arguments)?;
                     let request =
                         serde_json::from_value(arguments).map_err(|err: serde_json::Error| {
                             WorkspaceError {
@@ -192,7 +205,7 @@ pub async fn handle(
                                 message: err.to_string(),
                             }
                         })?;
-                    engine.workspace.terminal_execute(request, authenticated)
+                    engine.workspace.terminal_execute(request, authenticated)?.context(&options)
                 })
                 .await;
                 Ok(tool_result(result))
@@ -252,16 +265,6 @@ pub async fn handle(
                     )),
                     Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
                 }
-            } else if name == "workspace_search" {
-                let authenticated = security::authenticated(&headers, &state);
-                match serde_json::from_value::<devflow_core::workspace::WorkspaceSearchRequest>(
-                    arguments,
-                ) {
-                    Ok(request) => Ok(tool_result(
-                        call_core(state, move |e| e.workspace.search(request, authenticated)).await,
-                    )),
-                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
-                }
             } else if name == "workspace_file_copy" || name == "workspace_file_delete" {
                 let authenticated = security::authenticated(&headers, &state);
                 let copy = name == "workspace_file_copy";
@@ -286,19 +289,6 @@ pub async fn handle(
                     Ok(request) => Ok(tool_result(call_core(state, move |e| e.workspace.read_image(request, authenticated)).await)),
                     Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
                 }
-            } else if name == "workspace_file_read" {
-                let authenticated = security::authenticated(&headers, &state);
-                match serde_json::from_value::<devflow_core::workspace::WorkspaceFileReadRequest>(
-                    arguments,
-                ) {
-                    Ok(request) => Ok(tool_result(
-                        call_core(state, move |e| {
-                            e.workspace.read_file(request, authenticated)
-                        })
-                        .await,
-                    )),
-                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
-                }
             } else if name == "workspace_file_write" {
                 let authenticated = security::authenticated(&headers, &state);
                 match serde_json::from_value::<devflow_core::workspace::WorkspaceFileWriteRequest>(
@@ -312,93 +302,54 @@ pub async fn handle(
                     )),
                     Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
                 }
-            } else if name == "qa_get" {
-                let authenticated = security::authenticated(&headers, &state);
-                match serde_json::from_value::<devflow_core::qa::Query>(arguments) {
-                    Ok(query) => Ok(tool_result(call_core(state, move |e| e.qa_get(query, authenticated)).await)),
-                    Err(e) => Ok(tool_result(Err::<Value, _>(WorkspaceError { code: "invalid_request", message: e.to_string() }))),
-                }
             } else if name == "qa_execute" {
                 let authenticated = security::authenticated(&headers, &state);
-                match serde_json::from_value::<devflow_core::qa::Request>(arguments) {
-                    Ok(request) => Ok(tool_result(call_core(state, move |e| e.qa_execute(request, authenticated)).await)),
-                    Err(e) => Ok(tool_result(Err::<Value, _>(WorkspaceError { code: "invalid_request", message: e.to_string() }))),
-                }
-            } else if name == "diagnosis_get" {
-                let authenticated = security::authenticated(&headers, &state);
-                match serde_json::from_value::<devflow_core::runtime::diagnosis::DiagnosisQuery>(arguments) {
-                    Ok(query) => Ok(tool_result(call_core(state, move |e| e.diagnosis_get(query, authenticated)).await)),
-                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
-                }
+                Ok(tool_result(call_core(state, move |e| {
+                    let mut arguments = arguments;
+                    let options = devflow_core::context::ReadOptions::extract_write(&mut arguments)?;
+                    let request: devflow_core::qa::Request = serde_json::from_value(arguments).map_err(|err: serde_json::Error| WorkspaceError { code: "invalid_request", message: err.to_string() })?;
+                    let snapshot = e.qa_execute(request, authenticated)?;
+                    devflow_core::context::receipt(json!(snapshot), &options)
+                }).await))
             } else if name == "diagnosis_execute" {
                 let authenticated = security::authenticated(&headers, &state);
-                match serde_json::from_value::<devflow_core::runtime::diagnosis::DiagnosisRequest>(arguments) {
-                    Ok(request) => Ok(tool_result(call_core(state, move |e| e.diagnosis_execute(request, authenticated)).await)),
-                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
-                }
-            } else if name == "runtime_diagnostics" {
-                match serde_json::from_value::<devflow_core::runtime::diagnostics::DiagnosticsQuery>(arguments) {
-                    Ok(query) => Ok(tool_result(call_core(state, move |e| e.runtime_diagnostics(query)).await)),
-                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
-                }
+                Ok(tool_result(call_core(state, move |e| {
+                    let mut arguments = arguments;
+                    let options = devflow_core::context::ReadOptions::extract_write(&mut arguments)?;
+                    let request: devflow_core::runtime::diagnosis::DiagnosisRequest = serde_json::from_value(arguments).map_err(|err: serde_json::Error| WorkspaceError { code: "invalid_request", message: err.to_string() })?;
+                    let snapshot = e.diagnosis_execute(request, authenticated)?;
+                    devflow_core::context::receipt(json!(snapshot), &options)
+                }).await))
             } else if name == "node_execute" {
-                match serde_json::from_value::<devflow_core::runtime::node::NodeRequest>(arguments)
-                {
-                    Ok(request) => Ok(tool_result(
-                        call_core(state, move |e| e.node_execute(request)).await,
-                    )),
-                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
-                }
-            } else if matches!(name, "node_options" | "node_output") {
-                let output = name == "node_output";
+                Ok(tool_result(call_core(state, move |e| {
+                    let mut arguments = arguments;
+                    let options = devflow_core::context::ReadOptions::extract_write(&mut arguments)?;
+                    let request: devflow_core::runtime::node::NodeRequest = serde_json::from_value(arguments).map_err(|err: serde_json::Error| WorkspaceError { code: "invalid_request", message: err.to_string() })?;
+                    let snapshot = e.node_execute(request)?;
+                    devflow_core::context::project("node_output", json!(snapshot), &options)
+                }).await))
+            } else if name == "node_options" {
                 match serde_json::from_value::<devflow_core::runtime::node::NodeQuery>(arguments) {
-                    Ok(query) => Ok(tool_result(
-                        call_core(state, move |e| {
-                            let project = e.workspace.node_runtime_project(
-                                &query.project_path,
-                                query.script.as_deref(),
-                                None,
-                            )?;
-                            if output {
-                                Ok(json!(e.node.output(
-                                    &project,
-                                    query.after,
-                                    query.run_id.as_deref()
-                                )?))
-                            } else {
-                                Ok(json!(devflow_core::runtime::node::options(&project)?))
-                            }
-                        })
-                        .await,
-                    )),
+                    Ok(query) => Ok(tool_result(call_core(state, move |e| {
+                        let project = e.workspace.node_runtime_project(&query.project_path, query.script.as_deref(), None)?;
+                        Ok(json!(devflow_core::runtime::node::options(&project)?))
+                    }).await)),
                     Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
                 }
             } else if name == "java_execute" {
-                match serde_json::from_value::<devflow_core::runtime::java::JavaRequest>(arguments)
-                {
-                    Ok(request) => Ok(tool_result(
-                        call_core(state, move |e| e.java_execute(request)).await,
-                    )),
-                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
-                }
-            } else if matches!(name, "java_output" | "java_options") {
-                let output = name == "java_output";
+                Ok(tool_result(call_core(state, move |e| {
+                    let mut arguments = arguments;
+                    let options = devflow_core::context::ReadOptions::extract_write(&mut arguments)?;
+                    let request: devflow_core::runtime::java::JavaRequest = serde_json::from_value(arguments).map_err(|err: serde_json::Error| WorkspaceError { code: "invalid_request", message: err.to_string() })?;
+                    let snapshot = e.java_execute(request)?;
+                    devflow_core::context::project("java_output", json!(snapshot), &options)
+                }).await))
+            } else if name == "java_options" {
                 match serde_json::from_value::<devflow_core::runtime::java::JavaQuery>(arguments) {
-                    Ok(query) => Ok(tool_result(
-                        call_core(state, move |e| {
-                            let project = e.workspace.runtime_project(&query.project_path, None)?;
-                            if output {
-                                Ok(json!(e.java.output(
-                                    &project,
-                                    query.after,
-                                    query.run_id.as_deref()
-                                )?))
-                            } else {
-                                Ok(json!(devflow_core::runtime::java::options(&project)?))
-                            }
-                        })
-                        .await,
-                    )),
+                    Ok(query) => Ok(tool_result(call_core(state, move |e| {
+                        let project = e.workspace.runtime_project(&query.project_path, None)?;
+                        Ok(json!(devflow_core::runtime::java::options(&project)?))
+                    }).await)),
                     Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
                 }
             } else if name == "workspace_pick" {
@@ -466,32 +417,14 @@ pub async fn handle(
                     }
                     Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
                 }
-            } else if name == "workspace_children" {
-                match serde_json::from_value::<WorkspaceChildrenRequest>(arguments) {
-                    Ok(request) => Ok(tool_result(
-                        call_core(state, move |e| e.workspace.children(request)).await,
-                    )),
-                    Err(err) => Err(json!({"code":-32602,"message":err.to_string()})),
-                }
             } else if matches!(
                 name,
-                "workspace_list"
-                    | "workspace_get"
-                    | "workspace_refresh"
-                    | "workspace_catalog"
-                    | "runtime_list"
-                    | "devflow_metrics"
+                "workspace_refresh" | "workspace_catalog" | "devflow_metrics"
             ) {
                 if !arguments.is_object() || arguments.as_object().is_some_and(|a| !a.is_empty()) {
                     Err(json!({"code":-32602,"message":"This tool accepts no arguments"}))
                 } else {
                     Ok(match name {
-                        "workspace_list" => tool_result(
-                            call_core(state, |e| Ok(e.workspace.snapshot()?.projects)).await,
-                        ),
-                        "workspace_get" => {
-                            tool_result(call_core(state, |e| e.workspace.snapshot()).await)
-                        }
                         "workspace_refresh" => {
                             tool_result(call_core(state, |e| e.workspace.refresh()).await)
                         }
@@ -502,7 +435,7 @@ pub async fn handle(
                             call_core(state, |e| e.runtime.self_snapshot().map_err(Into::into))
                                 .await,
                         ),
-                        _ => tool_result(call_core(state, |e| e.runtime_snapshot()).await),
+                        _ => unreachable!("validated read tool"),
                     })
                 }
             } else {

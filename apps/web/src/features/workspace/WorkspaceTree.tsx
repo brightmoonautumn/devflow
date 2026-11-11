@@ -9,14 +9,15 @@ import { FileTreeRow, TreeChevron, TreePathLabel, handleTreeNavigation } from '.
 import { compactFolderChild, MAX_COMPACT_FOLDER_SEGMENTS } from '../../components/files/compactFolders'
 import { useCompactFolders } from '../../components/files/useCompactFolders'
 import { WorkspaceSearch } from './WorkspaceSearch'
-import { ApiError, executeWorkspace, getWorkspaceChildren, mutateWorkspaceFile, type WorkspaceChildren, type WorkspaceResponse, type WorkspaceTreeEntry } from '../../lib/api'
+import { WorkspaceTreeData } from './workspaceTreeData'
+import { ApiError, executeWorkspace, mutateWorkspaceFile, type WorkspaceChildren, type WorkspaceResponse, type WorkspaceTreeEntry } from '../../lib/api'
 
 type NodeEntry = WorkspaceTreeEntry & { status?: string; message?: string | null }
 type TreeRoot = { name: string; path: string }
 type NodeMenu = { entry: NodeEntry; root: TreeRoot; level: number; revision: number; x: number; y: number; target: HTMLElement }
 type RevealRequest = { path: string; root: string; sequence: number }
 type ExpansionChange = (paths: string[], expanded: boolean) => void
-type NodeProps = { reveal: RevealRequest | null; compact: boolean; expandedPaths: ReadonlySet<string>; onExpansionChange: ExpansionChange; entry: NodeEntry; root: TreeRoot; level: number; revision: number; selected: string | null; copiedPath: string | null; onCopy: (path: string, value?: string) => Promise<void>; onSelect: (path: string) => void; onOpenFile: (path: string, pinned?: boolean) => void; onNodeMenu: (menu: NodeMenu) => void }
+type NodeProps = { treeData: WorkspaceTreeData; active: boolean; reveal: RevealRequest | null; compact: boolean; expandedPaths: ReadonlySet<string>; onExpansionChange: ExpansionChange; entry: NodeEntry; root: TreeRoot; level: number; revision: number; selected: string | null; copiedPath: string | null; onCopy: (path: string, value?: string) => Promise<void>; onSelect: (path: string) => void; onOpenFile: (path: string, pinned?: boolean) => void; onNodeMenu: (menu: NodeMenu) => void }
 
 function relativeTreePath(path: string, root: string) {
   const normalized = path.replace(/\\/g, '/'), base = root.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -26,7 +27,7 @@ function relativeTreePath(path: string, root: string) {
   return comparable(normalized).startsWith(`${comparable(base)}/`) ? normalized.slice(base.length + 1) : null
 }
 
-function TreeNode({ reveal, compact, expandedPaths, onExpansionChange, entry, root, level, revision, selected, copiedPath, onCopy, onSelect, onOpenFile, onNodeMenu }: NodeProps): ReactElement {
+function TreeNode({ treeData, active, reveal, compact, expandedPaths, onExpansionChange, entry, root, level, revision, selected, copiedPath, onCopy, onSelect, onOpenFile, onNodeMenu }: NodeProps): ReactElement {
   const directory = entry.kind === 'directory'
   const available = !entry.status || entry.status === 'available'
   const nodeRef = useRef<HTMLLIElement>(null)
@@ -41,30 +42,52 @@ function TreeNode({ reveal, compact, expandedPaths, onExpansionChange, entry, ro
   const [segments, setSegments] = useState<NodeEntry[]>([entry])
   const [children, setChildren] = useState<WorkspaceChildren | null>(null)
   const [loading, setLoading] = useState(false)
+  const [slow, setSlow] = useState(false)
+  const [nearViewport, setNearViewport] = useState(false)
   const [error, setError] = useState('')
   const pending = useRef<AbortController | null>(null)
-  const cache = useRef(new Map<string, WorkspaceChildren>())
-  const cacheRevision = useRef(revision)
+  const currentEntry = useRef(entry)
+  currentEntry.current = entry
+  const foreground = useRef(expanded || revealing)
+  foreground.current = expanded || revealing
+  const cancelRead = useCallback(() => {
+    pending.current?.abort()
+    pending.current = null
+    setLoading(false); setSlow(false)
+  }, [])
   const activeEntry = segments.find(segment => segment.path === selected) ?? segments[segments.length - 1]
   const empty = !!children && !children.truncated && children.entries.length === 0 && !error && !loading
   const expandable = directory && available && !empty
+  const probeCompact = compact && level > 1 && nearViewport
+  const shouldRead = active && directory && available && (expanded || probeCompact)
   const label = segments.map(segment => segment.name).join('/')
+  useEffect(() => {
+    if (!active || !directory || !compact || level === 1) { setNearViewport(false); return }
+    const row = nodeRef.current?.firstElementChild
+    if (!row) return
+    const observer = new IntersectionObserver(([entry]) => setNearViewport(entry.isIntersecting), {
+      root: nodeRef.current?.closest('.ws-tree-scroll'), rootMargin: '120px 0px',
+    })
+    observer.observe(row)
+    return () => observer.disconnect()
+  }, [active, directory, compact, level])
   const readChildren = useCallback(async (refresh = false) => {
-    pending.current?.abort()
+    cancelRead()
     const controller = new AbortController()
     pending.current = controller
-    if (refresh || cacheRevision.current !== revision) cache.current.clear()
-    cacheRevision.current = revision
     setLoading(true); setError('')
-    const chain: NodeEntry[] = [entry]
-    let current = entry
+    // Fast cached reads never flash a spinner. Background compact probes stay quiet.
+    const slowTimer = setTimeout(() => {
+      if (pending.current === controller && !controller.signal.aborted) setSlow(true)
+    }, 800)
+    const chain: NodeEntry[] = [currentEntry.current]
+    let current = chain[0]
     let resolved: WorkspaceChildren | null = null
     try {
       // Probe only visible folders and their single-child chains, never entire subtrees.
       for (let depth = 0; depth < MAX_COMPACT_FOLDER_SEGMENTS; depth += 1) {
-        const result = cache.current.get(current.path) ?? await getWorkspaceChildren(current.path, revision, controller.signal)
+        const result = await treeData.read(current.path, controller.signal, foreground.current, refresh)
         if (controller.signal.aborted) return
-        cache.current.set(current.path, result)
         resolved = result
         const child = compactFolderChild(chain, result.entries, {
           enabled: compact && level > 1, truncated: result.truncated,
@@ -81,16 +104,19 @@ function TreeNode({ reveal, compact, expandedPaths, onExpansionChange, entry, ro
         setError(resolved?.truncated ? '目录条目过多，当前文件不在已返回的条目中，暂无法定位。' : '当前文件或其所在目录已不存在，请刷新或重新打开文件。')
       }
     } catch (err) {
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && !(err instanceof DOMException && err.name === 'AbortError')) {
         // Keep the last confirmed chain; the failed folder remains explicitly retryable.
         setSegments([...chain]); setChildren(null)
         setError(err instanceof Error ? err.message : String(err))
       }
     } finally {
-      if (!controller.signal.aborted) setLoading(false)
-      if (pending.current === controller) pending.current = null
+      clearTimeout(slowTimer)
+      if (pending.current === controller) {
+        pending.current = null
+        setLoading(false); setSlow(false)
+      }
     }
-  }, [entry, revision, compact, level, root.path])
+  }, [entry.path, treeData, compact, level, root.path, cancelRead])
   useEffect(() => {
     if (revealing && directory && available) expand(true)
     if (revealing && !directory && available && viewPathKey(entry.path) === viewPathKey(reveal!.path)) {
@@ -105,18 +131,25 @@ function TreeNode({ reveal, compact, expandedPaths, onExpansionChange, entry, ro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealSequence, directory, available])
   useEffect(() => {
-    if (directory && available && (expanded || (compact && level > 1))) void readChildren(revealSequence !== undefined)
-    return () => { pending.current?.abort(); pending.current = null }
-  }, [expanded, directory, available, compact, level, readChildren, revealSequence])
+    if (active && (expanded || revealing)) treeData.prioritize(entry.path)
+  }, [active, expanded, revealing, treeData, entry.path])
+  useEffect(() => {
+    if (shouldRead) void readChildren(revealSequence !== undefined)
+    else cancelRead()
+    return cancelRead
+  }, [shouldRead, readChildren, revealSequence, cancelRead])
   useEffect(() => {
     const changed = (event: Event) => {
       const path = (event as CustomEvent<string>).detail.replace(/\\/g, '/')
       const parent = path.slice(0, path.lastIndexOf('/'))
-      if (segments.some(segment => viewPathKey(segment.path.replace(/\\/g, '/').replace(/\/+$/, '')) === viewPathKey(parent)) && directory && available) void readChildren(true)
+      if (segments.some(segment => viewPathKey(segment.path.replace(/\\/g, '/').replace(/\/+$/, '')) === viewPathKey(parent)) && directory && available) {
+        if (active && (expanded || probeCompact)) void readChildren()
+        else { cancelRead(); setChildren(null) }
+      }
     }
     window.addEventListener('devflow-tree-file-changed', changed)
     return () => window.removeEventListener('devflow-tree-file-changed', changed)
-  }, [segments, directory, available, readChildren])
+  }, [segments, directory, available, active, expanded, probeCompact, readChildren, cancelRead])
   useEffect(() => {
     if (expanded) onExpansionChange(segments.map(segment => segment.path), true)
   }, [expanded, segments, onExpansionChange])
@@ -143,7 +176,7 @@ function TreeNode({ reveal, compact, expandedPaths, onExpansionChange, entry, ro
     handleTreeNavigation(event, { expanded, expandable, onToggle: next => { if (next) onSelect(activeEntry.path); expand(next) }, onActivate: toggle })
   }
   const status = entry.status === 'blocked' ? '未授权' : entry.status === 'unsupported' ? '不支持' : '不可用'
-  return <li ref={nodeRef} role="treeitem" tabIndex={0} aria-label={label} aria-level={level} aria-selected={segments.some(segment => viewPathKey(segment.path) === viewPathKey(selected ?? ''))} aria-expanded={expandable ? expanded : undefined} aria-disabled={!available || undefined}
+  return <li ref={nodeRef} role="treeitem" tabIndex={0} aria-label={label} aria-level={level} aria-selected={segments.some(segment => viewPathKey(segment.path) === viewPathKey(selected ?? ''))} aria-expanded={expandable ? expanded : undefined} aria-busy={expanded && loading || undefined} aria-disabled={!available || undefined}
     onDoubleClick={event => { event.stopPropagation(); if (!(event.target as HTMLElement).closest('button') && !directory && available) onOpenFile(entry.path, true) }}
     onKeyDown={onKeyDown} onContextMenu={event => {
       event.stopPropagation()
@@ -152,7 +185,7 @@ function TreeNode({ reveal, compact, expandedPaths, onExpansionChange, entry, ro
     }} onClick={event => { event.stopPropagation(); event.currentTarget.focus(); toggle() }}>
     <FileTreeRow className={`ws-tree-row ${available ? '' : 'is-unavailable'}`} data-copy-path={activeEntry.path} style={{ paddingLeft: 9 + (level - 1) * 14 }} title={`${activeEntry.path}${entry.message ? `\n${entry.message}` : ''}\n悬停时按 C 复制绝对路径`}>
       <TreeChevron expanded={expanded} expandable={expandable} />
-      {loading ? <LoaderCircle size={16} aria-hidden="true" className="ws-tree-icon spinning" /> : <TreeEntryIcon name={segments[segments.length - 1].name} directory={directory} expanded={expanded} root={level === 1} />}
+      {slow && expanded ? <LoaderCircle size={16} aria-hidden="true" className="ws-tree-icon spinning" /> : <TreeEntryIcon name={segments[segments.length - 1].name} directory={directory} expanded={expanded} root={level === 1} />}
       <TreePathLabel segments={segments} renderSegment={segments.length === 1 ? undefined : segment => <button type="button" tabIndex={-1} className={`ws-tree-segment ${segment.path === selected ? 'is-selected' : ''}`} data-copy-path={segment.path} title={`${segment.path}\nAlt+←/→ 切换路径段；悬停时按 C 复制`} onClick={event => { event.stopPropagation(); event.currentTarget.closest<HTMLElement>('[role="treeitem"]')?.focus(); toggle(segment) }} onContextMenu={event => {
         event.preventDefault(); event.stopPropagation(); onSelect(segment.path)
         onNodeMenu({ entry: segment, root, level, revision, x: event.clientX, y: event.clientY, target: event.currentTarget.closest<HTMLElement>('[role="treeitem"]')! })
@@ -166,8 +199,8 @@ function TreeNode({ reveal, compact, expandedPaths, onExpansionChange, entry, ro
       }}><MoreHorizontal size={14} /></button>}
     </FileTreeRow>
     {((expanded && !empty) || !!error) && <ul role="group">
-      {expanded && children?.entries.map(child => <MemoTreeNode reveal={reveal} compact={compact} expandedPaths={expandedPaths} onExpansionChange={onExpansionChange} key={child.path} entry={child} root={root} level={level + 1} revision={revision} selected={selected} copiedPath={copiedPath} onCopy={onCopy} onSelect={onSelect} onOpenFile={onOpenFile} onNodeMenu={onNodeMenu} />)}
-      {expanded && loading && <li role="none" className="ws-tree-note">正在读取…</li>}
+      {expanded && children?.entries.map(child => <MemoTreeNode treeData={treeData} active={active} reveal={reveal} compact={compact} expandedPaths={expandedPaths} onExpansionChange={onExpansionChange} key={child.path} entry={child} root={root} level={level + 1} revision={revision} selected={selected} copiedPath={copiedPath} onCopy={onCopy} onSelect={onSelect} onOpenFile={onOpenFile} onNodeMenu={onNodeMenu} />)}
+      {expanded && slow && <li role="none" className="ws-tree-note">正在读取…</li>}
       {error && <li role="none" className="ws-tree-note is-error" onClick={event => event.stopPropagation()}><span role="status">{error}</span><button onClick={() => void readChildren(true)}>重试</button></li>}
       {expanded && children?.truncated && <li role="none" className="ws-tree-note">目录过大，仅显示前 2000 个条目范围内的内容。</li>}
     </ul>}
@@ -202,6 +235,21 @@ export function WorkspaceTree({ activeFilePath, data, open, hidden, view, onChan
   }, [scope, expandedPaths])
   const [compact, setCompact] = useCompactFolders()
   const [generation, setGeneration] = useState(0)
+  const treeData = useMemo(() => new WorkspaceTreeData(data?.revision ?? 0), [scope, data?.revision, generation])
+  const treeActive = open && !hidden && view === 'explorer'
+  useEffect(() => {
+    // Invalidate once, before any row handles the same file-change event.
+    const changed = (event: Event) => {
+      const path = (event as CustomEvent<string>).detail.replace(/\\/g, '/')
+      treeData.invalidate(path.slice(0, path.lastIndexOf('/')))
+      treeData.invalidate(path, true)
+    }
+    window.addEventListener('devflow-tree-file-changed', changed, true)
+    return () => {
+      window.removeEventListener('devflow-tree-file-changed', changed, true)
+      treeData.clear()
+    }
+  }, [treeData])
   const [selected, setSelected] = useState<string | null>(null)
   const [reveal, setReveal] = useState<RevealRequest | null>(null)
   const revealCounter = useRef(0)
@@ -348,7 +396,7 @@ export function WorkspaceTree({ activeFilePath, data, open, hidden, view, onChan
     </div></div>
     <div className="ws-tree-scroll">
       <ul role="tree" aria-label="工作区文件夹" key={`${scope}:${generation}:${compact}`}>
-        {roots.map(folder => <MemoTreeNode reveal={reveal} compact={compact} expandedPaths={expandedPaths} onExpansionChange={changeExpansion} key={folder.path} entry={folder} root={folder} level={1} revision={data!.revision} selected={selected} copiedPath={copyNotice?.path ?? null} onCopy={copyPath} onSelect={selectPath} onOpenFile={onOpenFile} onNodeMenu={openNodeMenu} />)}
+        {roots.map(folder => <MemoTreeNode treeData={treeData} active={treeActive} reveal={reveal} compact={compact} expandedPaths={expandedPaths} onExpansionChange={changeExpansion} key={folder.path} entry={folder} root={folder} level={1} revision={data!.revision} selected={selected} copiedPath={copyNotice?.path ?? null} onCopy={copyPath} onSelect={selectPath} onOpenFile={onOpenFile} onNodeMenu={openNodeMenu} />)}
       </ul>
       {!data?.folders.length && <div className="ws-tree-empty"><p>{hasWorkspace ? '工作区还没有文件夹' : '打开文件夹或工作区'}</p>{!readOnlyShare && <button className="ws-outline-button" onClick={hasWorkspace ? onAddFolder : onConfigure}><FolderPlus size={14} />{hasWorkspace ? '添加文件夹' : '打开工作区'}</button>}</div>}
       {data?.warnings.map(warning => <p className="ws-tree-note is-error" role="status" key={warning}>{warning}</p>)}

@@ -18,6 +18,12 @@ specific available workspace root, expands only its ancestor chain through the
 existing children API, then focuses and scrolls to the selected row. It supports
 compact folders and Windows path casing without changing tabs, drafts or files.
 No active file or a file outside the active roots disables the button.
+`workspaceTreeData.ts` keeps bounded, 30-second directory caches outside tree rows,
+coalesces concurrent reads, and limits requests to four with expansion/reveal ahead
+of compact-folder probes. Collapsed compact folders are probed only near the scroll
+viewport. Hidden Explorer views cancel reads; cancellation clears busy state and
+only expanded reads taking over 800ms show a spinner. Workspace/revision changes,
+manual refresh and file-change events invalidate the appropriate cached data.
 The shared editor loads CodeMirror language parsers by filename, including YAML,
 Python, SQL, shell, PowerShell, Dockerfile, TOML, properties, Go and Rust. A local
 log tokenizer highlights timestamps, severity levels and exception stacks.

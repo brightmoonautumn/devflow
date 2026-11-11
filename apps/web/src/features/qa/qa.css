@@ -16,8 +16,17 @@
 .qa-scenario-label { font-size: var(--ws-font-caption); white-space: nowrap; color: var(--ws-green); border: 1px solid var(--ws-border); padding: 4px 7px; border-radius: 4px; }
 .qa-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 0 24px 18px; }
 .qa-toolbar-left, .qa-run-actions { display: flex; align-items: center; gap: 14px; }
-.qa-environment { display: flex; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid var(--ws-border); border-radius: 5px; background: var(--ws-surface); }
-.qa-environment select { color: var(--ws-ink); border: 0; background: var(--ws-surface); font-size: var(--ws-font-caption); outline: none; }
+.qa-environment-select { min-width: 112px; max-width: min(220px, 55vw); font-size: var(--ws-font-caption); }
+.qa-settings-dialog { width: min(500px, calc(100vw - 28px)); }
+.qa-settings-fields { display: grid; gap: 12px; margin: 16px 0; }
+.qa-settings-fields label { display: grid; gap: 4px; min-width: 0; color: var(--ws-muted); }
+.qa-settings-fields .df-control { width: 100%; box-sizing: border-box; }
+.qa-environment-fields { display: grid; gap: 8px; margin: 0; padding: 12px; min-width: 0; border: 1px solid var(--ws-border); border-radius: 8px; }
+.qa-environment-edit-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
+.qa-settings-fields > .df-button { justify-self: start; }
+.qa-response-settings { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; color: var(--ws-muted); font-size: var(--ws-font-caption); }
+.qa-response-settings button { cursor: pointer; color: var(--ws-accent); }
+.qa-response-settings button:disabled { cursor: default; opacity: .5; }
 .qa-count { color: var(--ws-muted); font-size: var(--ws-font-caption); }
 .qa-count > span { margin: 0 5px; }
 .qa-page .qa-run { display: flex; align-items: center; gap: 6px; color: white; background: var(--ws-primary); padding: 8px 12px; border-radius: 5px; font-size: var(--ws-font-small); }
@@ -58,7 +67,6 @@
 .qa-assertion small { margin-left: auto; color: var(--ws-muted); white-space: nowrap; }
 .qa-variable { display: grid; gap: 10px; padding: 8px 0; color: var(--ws-accent); font-size: var(--ws-font-caption); }
 .qa-variable small { color: var(--ws-muted); }
-.qa-chain-end { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 16px 0; color: var(--ws-muted); font-size: var(--ws-font-caption); }
 .qa-flow-panel { width: var(--qa-flow-width, 35%); flex: 0 0 var(--qa-flow-width, 35%); min-width: 0; max-width: none; display: flex; flex-direction: column; }
 .qa-flow-scroll { flex: 1; overflow: auto; padding: 16px 26px 26px; background-image: radial-gradient(var(--ws-border) .8px, transparent .8px); background-size: 16px 16px; }
 .qa-flow-start, .qa-flow-end { display: flex; align-items: center; justify-content: center; gap: 7px; font-size: var(--ws-font-caption); color: var(--ws-muted); }
@@ -229,3 +237,36 @@ body:has(.qa-panel-divider.is-dragging), body:has(.qa-panel-divider.is-dragging)
 .qa-header-divider::before { inset: -3px 0; }
 .qa-header-divider > span { inset: 2px 0; }
 body:has(.qa-header-divider.is-dragging), body:has(.qa-header-divider.is-dragging) * { cursor: row-resize !important; }
+
+.qa-page .qa-tree-clear { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 26px; width: 26px; height: 26px; border-radius: 4px; color: var(--ws-muted); }
+.qa-page .qa-tree-clear:hover:not(:disabled) { color: var(--ws-error); background: var(--ws-hover); }
+.qa-page .qa-tree-clear:disabled { opacity: .4; }
+.qa-page .qa-tree-clear { visibility: hidden; }
+.qa-tree .ws-tree-row:hover > .qa-tree-clear, .qa-tree .ws-tree-row:focus-within > .qa-tree-clear, .qa-tree [role="treeitem"]:focus > .ws-tree-row > .qa-tree-clear { visibility: visible; }
+@media (hover: none) { .qa-page .qa-tree-clear { visibility: visible; } }
+
+.qa-environment-control { display: flex; align-items: stretch; }
+.qa-environment-control .qa-environment-select { min-width: 112px; }
+.qa-environment-manage { display: grid; place-items: center; min-width: 34px; border: 1px solid var(--ws-border) !important; border-radius: 0 5px 5px 0; }
+.qa-environment-manage:disabled { opacity: .5; }
+.qa-settings-dialog:has(.qa-environment-layout) { width: min(760px, calc(100vw - 28px)); }
+.qa-environment-layout { display: grid; grid-template-columns: 160px minmax(0, 1fr); min-height: 300px; border: 1px solid var(--ws-border); border-radius: 6px; overflow: hidden; }
+.qa-environment-list { display: flex; flex-direction: column; gap: 3px; padding: 8px; border-right: 1px solid var(--ws-border); }
+.qa-environment-list button { display: flex; gap: 6px; align-items: center; text-align: left; padding: 8px; border: 0; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; overflow-wrap: anywhere; }
+.qa-environment-list button.active { background: var(--ws-bg); font-weight: 600; }
+.qa-environment-editor { min-width: 0; display: grid; align-content: start; gap: 14px; padding: 16px; }
+.qa-environment-editor > .df-button { justify-self: start; }
+.qa-variables-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px; }
+.qa-variables-heading small { color: var(--ws-muted); }
+.qa-variable-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px; }
+@media (max-width: 600px) { .qa-environment-layout { grid-template-columns: 110px minmax(0, 1fr); } .qa-environment-editor { padding: 10px; } .qa-variable-row { grid-template-columns: minmax(0, 1fr) auto; } .qa-variable-row input:nth-child(2) { grid-column: 1; } .qa-variable-row button { grid-column: 2; grid-row: 1 / 3; } }
+
+/* Keep the environment selector and its management action visually grouped. */
+.qa-page .qa-environment-control .qa-environment-select { border: 1px solid var(--ws-border); border-right: 0; border-radius: 5px 0 0 5px; background: var(--ws-surface); }
+.qa-toolbar { justify-content: flex-end; }
+
+.qa-panel-heading .qa-view-switch button.active { color: var(--ws-accent); }
+@media (max-width: 600px) { .qa-panel-actions { gap: 6px; } }
+
+.qa-missing-variables { max-width: min(320px, 45vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-muted); font-size: var(--ws-font-caption); }
+.qa-panel-actions .qa-view-switch button:disabled { opacity: .4; cursor: default; }

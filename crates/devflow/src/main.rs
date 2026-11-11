@@ -101,6 +101,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let terminal_workspace = state.engine.workspace.clone();
     let app = Router::new()
         .route("/api/health", get(http::health))
+        .route("/api/context/read", post(http::context_read))
         .route("/api/workspace/terminal", post(http::terminal_execute))
         .route("/api/workspace/terminal/socket", get(http::terminal_socket))
         .route(
@@ -110,6 +111,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/workspace/shares/revoke", post(share::revoke))
         .route("/api/session", get(http::session))
         .route("/api/workspace/board", get(http::board_read).post(http::board_execute))
+        .route("/api/workspace/ideas", get(http::ideas_read).post(http::ideas_execute).layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)))
         .route("/api/workspace/board/sync", post(http::board_sync))
         .route("/api/qa", get(http::qa_get).post(http::qa_execute))
         .route("/api/qa/events", get(http::qa_events))

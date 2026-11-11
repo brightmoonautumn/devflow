@@ -1,4 +1,18 @@
 use super::*;
+
+#[test]
+fn chooses_named_environment_and_preserves_legacy_default() {
+    let mut config = suite();
+    assert_eq!(config.environment(None).unwrap().base_url, config.base_url);
+    config.environments = vec![Environment {
+        id: "local".into(),
+        name: "本机 AI".into(),
+        base_url: "http://localhost:8081/prod-api/ai/".into(),
+    }];
+    assert_eq!(config.environment(Some("local")).unwrap().name, "本机 AI");
+    assert_eq!(config.environment(None).unwrap().id, "local");
+    assert!(config.environment(Some("missing")).is_err());
+}
 fn suite() -> Suite {
     serde_json::from_str(include_str!("extreme.json")).unwrap()
 }
@@ -165,6 +179,7 @@ fn restart_marks_inflight_run_interrupted_without_replay() {
             id: "one".into(),
             scenario_id: "account-profile".into(),
             suite_revision: 1,
+            environment: None,
             status: "running".into(),
             created_at: now(),
             updated_at: now(),

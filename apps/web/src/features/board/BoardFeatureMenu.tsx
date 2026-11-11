@@ -3,6 +3,7 @@ import { Check, ChevronDown, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { BaseButton } from '../../components/form/BaseButton'
 import { BaseInput } from '../../components/form/BaseInput'
 import { useDialogs } from '../../components/form/BaseDialog'
+import '../../components/form/managed-choice-menu.css'
 import type { BoardFeature, BoardOperation, BoardTask } from './boardModel'
 
 type Props = { features: BoardFeature[]; featureColors: Map<string, number>; tasks: BoardTask[]; value: string; busy: boolean; onChange: (value: string) => void; onSave: (operation: BoardOperation, revision?: number) => Promise<boolean>; revision: () => number | undefined }

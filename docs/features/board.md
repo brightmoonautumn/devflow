@@ -1,5 +1,7 @@
 # 看板第一版
 
+AI 接口已改为摘要 → 单任务详情 → 活动记录的渐进式读取，写入默认返回精简回执；完整模式和现有网页接口保留。参数、兼容与待验收项见 [AI 上下文读取](ai-context.md)。
+
 任务拖拽保存成功后，目标卡片轻微回弹；系统开启减少动态效果时不播放。
 
 看板分类筛选显示与任务卡片一致的分类颜色。
@@ -103,8 +105,8 @@ MCP 会话只能推进、提交、释放或阻塞自己认领的任务，不能�
 
 - `GET /api/workspace/board?workspaceKey=...&expectedRevision=...` 返回完整快照。
 - `POST /api/workspace/board` 接收 `{ workspaceKey, expectedRevision, boardRevision, operation }`，返回保存后的快照。
-- MCP `board_get`：参数同 HTTP 读取。先通过 `workspace_get` 获取 `workspaceFile ?? workspaceRoot` 与 `revision`。
-- MCP `board_execute`：参数 `{ sessionId, request: { workspaceKey, expectedRevision, boardRevision, operation } }`。同一 Codex 会话必须持续使用稳定且唯一的 `sessionId`（1–200 字节）。
+- MCP `board_get`：工作区参数同 HTTP 读取，另支持顶层 `read`；默认分页摘要，detail 读单任务，history 读活动，full 恢复完整快照。先通过 `workspace_get` 获取 `workspaceFile ?? workspaceRoot` 与 `revision`。
+- MCP `board_execute`：参数 `{ sessionId, request: { workspaceKey, expectedRevision, boardRevision, operation }, read? }`，默认返回精简版本回执，`read.view=full` 返回快照。同一 Codex 会话必须持续使用稳定且唯一的 `sessionId`（1–200 字节）。
 - `operation.type`：`feature_save`、`feature_delete`（含任务时传 `moveTo`）、`edges`、`task_create`、`task_update`、`task_delete`、`action`。Web 另支持首次 `import`。
 - `action.action`：MCP 支持 `claim/release/progress/submit/block/unblock`，说明用 `text`；Web 另支持 `approve/reject/reopen/complete`。完整输入字段见 MCP 的 `tools/list` schema；`feature_save` 提交完整功能，`task_update` 提交完整任务元数据。
 - 版本冲突返回 `conflict`（HTTP 409），重新读取并评估当前数据后再保存。核心不自动合并过时字段。

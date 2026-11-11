@@ -25,6 +25,7 @@ pub use terminal::{TerminalOperation, TerminalRequest, TerminalResponse, Termina
 mod board;
 pub use board::{BoardOperation, BoardRead, BoardRequest, BoardSnapshot, Feature as BoardFeature, Task as BoardTask};
 pub use board::{BoardSyncRequest, BoardSyncSettings, BoardSyncStatus};
+pub use board::{IdeaCanvas, IdeaEdge, IdeaNode, IdeaTask, IdeasOperation, IdeasRead, IdeasRequest, IdeasSnapshot};
 
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_FOLDERS: usize = 512;

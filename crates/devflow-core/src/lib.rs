@@ -1,4 +1,5 @@
 pub mod diagnose;
+pub mod context;
 pub mod explorer;
 pub mod qa;
 pub mod runtime;

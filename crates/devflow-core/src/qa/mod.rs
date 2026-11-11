@@ -17,6 +17,7 @@ use std::{
 };
 type Result<T> = std::result::Result<T, WorkspaceError>;
 const LIMIT: u64 = 1024 * 1024;
+mod sse;
 fn error(code: &'static str, text: impl Into<String>) -> WorkspaceError {
     WorkspaceError {
         code,
@@ -39,6 +40,27 @@ pub struct Suite {
     pub actors: BTreeMap<String, Actor>,
     pub variables: BTreeMap<String, Value>,
     pub scenarios: Vec<Scenario>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environments: Vec<Environment>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Environment {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+}
+impl Suite {
+    fn environment(&self, id: Option<&str>) -> Result<Environment> {
+        if self.environments.is_empty() && id.is_none_or(|id| id == "default") {
+            return Ok(Environment { id: "default".into(), name: self.name.clone(), base_url: self.base_url.clone() });
+        }
+        let environment = match id {
+            Some(id) => self.environments.iter().find(|item| item.id == id),
+            None => self.environments.first(),
+        };
+        environment.cloned().ok_or_else(|| error("invalid_request", "QA 环境不存在"))
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -86,10 +108,17 @@ pub struct Call {
     pub assertions: Vec<Assertion>,
     #[serde(default)]
     pub encrypt: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sse: Option<SseOptions>,
     #[serde(skip)]
     cleanup: bool,
     #[serde(skip)]
     required_variables: Vec<String>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SseOptions {
+    pub end_event: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -113,6 +142,8 @@ pub struct StepResult {
     pub response: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_raw: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stream_events: Vec<Value>,
     pub checks: Vec<Check>,
     pub error: Option<String>,
 }
@@ -127,6 +158,8 @@ pub struct Run {
     pub id: String,
     pub scenario_id: String,
     pub suite_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<Environment>,
     pub status: String,
     pub created_at: u64,
     pub updated_at: u64,
@@ -172,6 +205,8 @@ pub enum Operation {
     },
     Run {
         scenario_id: String,
+        #[serde(default)]
+        environment_id: Option<String>,
         #[serde(default)]
         inputs: BTreeMap<String, Value>,
     },
@@ -224,12 +259,26 @@ impl DevFlowEngine {
                 for run in &mut store.runs {
                     if matches!(run.status.as_str(), "running" | "cancelling") {
                         run.status = "interrupted".into();
+                        for step in &mut run.results {
+                            if step.status == "streaming" {
+                                step.status = "interrupted".into();
+                            }
+                        }
                         run.current_call = None;
                         run.error = Some("DevFlow 重启，执行已中断；不会重放请求".into());
                         run.updated_at = now();
                     }
                 }
                 save(&path, &store)?;
+            }
+        }
+        if store.runs.len() > 10 && !jobs.contains_key(&query.workspace_key) {
+            if let Ok(_lock) = storage_lock(&path) {
+                store = load(&path, &query.workspace_key)?;
+                if store.runs.len() > 10 {
+                    store.runs.truncate(10);
+                    save(&path, &store)?;
+                }
             }
         }
         if let Ok(requests) = self.qa.live_requests.lock() {
@@ -302,6 +351,7 @@ impl DevFlowEngine {
             }
             Operation::Run {
                 scenario_id,
+                environment_id,
                 inputs,
             } => {
                 let suite = store
@@ -309,6 +359,7 @@ impl DevFlowEngine {
                     .clone()
                     .ok_or_else(|| error("not_found", "请先初始化场景"))?;
                 validate(&suite)?;
+                let environment = suite.environment(environment_id.as_deref())?;
                 let plan = execution_plan(&suite, &scenario_id)?;
                 if inputs.len() > 32
                     || inputs
@@ -323,13 +374,14 @@ impl DevFlowEngine {
                 vars.extend(inputs);
                 vars.insert("runId".into(), json!(&id[..16]));
                 vars.insert("accountName".into(), json!(account_name));
-                if !vars.contains_key("adminPassword") {
+                if plan.iter().any(|(_, call)| call.id == "admin-login-call") && !vars.contains_key("adminPassword") {
                     return Err(error("invalid_request", "请提供管理员密码，仅用于本轮执行"));
                 }
                 let run = Run {
                     id: id.clone(),
                     scenario_id,
                     suite_revision: store.revision,
+                    environment: Some(environment.clone()),
                     status: "running".into(),
                     created_at: now(),
                     updated_at: now(),
@@ -340,7 +392,7 @@ impl DevFlowEngine {
                     error: None,
                 };
                 store.runs.insert(0, run);
-                store.runs.truncate(20);
+                store.runs.truncate(10);
                 save(&path, &store)?;
                 let _ = self.qa.changes.send(request.workspace_key.clone());
                 if let Ok(mut requests) = self.qa.live_requests.lock() {
@@ -356,7 +408,7 @@ impl DevFlowEngine {
                 std::thread::spawn(move || {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         execute(
-                            &service, &path, &mut store, &suite, plan, &mut vars, &cancel,
+                            &service, &path, &mut store, &suite, &environment.base_url, plan, &mut vars, &cancel,
                         )
                     }));
                     match result {
@@ -498,14 +550,17 @@ fn save(path: &Path, store: &Snapshot) -> Result<()> {
 }
 fn endpoint(base: &str, path: &str) -> Result<url::Url> {
     let base = url::Url::parse(base).map_err(|_| error("invalid_request", "环境地址无效"))?;
-    let allowed =
-        std::env::var("DEVFLOW_QA_ORIGINS").unwrap_or_else(|_| "http://192.168.1.200".into());
+    let origin = base.origin().ascii_serialization();
+    let allowed = match std::env::var("DEVFLOW_QA_ORIGINS") {
+        Ok(origins) => origins.split(',').any(|item| item.trim() == origin),
+        Err(std::env::VarError::NotPresent) => origin == "http://192.168.1.200" ||
+            matches!(base.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")),
+        Err(_) => false,
+    };
     if !matches!(base.scheme(), "http" | "https")
         || !base.username().is_empty()
         || base.password().is_some()
         || !allowed
-            .split(',')
-            .any(|x| x.trim() == base.origin().ascii_serialization())
     {
         return Err(error(
             "permission_denied",
@@ -600,7 +655,23 @@ pub fn execution_plan(suite: &Suite, id: &str) -> Result<Vec<(String, Call)>> {
     Ok(normal)
 }
 fn validate(suite: &Suite) -> Result<()> {
-    endpoint(&suite.base_url, "info")?;
+    let environments = if suite.environments.is_empty() {
+        vec![suite.environment(None)?]
+    } else {
+        suite.environments.clone()
+    };
+    let mut environment_ids = HashSet::new();
+    if environments.len() > 20 {
+        return Err(error("invalid_request", "QA 环境最多 20 项"));
+    }
+    for environment in &environments {
+        if environment.name.trim().is_empty() || environment.name.len() > 120 ||
+            environment.id.is_empty() || environment.id.len() > 64 ||
+            !environment_ids.insert(environment.id.as_str()) || environment.base_url.len() > 1024 {
+            return Err(error("invalid_request", "QA 环境标识、名称或地址无效"));
+        }
+        endpoint(&environment.base_url, "info")?;
+    }
     if serde_json::to_vec(suite).unwrap_or_default().len() > 256 * 1024
         || suite.scenarios.len() > 50
     {
@@ -658,7 +729,15 @@ fn validate(suite: &Suite) -> Result<()> {
                 {
                     return Err(error("invalid_request", "请求标识、身份或方法无效"));
                 }
-                endpoint(&suite.base_url, &call.path)?;
+                for environment in &environments {
+                    endpoint(&environment.base_url, &call.path)?;
+                }
+                if let Some(sse) = &call.sse {
+                    if sse.end_event.is_empty() || sse.end_event.len() > 128 ||
+                        !sse.end_event.bytes().all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b)) {
+                        return Err(error("invalid_request", "SSE 结束事件名无效"));
+                    }
+                }
                 if !check_body(&call.body) {
                     return Err(error(
                         "invalid_request",
@@ -852,11 +931,12 @@ fn collect_secrets(value: &Value, list: &mut Vec<String>) {
 // writes. Only an explicit 401 permits a fresh login; other failures stay visible.
 fn check_cached_admin(
     client: &reqwest::blocking::Client,
-    suite: &Suite,
+    base_url: &str,
+    info_path: &str,
     token: &str,
     prefix: &str,
 ) -> Result<(u16, Value, String, Value)> {
-    let url = endpoint(&suite.base_url, "info")?;
+    let url = endpoint(base_url, info_path)?;
     let authorization = format!("{prefix}{token}");
     let request = json!({"method":"GET", "url":url.as_str(),
         "headers":{"accept":"application/json", "authorization":authorization},
@@ -889,6 +969,7 @@ fn execute(
     path: &Path,
     store: &mut Snapshot,
     suite: &Suite,
+    base_url: &str,
     plan: Vec<(String, Call)>,
     vars: &mut BTreeMap<String, Value>,
     cancel: &AtomicBool,
@@ -941,6 +1022,7 @@ fn execute(
             request: Value::Null,
             response: Value::Null,
             response_raw: None,
+            stream_events: vec![],
             checks: vec![],
             error: None,
         };
@@ -957,15 +1039,17 @@ fn execute(
             publish(service, path, store, vars)?;
             continue;
         }
+        let login_prefix = call.path.strip_suffix("login").filter(|prefix| prefix.is_empty() || prefix.ends_with('/'));
         if call.id == "admin-login-call"
             && call.method == "POST"
-            && call.path == "login"
+            && call.sse.is_none()
+            && login_prefix.is_some()
             && call.extracts.get("adminToken").is_some_and(|pointer| pointer == "/data")
         {
             if let Some(token) = vars.get("adminToken").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned) {
                 let actor = suite.actors.iter().find(|(_, actor)| actor.token.as_deref() == Some("adminToken"));
                 if let Some((actor_name, actor)) = actor {
-                    match check_cached_admin(&client, suite, &token, &actor.prefix) {
+                    match check_cached_admin(&client, base_url, &format!("{}info", login_prefix.unwrap()), &token, &actor.prefix) {
                         Ok((status, request, raw, response)) => {
                             if status == 401 || response["code"] == 401 || response["code"] == "401" {
                                 vars.remove("adminToken");
@@ -1028,7 +1112,7 @@ fn execute(
         }
         let result = (|| -> Result<()> {
             let url = endpoint(
-                &suite.base_url,
+                base_url,
                 render(&json!(call.path), vars, true)?.as_str().unwrap(),
             )?;
             let mut body = render(&call.body, vars, false)?;
@@ -1053,7 +1137,7 @@ fn execute(
                     reqwest::Method::from_bytes(call.method.as_bytes()).unwrap(),
                     url.clone(),
                 )
-                .header("Accept", "application/json");
+                .header("Accept", if call.sse.is_some() { "text/event-stream" } else { "application/json" });
             if let Some(token) = &actor.token {
                 let value = vars
                     .get(token)
@@ -1085,41 +1169,84 @@ fn execute(
                     if run_id == &store.runs[0].id { calls.insert(call.id.clone(), (actual, None)); }
                 }
             }
-            let response = client.execute(built)
-                .map_err(|_| error("unavailable", "目标请求失败或超时（未自动重试）"))?;
-            step.http_status = Some(response.status().as_u16());
-            let mut bytes = vec![];
-            response
-                .take(LIMIT + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| error("unavailable", "读取响应失败"))?;
-            if bytes.len() as u64 > LIMIT {
-                return Err(error("invalid_request", "响应超过 1 MiB 上限"));
-            }
-            let response: Value = serde_json::from_slice(&bytes)
-                .map_err(|_| error("invalid_request", "目标没有返回有效 JSON"))?;
-            step.response = response.clone();
-            if let Ok(mut requests) = service.live_requests.lock() {
-                if let Some((run_id, calls)) = requests.get_mut(&store.workspace_key) {
-                    if run_id == &store.runs[0].id {
-                        if let Some((_, raw)) = calls.get_mut(&call.id) {
-                            *raw = Some(String::from_utf8_lossy(&bytes).into_owned());
+            let response = if let Some(options) = &call.sse {
+                let budget = match cleanup_started {
+                    Some(cleanup) => Duration::from_secs(60).saturating_sub(cleanup.elapsed()),
+                    None => Duration::from_secs(300).saturating_sub(started.elapsed()),
+                };
+                let cancellation = if call.cleanup { None } else { Some(cancel) };
+                let secrets: Vec<_> = vars.iter().filter(|(key, _)| sensitive(key))
+                    .filter_map(|(_, value)| value.as_str().map(str::to_owned)).collect();
+                let mut last_update: Option<Instant> = None;
+                let mut event_bytes = 0;
+                let terminal = sse::read(built, options, budget.min(Duration::from_secs(180)), cancellation, |status, event| {
+                    step.http_status = Some(status);
+                    let event = redact(&event, &secrets);
+                    let size = event.to_string().len();
+                    if size <= 12288 {
+                        while event_bytes + size > 12288 || step.stream_events.len() >= 64 {
+                            event_bytes -= step.stream_events.remove(0).to_string().len();
+                        }
+                        event_bytes += size;
+                        step.stream_events.push(event);
+                    }
+                    if last_update.is_none_or(|last| last.elapsed() >= Duration::from_millis(200)) {
+                        let mut progress = step.clone();
+                        progress.status = "streaming".into();
+                        progress.request = redact(&progress.request, &secrets);
+                        if !body.is_null() {
+                            progress.request["body"] = json!(redact(&body, &secrets).to_string());
+                        }
+                        store.runs[0].results.push(progress);
+                        let published = publish(service, path, store, vars);
+                        store.runs[0].results.pop();
+                        published?;
+                        last_update = Some(Instant::now());
+                    }
+                    Ok(())
+                })?;
+                step.http_status = Some(terminal.0);
+                terminal.1
+            } else {
+                let response = client.execute(built)
+                    .map_err(|_| error("unavailable", "目标请求失败或超时（未自动重试）"))?;
+                step.http_status = Some(response.status().as_u16());
+                let mut bytes = vec![];
+                response
+                    .take(LIMIT + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| error("unavailable", "读取响应失败"))?;
+                if bytes.len() as u64 > LIMIT {
+                    return Err(error("invalid_request", "响应超过 1 MiB 上限"));
+                }
+                let response: Value = serde_json::from_slice(&bytes)
+                    .map_err(|_| error("invalid_request", "目标没有返回有效 JSON"))?;
+                if let Ok(mut requests) = service.live_requests.lock() {
+                    if let Some((run_id, calls)) = requests.get_mut(&store.workspace_key) {
+                        if run_id == &store.runs[0].id {
+                            if let Some((_, raw)) = calls.get_mut(&call.id) {
+                                *raw = Some(String::from_utf8_lossy(&bytes).into_owned());
+                            }
                         }
                     }
                 }
-            }
+                response
+            };
+            step.response = response.clone();
             step.checks.push(Check {
                 name: "HTTP 200".into(),
                 passed: step.http_status == Some(200),
             });
-            step.checks.push(Check {
-                name: "业务 code = 200".into(),
-                passed: response["code"] == 200,
-            });
-            step.checks.push(Check {
-                name: "业务 success = true".into(),
-                passed: response["success"] == true,
-            });
+            if call.sse.is_none() {
+                step.checks.push(Check {
+                    name: "业务 code = 200".into(),
+                    passed: response["code"] == 200,
+                });
+                step.checks.push(Check {
+                    name: "业务 success = true".into(),
+                    passed: response["success"] == true,
+                });
+            }
             for check in &call.assertions {
                 step.checks.push(Check {
                     name: format!("{} {}", check.path, check.op),
@@ -1163,6 +1290,9 @@ fn execute(
         }
         step.request = redact(&step.request, &secrets);
         step.response = redact(&step.response, &secrets);
+        for event in &mut step.stream_events {
+            *event = redact(event, &secrets);
+        }
         for value in [&mut step.request, &mut step.response] {
             let text = value.to_string();
             if text.len() > 48 * 1024 {
@@ -1171,6 +1301,13 @@ fn execute(
         }
         step.elapsed_ms = tick.elapsed().as_millis() as u64;
         if let Err(err) = result {
+            if err.code == "cancelled" && !call.cleanup {
+                cancelled = true;
+                step.status = "cancelled".into();
+                store.runs[0].results.push(step);
+                publish(service, path, store, vars)?;
+                continue;
+            }
             store.runs[0]
                 .error
                 .get_or_insert_with(|| format!("{}：{}", call.name, err.message));

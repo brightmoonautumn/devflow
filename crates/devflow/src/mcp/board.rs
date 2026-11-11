@@ -31,20 +31,28 @@ pub fn write_tool() -> Value {
     ];
     json!({"name":"board_execute","description":"Mutate the same board used by Web UI. Only write agreed tasks when requested by the user. sessionId must be a stable unique id for this AI conversation (1–200 bytes); reuse it for claim/progress/release/submit. Session ids identify cooperative owners, not independent authentication principals: all clients use the local owner's transport token. Re-read board_get after conflicts; never blindly overwrite. task_reorder moves a task before beforeId within its current status, or to the end when omitted; AI cannot change status with reorder. Task array order is the persisted manual order. createdAt/statusChangedAt are core-managed Unix seconds. Creation always enters todo. task_create requires only title; feature defaults to empty string (unclassified), priority defaults to 普通, description and acceptance default to empty. Refine task metadata with task_update without claiming or executing; discuss suggestions before applying them. Claim is atomic; only its owner may progress/submit/release/block. Submission needs actual delivery and validation notes; progress/block need text. Human Web UI can release stalled claims, reject with reason, approve, reopen. Claiming never starts an agent or executes source code. Feature ids should be stable UUIDs; feature_save edits by id. Deleting a populated feature requires moveTo. Mutations return the full new snapshot and board revision.","inputSchema":{"type":"object","properties":{"sessionId":{"type":"string","minLength":1,"maxLength":200},"request":{"type":"object","properties":{"workspaceKey":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0},"boardRevision":{"type":"integer","minimum":0},"operation":{"oneOf":variants}},"required":["workspaceKey","expectedRevision","boardRevision","operation"],"additionalProperties":false}},"required":["sessionId","request"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true}})
 }
-pub async fn execute(state: Arc<AppState>, name: &str, arguments: Value, authenticated: bool) -> Result<devflow_core::workspace::BoardSnapshot, WorkspaceError> {
+pub async fn execute(state: Arc<AppState>, mut arguments: Value, authenticated: bool) -> Result<Value, WorkspaceError> {
     let invalid = |e: serde_json::Error| WorkspaceError { code: "invalid_request", message: e.to_string() };
-    if name == "board_get" {
-        let request = serde_json::from_value(arguments).map_err(invalid)?;
-        call_core(state, move |e| e.workspace.board_read(request, authenticated)).await
-    } else {
-        #[derive(serde::Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Args { session_id: String, request: devflow_core::workspace::BoardRequest }
-        let args: Args = serde_json::from_value(arguments).map_err(invalid)?;
-        if args.session_id.trim().is_empty() || args.session_id.len() > 200 {
-            return Err(WorkspaceError { code: "invalid_request", message: "sessionId 需为 1–200 字节的稳定会话标识".into() });
-        }
-        let actor = format!("Codex:{}", args.session_id);
-        call_core(state, move |e| e.workspace.board_execute(args.request, authenticated, &actor, false)).await
+    let mut options = devflow_core::context::ReadOptions::extract_write(&mut arguments)?;
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Args { session_id: String, request: devflow_core::workspace::BoardRequest }
+    let args: Args = serde_json::from_value(arguments).map_err(invalid)?;
+    if args.session_id.trim().is_empty() || args.session_id.len() > 200 {
+        return Err(WorkspaceError { code: "invalid_request", message: "sessionId 需为 1–200 字节的稳定会话标识".into() });
     }
+    let actor = format!("Codex:{}", args.session_id);
+    use devflow_core::workspace::BoardOperation;
+    options.id = match &args.request.operation {
+        BoardOperation::TaskUpdate { id, .. } | BoardOperation::TaskSession { id, .. }
+        | BoardOperation::TaskDelete { id } | BoardOperation::TaskReorder { id, .. }
+        | BoardOperation::Action { id, .. } => Some(id.clone()),
+        BoardOperation::FeatureSave { feature } => Some(feature.id.clone()),
+        BoardOperation::FeatureDelete { id, .. } => Some(id.clone()),
+        _ => None,
+    };
+    let creating = matches!(&args.request.operation, devflow_core::workspace::BoardOperation::TaskCreate { .. });
+    let board = call_core(state, move |e| e.workspace.board_execute(args.request, authenticated, &actor, false)).await?;
+    if creating { options.id = Some(format!("DF-{:03}", board.next_task)); }
+    devflow_core::context::receipt(json!(board), &options)
 }

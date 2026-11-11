@@ -9,6 +9,7 @@ export type BoardTask = {
 export type BoardFeature = { id: string; name: string; description: string; goal: string; x: number; y: number }
 export type BoardSnapshot = { workspaceKey: string; revision: number; nextTask: number; features: BoardFeature[]; tasks: BoardTask[]; edges: [string, string][]; activity: string[] }
 export type BoardOperation =
+  | { type: 'idea_branch'; feature: BoardFeature; tasks: { title: string; description: string }[] }
   | { type: 'feature_save'; feature: BoardFeature }
   | { type: 'feature_delete'; id: string; moveTo?: string }
   | { type: 'edges'; edges: [string, string][] }

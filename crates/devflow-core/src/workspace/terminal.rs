@@ -45,6 +45,33 @@ pub struct TerminalResponse {
     exited: bool,
     exit_code: Option<u32>,
 }
+impl TerminalResponse {
+    /// Text is a presentation of source bytes, never a replacement cursor.
+    pub fn context(mut self, options: &crate::context::ReadOptions) -> Result<Value> {
+        if options.raw || options.view == crate::context::View::Full { return Ok(json!(self)); }
+        let retained = self.data.len();
+        let mut end = retained.min(options.budget());
+        // A following continuation byte means this page ends inside a code point.
+        while end > 0 && end < retained && self.data[end] & 0xc0 == 0x80 { end -= 1; }
+        // PTY writes can themselves arrive midway through a UTF-8 character.
+        // Leave an incomplete suffix unread until the next read; drain it lossily
+        // once the process has exited so an invalid final byte cannot loop.
+        if !self.exited {
+            if let Err(err) = std::str::from_utf8(&self.data[..end]) {
+                if err.error_len().is_none() { end = err.valid_up_to(); }
+            }
+        }
+        self.next_cursor = self.next_cursor.saturating_sub((retained - end) as u64);
+        let text = String::from_utf8_lossy(&self.data[..end]);
+        static ANSI: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let ansi = ANSI.get_or_init(|| regex::Regex::new(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-_])").expect("static ANSI expression"));
+        let text = ansi.replace_all(&text, "").into_owned();
+        let mut value = json!({"nextCursor":self.next_cursor,"truncated":self.truncated,"exited":self.exited,"exitCode":self.exit_code,"text":text,"hasMore":end < retained || retained == PAGE});
+        if !self.sessions.is_empty() { value["sessions"] = json!(self.sessions); }
+        if let Some(id) = self.id { value["id"] = json!(id); }
+        Ok(value)
+    }
+}
 struct Output {
     bytes: VecDeque<u8>,
     start: u64,

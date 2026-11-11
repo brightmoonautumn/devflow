@@ -5,6 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[path = "board_sync.rs"]
 mod sync;
 pub use sync::{BoardSyncRequest, BoardSyncSettings, BoardSyncStatus};
+#[path = "ideas.rs"]
+mod ideas;
+pub use ideas::{IdeaCanvas, IdeaEdge, IdeaNode, IdeasOperation, IdeasRead, IdeasRequest, IdeasSnapshot};
 
 const BOARD_LIMIT: u64 = 8 * 1024 * 1024;
 
@@ -55,6 +58,7 @@ pub struct BoardRequest {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum BoardOperation {
+    IdeaBranch { feature: Feature, tasks: Vec<IdeaTask> },
     FeatureSave { feature: Feature },
     FeatureDelete { id: String, move_to: Option<String> },
     Edges { edges: Vec<[String; 2]> },
@@ -67,6 +71,9 @@ pub enum BoardOperation {
     Import { features: Vec<Feature>, tasks: Vec<Task>, edges: Vec<[String; 2]> },
     Restore { board: BoardSnapshot },
 }
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdeaTask { pub title: String, pub description: String }
 fn normal_priority() -> String { "普通".into() }
 fn now_seconds() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() }
 
@@ -231,6 +238,18 @@ fn load(path: &Path, key: &str) -> Result<BoardSnapshot> {
 fn apply(board: &mut BoardSnapshot, operation: BoardOperation, actor: &str, human: bool) -> Result<String> {
     use BoardOperation::*;
     let event = match operation {
+        IdeaBranch { feature, tasks } => {
+            if !human { return Err(error("permission_denied", "请在构思页面预览并确认转入看板")); }
+            if tasks.len() > 499 || board.features.iter().any(|f| f.id == feature.id) {
+                return Err(error("conflict", "该分支已转入看板，或任务数量超限"));
+            }
+            let id = feature.id.clone(); let name = feature.name.clone();
+            board.features.push(feature);
+            for task in tasks {
+                apply(board, TaskCreate { title: task.title, description: task.description, acceptance: String::new(), feature: id.clone(), priority: normal_priority() }, actor, human)?;
+            }
+            format!("从构思创建功能：{name}")
+        }
         Restore { board: restored } => {
             if !human { return Err(error("permission_denied", "恢复需由本机用户确认")); }
             let revision = board.revision;

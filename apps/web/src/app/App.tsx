@@ -17,6 +17,8 @@ import { WorkspacePage } from '../features/workspace/WorkspacePage'
 import { WorkspaceManager, type WorkspaceManagerMode } from '../features/workspace/WorkspaceManager'
 import { FileWorkbench, type FileOpenRequest, type FileSaveStatus } from '../features/workspace/FileWorkbench'
 import { ShareDialog } from '../features/sharing/ShareDialog'
+import { IdeasPage } from '../features/ideas/IdeasPage'
+import { Shapes } from 'lucide-react'
 import { BoardPage } from '../features/board/BoardPage'
 import { Kanban, ShieldCheck } from 'lucide-react'
 import { QaPage } from '../features/qa/QaPage'
@@ -26,6 +28,7 @@ import extremePlusLogo from '../assets/extreme-plus-logo.svg'
 import extremePlusLogoDark from '../assets/extreme-plus-logo-dark.svg'
 
 type Panel = { title: string, project?: string, description: string, runtimeProject?: Project }
+function canNavigate() { return window.dispatchEvent(new Event('devflow-before-navigate', { cancelable: true })) }
 export function App() {
   const dialogs = useDialogs()
   const [editorSaveStatus, setEditorSaveStatus] = useState<FileSaveStatus | null>(null)
@@ -49,30 +52,33 @@ export function App() {
   const [savedLayout] = useState(() => readViewState('devflow.workbench-layout.v1'))
   const [initialPage] = useState(() => {
     if (readOnlyShare) return 'services'
-    const hash = window.location.hash
+    const hash = window.location.hash.split('?')[0]
+    if (hash === '#ideas') return 'ideas'
     if (hash === '#board') return 'board'
     if (hash === '#qa') return 'qa'
     if (hash === '#services') return 'services'
-    return savedLayout.activePage === 'board' || savedLayout.activePage === 'qa' ? savedLayout.activePage : 'services'
+    return savedLayout.activePage === 'ideas' || savedLayout.activePage === 'board' || savedLayout.activePage === 'qa' ? savedLayout.activePage : 'services'
   })
+  const [ideasOpen, setIdeasOpen] = useState(initialPage === 'ideas')
   const [qaOpen, setQaOpen] = useState(initialPage === 'qa')
   const [boardOpen, setBoardOpen] = useState(initialPage === 'board')
   const [explorerOpen, setExplorerOpen] = useState(() => typeof savedLayout.sidebarOpen === 'boolean' ? savedLayout.sidebarOpen : window.matchMedia('(min-width: 720px)').matches)
   const [sidebarView, setSidebarView] = useState<'explorer' | 'search'>(() => savedLayout.sidebarView === 'search' ? savedLayout.sidebarView : 'explorer')
   useEffect(() => {
-    const activePage = !readOnlyShare && boardOpen ? 'board' : !readOnlyShare && qaOpen ? 'qa' : 'services'
+    const activePage = !readOnlyShare && ideasOpen ? 'ideas' : !readOnlyShare && boardOpen ? 'board' : !readOnlyShare && qaOpen ? 'qa' : 'services'
     writeViewState('devflow.workbench-layout.v1', { sidebarOpen: explorerOpen, sidebarView, activePage })
     if (readOnlyShare) return
     // Keep explicit deep links and persisted state in agreement after navigation.
     const hash = `#${activePage}`
-    if (window.location.hash !== hash) window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${hash}`)
-  }, [explorerOpen, sidebarView, boardOpen, qaOpen])
+    if (window.location.hash.split('?')[0] !== hash) window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${hash}`)
+  }, [explorerOpen, sidebarView, boardOpen, qaOpen, ideasOpen])
   useEffect(() => {
     if (readOnlyShare) return
-    const navigate = () => {
-      const hash = window.location.hash
-      if (!['#board', '#qa', '#services'].includes(hash)) return
-      setBoardOpen(hash === '#board'); setQaOpen(hash === '#qa')
+    const navigate = (event: HashChangeEvent) => {
+      if (!canNavigate()) { window.history.replaceState(window.history.state, '', event.oldURL); return }
+      const hash = window.location.hash.split('?')[0]
+      if (!['#ideas', '#board', '#qa', '#services'].includes(hash)) return
+      setIdeasOpen(hash === '#ideas'); setBoardOpen(hash === '#board'); setQaOpen(hash === '#qa')
     }
     window.addEventListener('hashchange', navigate)
     return () => window.removeEventListener('hashchange', navigate)
@@ -80,8 +86,9 @@ export function App() {
   const [fileRequest, setFileRequest] = useState<FileOpenRequest | null>(null)
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
   const openFile = useCallback((path: string, pinned = false, line?: number, column?: number) => {
+    if (!canNavigate()) return
     setBoardOpen(false)
-    setQaOpen(false)
+    setIdeasOpen(false); setQaOpen(false)
     setFileRequest(current => ({ path, pinned, line, column, sequence: (current?.sequence ?? 0) + 1 }))
     if (window.matchMedia('(max-width: 719px)').matches) setExplorerOpen(false)
   }, [])
@@ -90,7 +97,8 @@ export function App() {
     const search = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey || !((event.key.toLowerCase() === 'p' && !event.shiftKey) || (event.key.toLowerCase() === 'f' && event.shiftKey))) return
       event.preventDefault()
-      setQaOpen(false)
+      if (!canNavigate()) return
+      setIdeasOpen(false); setQaOpen(false)
       setSidebarView('search')
       setBoardOpen(false)
       setExplorerOpen(true)
@@ -218,7 +226,7 @@ export function App() {
     return () => controller.abort()
   }, [workspaceMenu])
   async function openRecent(path: string) {
-    if (!data || openingRecent) return
+    if (!data || openingRecent || !canNavigate()) return
     const discard = data.dirty && await dialogs.confirm({ title: '放弃工作区配置更改？', description: '当前工作区配置尚未保存。打开最近工作区将放弃这些更改。', confirmText: '放弃并打开', cancelText: '留在当前工作区', tone: 'danger' })
     if (data.dirty && !discard) return
     setOpeningRecent(true); setRecentError('')
@@ -236,7 +244,7 @@ export function App() {
     if (readOnlyShare) return
     setManagingWorkspace('open')
   }
-  function manage(mode: WorkspaceManagerMode) { if (readOnlyShare) return; setWorkspaceMenu(false); setManagingWorkspace(mode) }
+  function manage(mode: WorkspaceManagerMode) { if (readOnlyShare || !canNavigate()) return; setWorkspaceMenu(false); setManagingWorkspace(mode) }
   const hasWorkspace = !!(data?.workspaceRoot || data?.workspaceFile)
   async function projectAction(project: Project, title: string) {
     if (readOnlyShare && title !== '运行输出') return
@@ -345,18 +353,20 @@ export function App() {
     <div className="workbench">
       <nav className="activity-bar" aria-label="功能入口">
         <div className="activity-primary">
-          {!readOnlyShare && <button className={`activity-button ${boardOpen ? 'active' : ''}`} aria-label="看板" title="看板" aria-pressed={boardOpen} onClick={() => { setQaOpen(false); setBoardOpen(true); setTerminalOpen(false); setPanel(null) }}><Kanban size={20} strokeWidth={1.65} /></button>}
-          <button className={`activity-button ${!qaOpen && !boardOpen && explorerOpen && sidebarView === 'explorer' ? 'active' : ''}`} aria-label="资源管理器" title="资源管理器" aria-pressed={!qaOpen && !boardOpen && explorerOpen && sidebarView === 'explorer'} aria-controls="workspace-sidebar" onClick={() => { setQaOpen(false); setBoardOpen(false); setExplorerOpen(boardOpen || qaOpen || sidebarView !== 'explorer' || !explorerOpen); setSidebarView('explorer') }}><FolderTree size={20} strokeWidth={1.65} /></button>
-          <button className={`activity-button ${!qaOpen && !boardOpen && explorerOpen && sidebarView === 'search' ? 'active' : ''}`} aria-label="搜索文件" title="搜索 · Ctrl+Shift+F" aria-pressed={!qaOpen && !boardOpen && explorerOpen && sidebarView === 'search'} aria-controls="workspace-sidebar" onClick={() => { setQaOpen(false); setBoardOpen(false); setExplorerOpen(boardOpen || qaOpen || sidebarView !== 'search' || !explorerOpen); setSidebarView('search') }}><Search size={20} strokeWidth={1.65} /></button>
-          {!readOnlyShare && <button className={`activity-button ${qaOpen ? 'active' : ''}`} aria-label="质量保证" title="质量保证 · API 场景测试" aria-pressed={qaOpen} onClick={() => { setQaOpen(true); setBoardOpen(false); setTerminalOpen(false); setPanel(null) }}><ShieldCheck size={20} strokeWidth={1.65} /></button>}
+          {!readOnlyShare && <button className={`activity-button ${ideasOpen ? 'active' : ''}`} aria-label="构思" title="构思" aria-pressed={ideasOpen} onClick={() => { setIdeasOpen(true); setQaOpen(false); setBoardOpen(false); setTerminalOpen(false); setPanel(null) }}><Shapes size={20} strokeWidth={1.65} /></button>}
+          {!readOnlyShare && <button className={`activity-button ${boardOpen ? 'active' : ''}`} aria-label="看板" title="看板" aria-pressed={boardOpen} onClick={() => { setIdeasOpen(false); setQaOpen(false); setBoardOpen(true); setTerminalOpen(false); setPanel(null) }}><Kanban size={20} strokeWidth={1.65} /></button>}
+          <button className={`activity-button ${!ideasOpen && !qaOpen && !boardOpen && explorerOpen && sidebarView === 'explorer' ? 'active' : ''}`} aria-label="资源管理器" title="资源管理器" aria-pressed={!ideasOpen && !qaOpen && !boardOpen && explorerOpen && sidebarView === 'explorer'} aria-controls="workspace-sidebar" onClick={() => { setIdeasOpen(false); setQaOpen(false); setBoardOpen(false); setExplorerOpen(ideasOpen || boardOpen || qaOpen || sidebarView !== 'explorer' || !explorerOpen); setSidebarView('explorer') }}><FolderTree size={20} strokeWidth={1.65} /></button>
+          <button className={`activity-button ${!ideasOpen && !qaOpen && !boardOpen && explorerOpen && sidebarView === 'search' ? 'active' : ''}`} aria-label="搜索文件" title="搜索 · Ctrl+Shift+F" aria-pressed={!ideasOpen && !qaOpen && !boardOpen && explorerOpen && sidebarView === 'search'} aria-controls="workspace-sidebar" onClick={() => { setIdeasOpen(false); setQaOpen(false); setBoardOpen(false); setExplorerOpen(ideasOpen || boardOpen || qaOpen || sidebarView !== 'search' || !explorerOpen); setSidebarView('search') }}><Search size={20} strokeWidth={1.65} /></button>
+          {!readOnlyShare && <button className={`activity-button ${qaOpen ? 'active' : ''}`} aria-label="质量保证" title="质量保证 · API 场景测试" aria-pressed={qaOpen} onClick={() => { setIdeasOpen(false); setQaOpen(true); setBoardOpen(false); setTerminalOpen(false); setPanel(null) }}><ShieldCheck size={20} strokeWidth={1.65} /></button>}
         </div>
         <div className="activity-secondary"><button className="activity-button" aria-label="使用说明" title="使用说明" onClick={() => setPanel({ title: '使用说明', description: '点击服务卡片查看运行输出，点击箭头展开目录和启动入口。点击启动直接使用已保存或默认配置，更多操作中的“启动配置”可保存 JVM 参数、程序参数和 Spring Profile；支持停止项目进程树及向运行中的 Java 应用附加 Arthas。底部面板可拖拽调整高度。Node.js 服务支持 npm/pnpm/yarn 启动、停止和运行输出。' })}><CircleHelp size={19} /></button>{!readOnlyShare && <button className="activity-button" aria-label="设置" title="设置" onClick={explainWorkspace}><Settings2 size={19} /></button>}</div>
       </nav>
-      <WorkspaceTree activeFilePath={activeFilePath} key={shareError ? 'expired' : 'workspace'} hidden={boardOpen || qaOpen} open={explorerOpen && !boardOpen && !qaOpen} view={sidebarView} onOpenFile={openFile} data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} onToggle={() => setExplorerOpen(value => !value)} />
+      <WorkspaceTree activeFilePath={activeFilePath} key={shareError ? 'expired' : 'workspace'} hidden={ideasOpen || boardOpen || qaOpen} open={explorerOpen && !ideasOpen && !boardOpen && !qaOpen} view={sidebarView} onOpenFile={openFile} data={data} onChange={applyWorkspace} onRefresh={() => void load(true)} onConfigure={explainWorkspace} onAddFolder={() => manage('add_folder')} onSave={() => manage('save')} onClose={() => setExplorerOpen(false)} onToggle={() => setExplorerOpen(value => !value)} />
       <div className="editor-area">
+        {ideasOpen && !readOnlyShare && <IdeasPage workspace={data} />}
         {qaOpen && !readOnlyShare && <QaPage workspace={data} />}
         {boardOpen && !readOnlyShare && <BoardPage workspaceRevision={data?.revision ?? 0} key={data?.workspaceFile ?? data?.workspaceRoot ?? 'demo'} query={taskQuery} onQueryChange={setTaskQuery} onSearchFocus={() => taskSearchRef.current?.focus()} workspaceName={data?.name ?? 'DevFlow'} workspaceKey={data?.workspaceFile ?? data?.workspaceRoot ?? 'demo'} />}
-        <div className="board-workbench-host" hidden={(boardOpen || qaOpen) && !readOnlyShare}>
+        <div className="board-workbench-host" hidden={(ideasOpen || boardOpen || qaOpen) && !readOnlyShare}>
         <FileWorkbench theme={theme} onActiveFileChange={setActiveFilePath} key={shareError ? 'expired' : 'workspace'} workspace={data} openRequest={fileRequest} onSaveStatusChange={setEditorSaveStatus} onOpenFile={path => openFile(path, true)}>
           <main id="projects" className="main-content">
             <WorkspacePage key={data?.folders.map(folder => folder.path).join('|') ?? 'empty'} query={query} onQueryChange={setQuery} data={data} loading={loading} monitoringEnabled={connected} outputProjectKey={panel?.runtimeProject ? projectKey(panel.runtimeProject) : undefined} onRefresh={() => void load()} onConfigure={() => manage(hasWorkspace ? 'add_folder' : 'open')} onAction={projectAction} />
